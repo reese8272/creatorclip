@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
 import { Modal } from '@/components/ui/modal'
 import type { ApiKey } from '@/types'
+import { Check } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 const inputCls =
   'flex-1 rounded-md border border-default bg-surface px-3 py-2 text-sm text-fg placeholder:text-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft'
@@ -126,7 +128,13 @@ export function ApiKeysSection() {
         <div className="flex gap-2">
           <input readOnly value={revealKey ?? ''} className={`${inputCls} font-mono`} />
           <Button variant="secondary" onClick={copy}>
-            {copied ? '✓ Copied' : 'Copy'}
+            {copied ? (
+              <>
+                <Check className={ICON_SIZE.sm} aria-hidden="true" /> Copied
+              </>
+            ) : (
+              'Copy'
+            )}
           </Button>
         </div>
         <div className="mt-4 flex justify-end">

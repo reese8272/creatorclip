@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import { cn } from '@/lib/utils'
 import type { PublicationListOut, PublicationOut, ReviewClip, SuggestedWindow } from '@/types'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // The backend repurposes status=failed for creator cancels, with this exact
 // error string (routers/publications.py). The badge infers "Cancelled" from it.
@@ -71,7 +73,7 @@ function PublicationRow({ clip, pub }: { clip: ReviewClip; pub: PublicationOut }
             rel="noreferrer"
             className="text-accent-text underline-offset-2 hover:underline"
           >
-            Watch on YouTube →
+            Watch on YouTube <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </a>
         )}
         <span className="ml-auto flex gap-1.5">
@@ -241,7 +243,7 @@ export function PublishPanel({ clip }: { clip: ReviewClip }) {
   const privacyNote = query.data?.privacy_note
 
   return (
-    <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-h3 font-semibold text-fg">Publish</span>
         <Button size="sm" disabled={!rendered} onClick={() => setDialogOpen(true)}>

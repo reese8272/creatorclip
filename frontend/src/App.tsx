@@ -32,21 +32,21 @@ function RootError() {
   const error = useRouteError()
   console.error('[RootError]', error)
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-8 text-center text-foreground">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-bg p-8 text-center text-fg">
       <h1 className="text-2xl font-semibold">Something went wrong</h1>
-      <p className="max-w-md text-sm text-muted-foreground">
+      <p className="max-w-md text-sm text-muted">
         An unexpected error occurred. You can try reloading the page or returning to the dashboard.
       </p>
       <div className="flex gap-3">
         <button
           onClick={() => window.location.reload()}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-on-accent hover:bg-accent-hover"
         >
           Reload
         </button>
         <a
           href="/app/dashboard"
-          className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-accent"
+          className="rounded-md border border-strong px-4 py-2 text-sm font-medium text-fg hover:bg-elevated"
         >
           Back to dashboard
         </a>

@@ -15,6 +15,18 @@ const ROUTES = [
   'walkthrough',
   'onboarding',
   'pricing',
+  // Added 2026-08-03 (Issue 386). The editor is the most widget-dense route in
+  // the app — tablist, role="textbox", canvas timeline, custom media player —
+  // and was the only unaudited one that #386 and #400b both rewrite. A baseline
+  // spike on the pre-#386 tree confirmed it passes clean, so anything that
+  // appears here is ours.
+  'editor?video_id=v1&clip_id=c1',
+  // NOT added: `settings`. It has PRE-EXISTING serious contrast violations from
+  // the "Soon" preview rows (commit 80a7474, 2026-06-23) — decorative disabled
+  // mocks wrapped in `pointer-events-none opacity-50`, which halves their
+  // effective contrast while leaving them in the accessibility tree. Logged in
+  // docs/OFF_COURSE_BUGS.md; adding the route before fixing them would block
+  // this batch on unrelated work.
 ]
 
 for (const path of ROUTES) {

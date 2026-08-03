@@ -18,6 +18,8 @@ import { DnaCta, TrialBanner, LowBalanceWarning } from '@/components/dashboard/D
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { videosRefetchInterval } from '@/lib/videosPoll'
 import type { ClipCountsResponse, DnaProfile, DnaResponse, VideoListResponse } from '@/types'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Sidebar: clips waiting in the review queue (Issue 305).
 //
@@ -26,7 +28,7 @@ import type { ClipCountsResponse, DnaProfile, DnaResponse, VideoListResponse } f
 // we now show the way to fill it instead of the count of what isn't there.
 function ReviewQueueCard({ count }: { count: number }) {
   return (
-    <div className="rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface p-[18px] shadow-sm shadow-inset">
+    <div className="rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface p-[18px] shadow-sm inset-shadow-highlight">
       <div className="text-label uppercase tracking-[0.08em] text-accent-text">Review queue</div>
       {count === 0 ? (
         <EmptyStatePrompt
@@ -41,7 +43,7 @@ function ReviewQueueCard({ count }: { count: number }) {
           <div className="mb-1 mt-2 font-mono text-2xl font-semibold text-fg">{count}</div>
           <div className="mb-3.5 text-small text-muted">clips ready to review</div>
           <Link to="/review" className={cn(buttonVariants(), 'w-full')}>
-            Open review →
+            Open review <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Link>
         </>
       )}
@@ -52,7 +54,7 @@ function ReviewQueueCard({ count }: { count: number }) {
 // Sidebar: at-a-glance Creator DNA status (Issue 305).
 function CreatorDnaCard({ dna }: { dna: DnaProfile | null }) {
   return (
-    <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
       <div className="mb-2.5 text-label uppercase tracking-[0.08em] text-muted">Creator DNA</div>
       <div className="flex items-center gap-2.5">
         {dna ? (
@@ -68,7 +70,7 @@ function CreatorDnaCard({ dna }: { dna: DnaProfile | null }) {
         to="/profile"
         className="mt-3 inline-block text-small text-accent-text hover:underline"
       >
-        View profile →
+        View profile <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
       </Link>
     </div>
   )
@@ -189,7 +191,7 @@ export function Dashboard() {
         ) : (
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_296px]">
             {/* Main: videos table in a bordered card */}
-            <div className="overflow-hidden rounded-md border border-default bg-surface shadow-sm shadow-inset">
+            <div className="overflow-hidden rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
               <VideoTable
                 videos={videos}
                 clipInfoByVideo={clipInfoByVideo}

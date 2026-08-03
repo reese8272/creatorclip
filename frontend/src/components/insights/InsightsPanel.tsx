@@ -25,7 +25,7 @@ export function Panel({
     <section
       id={id}
       className={cn(
-        'mb-5 rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset',
+        'mb-5 rounded-md border border-default bg-surface p-5 shadow-sm inset-shadow-highlight',
         id && 'scroll-mt-20',
       )}
     >

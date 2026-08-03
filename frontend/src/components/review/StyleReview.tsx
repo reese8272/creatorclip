@@ -9,6 +9,9 @@ import type {
   VideoFeedbackPayload,
   VideoSentiment,
 } from '@/types'
+import { ThumbsDown, ThumbsUp } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
+import { VideoPlayer } from '@/components/ui/video-player'
 
 // Video-level style tag taxonomy (Issue 370) — grounded in the clip-level
 // APPROVE/DENY tags (YourCall) and extended with tone/structure/visuals.
@@ -55,7 +58,7 @@ export function StyleReview({ videoId }: { videoId: string }) {
       setSentiment(null)
       setSelected(new Set())
       setNote('')
-      setFlash('Style note saved ✓ — this teaches your ranking')
+      setFlash('Style note saved — this teaches your ranking')
       setTimeout(() => setFlash(''), 2500)
     },
   })
@@ -98,13 +101,12 @@ export function StyleReview({ videoId }: { videoId: string }) {
               style take from memory.</span>
           </div>
         ) : (
-          <video
+          <VideoPlayer
             src={`/videos/${videoId}/stream`}
-            controls
-            playsInline
-            preload="metadata"
+            label="Video being style-reviewed"
+            aspect="landscape"
             onError={() => setStreamError(true)}
-            className="aspect-video w-full rounded-xl border border-default bg-black"
+            className="w-full"
           />
         )}
         <p className="text-small text-muted">
@@ -115,7 +117,7 @@ export function StyleReview({ videoId }: { videoId: string }) {
 
       {/* Right: the style take + past notes */}
       <div className="flex flex-col gap-4">
-        <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+        <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
           <div className="mb-3.5 flex items-center justify-between">
             <span className="flex items-center gap-2 text-h3 font-semibold text-fg">
               <Chip pose="book" size={26} />
@@ -126,18 +128,18 @@ export function StyleReview({ videoId }: { videoId: string }) {
 
           <div className="flex gap-2.5">
             <Button
-              variant={sentiment === 'like' ? 'confirm' : 'secondary'}
+              variant={sentiment === 'like' ? 'success' : 'secondary'}
               className="h-[42px] flex-1"
               onClick={() => setSentiment('like')}
             >
-              👍 Works for me
+              <ThumbsUp className={ICON_SIZE.md} aria-hidden="true" /> Works for me
             </Button>
             <Button
               variant={sentiment === 'dislike' ? 'danger' : 'secondary'}
               className="h-[42px] flex-1"
               onClick={() => setSentiment('dislike')}
             >
-              👎 Not my style
+              <ThumbsDown className={ICON_SIZE.md} aria-hidden="true" /> Not my style
             </Button>
           </div>
 
@@ -186,7 +188,7 @@ export function StyleReview({ videoId }: { videoId: string }) {
           )}
         </div>
 
-        <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+        <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
           <div className="border-b border-default px-4 py-3 text-label uppercase tracking-[0.06em] text-muted">
             Your style notes on this video
           </div>
@@ -200,8 +202,21 @@ export function StyleReview({ videoId }: { videoId: string }) {
             items.map((item) => (
               <div key={item.id} className="border-b border-default px-4 py-3 last:border-b-0">
                 <div className="mb-1 flex items-center gap-2 text-xs">
-                  <span className={item.sentiment === 'like' ? 'text-success' : 'text-danger'}>
-                    {item.sentiment === 'like' ? '👍 Works' : '👎 Not my style'}
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1',
+                      item.sentiment === 'like' ? 'text-success' : 'text-danger',
+                    )}
+                  >
+                    {item.sentiment === 'like' ? (
+                      <>
+                        <ThumbsUp className={ICON_SIZE.xs} aria-hidden="true" /> Works
+                      </>
+                    ) : (
+                      <>
+                        <ThumbsDown className={ICON_SIZE.xs} aria-hidden="true" /> Not my style
+                      </>
+                    )}
                   </span>
                   <span className="font-mono text-subtle">
                     {new Date(item.created_at).toLocaleDateString()}
@@ -212,7 +227,7 @@ export function StyleReview({ videoId }: { videoId: string }) {
                     {item.feedback_tags.map((t) => (
                       <span
                         key={t}
-                        className="rounded-sm bg-elevated px-2 py-0.5 font-mono text-[10px] text-muted"
+                        className="rounded-sm bg-elevated px-2 py-0.5 font-mono text-label text-muted"
                       >
                         {t}
                       </span>

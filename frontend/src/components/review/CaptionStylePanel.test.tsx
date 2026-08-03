@@ -108,7 +108,7 @@ describe('CaptionStylePanel', () => {
 
     // Worker finishes → done event → invalidation + ready copy + re-enabled.
     act(() => captured.handlers?.onDone?.({}))
-    expect(await screen.findByText('Styled render ready ✓')).toBeInTheDocument()
+    expect(await screen.findByText('Styled render ready')).toBeInTheDocument()
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['review-clips', 'v1'] })
     expect(screen.getByRole('button', { name: 'Render with style' })).toBeEnabled()
   })

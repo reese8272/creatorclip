@@ -88,7 +88,7 @@ export function TrimFilmstrip({
       className="absolute -top-1 -bottom-1 z-10 flex w-5 -translate-x-1/2 cursor-ew-resize touch-none items-center justify-center"
       style={{ left }}
     >
-      <div className="flex h-full w-[9px] items-center justify-center rounded-[5px] bg-accent shadow-sm shadow-inset">
+      <div className="flex h-full w-[9px] items-center justify-center rounded-[5px] bg-accent shadow-sm inset-shadow-highlight">
         <span className="h-[9px] w-0.5 rounded-full bg-on-accent opacity-80" />
       </div>
     </div>

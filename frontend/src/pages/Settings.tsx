@@ -16,7 +16,7 @@ import type { Identity, IdentityResponse, NicheOption } from '@/types'
 // A titled section card (matches the prototype's Settings card chrome).
 function SettingsCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
       <div className="border-b border-default px-[18px] py-[15px] text-body font-semibold text-fg">
         {title}
       </div>
@@ -203,7 +203,7 @@ export function Settings() {
             label="Watermark / logo"
             description="Overlaid on every clip"
             mock={
-              <span className="flex h-10 w-10 items-center justify-center rounded-sm border border-dashed border-strong font-mono text-[11px] text-subtle">
+              <span className="flex h-10 w-10 items-center justify-center rounded-sm border border-dashed border-strong font-mono text-label text-muted">
                 PNG
               </span>
             }

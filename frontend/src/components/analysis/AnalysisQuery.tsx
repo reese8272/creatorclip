@@ -50,7 +50,7 @@ export function AnalysisQuery() {
 
   return (
     <>
-      <div className="mb-6 rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
+      <div className="mb-6 rounded-md border border-default bg-surface p-5 shadow-sm inset-shadow-highlight">
         <label className="mb-2 block text-xs uppercase tracking-[0.06em] text-muted">
           YouTube URL or video ID
         </label>
@@ -113,7 +113,7 @@ export function AnalysisQuery() {
       </div>
 
       {showPanel && (
-        <div className="mb-6 rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
+        <div className="mb-6 rounded-md border border-default bg-surface p-5 shadow-sm inset-shadow-highlight">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-sm font-medium uppercase tracking-[0.06em] text-muted">Analysis</h2>
             <StatusChip status={stream.status} step={stream.step} error={error} />
@@ -123,7 +123,10 @@ export function AnalysisQuery() {
           ) : (
             <div className="min-h-[48px] whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
               {stream.tokens || <span className="italic text-subtle">Starting…</span>}
-              {stream.status === 'streaming' && <span className="ml-px animate-pulse text-accent-text">▊</span>}
+              {stream.status === 'streaming' && <span
+                  aria-hidden="true"
+                  className="ml-px inline-block h-[1em] w-[2px] animate-pulse bg-accent-text align-[-0.15em]"
+                />}
             </div>
           )}
           {stream.status === 'done' && (

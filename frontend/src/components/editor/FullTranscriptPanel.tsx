@@ -33,7 +33,7 @@ export function FullTranscriptPanel({
   const visible = q ? segments.filter((s) => s.text.toLowerCase().includes(q)) : segments
 
   return (
-    <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
       <div className="flex items-center gap-2 border-b border-default px-4 py-3.5">
         <Chip pose="papers" size={24} />
         <span className="text-h3 font-semibold text-fg">Full transcript</span>
@@ -96,7 +96,7 @@ export function FullTranscriptPanel({
                       <button
                         onClick={() => onClipSegment(seg)}
                         title="Create a clip from this segment"
-                        className="invisible shrink-0 rounded-sm border border-strong bg-bg px-2 py-0.5 text-[10px] text-muted hover:bg-elevated hover:text-fg group-hover:visible"
+                        className="invisible shrink-0 rounded-sm border border-strong bg-bg px-2 py-0.5 text-label text-muted hover:bg-elevated hover:text-fg group-hover:visible"
                       >
                         Clip this
                       </button>

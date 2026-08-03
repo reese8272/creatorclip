@@ -93,6 +93,11 @@ def test_delete_account_purges_source_and_clips_prefixes(client):
 
     assert any(f"source/{creator.id}/" in p for p in purged)
     assert any(f"clips/{creator.id}/" in p for p in purged)
+    # Issue 387 — posters are creator-scoped precisely so this sweep reaches
+    # them. (Clip RENDERS are not: they are written to clips/{clip_id}.mp4, so
+    # the clips prefix above matches nothing today — a known erasure gap that
+    # this new prefix deliberately does not replicate.)
+    assert any(f"posters/{creator.id}/" in p for p in purged)
 
 
 def test_delete_account_continues_if_storage_purge_fails(client):

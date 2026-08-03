@@ -9,6 +9,8 @@ import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { fitTier } from '@/lib/fit'
 import { FitBadge } from '@/components/ui/fit-badge'
 import type { ReviewClip, ReviewClipListResponse, Video, VideoListResponse } from '@/types'
+import { ArrowLeft, ArrowRight, X } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // SOURCE_NEEDED_HELP copy reused from VideoTable (single source of truth would
 // require an extraction — noted as a future cleanup, not a DRY violation since
@@ -205,7 +207,7 @@ export function VideoClipsMap() {
       {/* Header */}
       <div className="mb-6">
         <Link to="/dashboard" className="text-xs text-accent-text hover:underline">
-          ← Dashboard
+          <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Dashboard
         </Link>
         <h1 className="mt-2 text-lg font-medium text-fg truncate">
           {video.title ?? 'Untitled video'}
@@ -217,7 +219,7 @@ export function VideoClipsMap() {
           to={`/analysis?video_id=${video.id}&video_title=${encodeURIComponent(video.title ?? '')}`}
           className="mt-2 inline-block text-xs text-accent-text hover:underline"
         >
-          Analyze this video →
+          Analyze this video <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
         </Link>
       </div>
 
@@ -285,14 +287,14 @@ export function VideoClipsMap() {
                     className="text-xs text-accent-text hover:underline"
                     aria-label="Review this clip in order"
                   >
-                    Review →
+                    Review <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
                   </Link>
                   <button
                     onClick={() => setSelectedClipId(null)}
                     className="text-xs text-subtle hover:text-fg"
                     aria-label="Close detail panel"
                   >
-                    ✕
+                    <X className={ICON_SIZE.sm} aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -306,7 +308,7 @@ export function VideoClipsMap() {
               to={`/review?video_id=${videoId}`}
               className="text-sm text-accent-text hover:underline"
             >
-              Review all clips in order →
+              Review all clips in order <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
             </Link>
             <span className="text-xs text-subtle">
               {clips.length} candidate{clips.length !== 1 ? 's' : ''}

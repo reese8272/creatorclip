@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
 import type { NotificationPreferences } from '@/types'
+import { Switch } from '@/components/ui/switch'
 
 // A single on/off toggle row. When `locked` it renders forced-on and disabled
 // (used for the legally always-on transactional channel).
@@ -19,25 +20,20 @@ function ToggleRow({
   onChange?: (next: boolean) => void
 }) {
   return (
-    <label
-      className={`flex items-center justify-between gap-4 border-b border-default px-[18px] py-[15px] last:border-b-0 ${
-        locked ? 'cursor-default' : 'cursor-pointer'
-      }`}
-    >
+    // Previously a native checkbox wearing role="switch" — it announced itself
+    // as a switch while rendering as an OS checkbox. Switch is the real thing.
+    <div className="flex items-center justify-between gap-4 border-b border-default px-[18px] py-[15px] last:border-b-0">
       <span>
         <span className="block text-small text-fg">{label}</span>
         <span className="mt-0.5 block text-small text-subtle">{description}</span>
       </span>
-      <input
-        type="checkbox"
-        role="switch"
+      <Switch
         aria-label={label}
         checked={checked}
         disabled={locked}
-        onChange={(e) => onChange?.(e.target.checked)}
-        className="h-5 w-5 accent-[color:var(--color-accent)] disabled:opacity-60"
+        onCheckedChange={(v) => onChange?.(v)}
       />
-    </label>
+    </div>
   )
 }
 

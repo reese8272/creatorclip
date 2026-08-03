@@ -483,7 +483,15 @@ async def erase_creator(session: AsyncSession, creator: Creator) -> None:
     # Purge all stored media for this creator
     from worker.storage import delete_prefix
 
-    for prefix in (f"source/{creator_id}/", f"clips/{creator_id}/"):
+    # NOTE `posters/` is creator-scoped deliberately (Issue 387) so this sweep
+    # reaches it. `clips/` is NOT — renders are written to `clips/{clip_id}.mp4`,
+    # so the clips entry below matches nothing today. Known erasure gap, tracked
+    # separately; do not replicate the pattern in new prefixes.
+    for prefix in (
+        f"source/{creator_id}/",
+        f"clips/{creator_id}/",
+        f"posters/{creator_id}/",
+    ):
         try:
             # Offload the paginated boto3 list+delete off the event loop. (Issue 67)
             n = await asyncio.to_thread(delete_prefix, prefix)

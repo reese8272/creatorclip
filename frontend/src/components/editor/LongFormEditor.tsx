@@ -10,6 +10,9 @@ import { Button } from '@/components/ui/button'
 import { ChaptersPanel } from '@/components/analysis/ChaptersPanel'
 import { FullTranscriptPanel } from '@/components/editor/FullTranscriptPanel'
 import type { Chapter, ReviewClip, Video, VideoTranscript } from '@/types'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
+import { VideoPlayer, type VideoPlayerHandle } from '@/components/ui/video-player'
 
 const TIER_LABEL: Record<FitTier, string> = {
   strong: 'Strong',
@@ -88,7 +91,7 @@ function MasterTimeline({
           {ticks.map((t, i) => (
             <span
               key={i}
-              className="absolute -translate-x-1/2 whitespace-nowrap text-[10px] text-subtle"
+              className="absolute -translate-x-1/2 whitespace-nowrap text-label text-muted"
               style={{ left: `${Math.min(100, (t.at / dur) * 100)}%` }}
               title={`${t.title} · ${fmtClock(t.at)}`}
             >
@@ -97,7 +100,7 @@ function MasterTimeline({
           ))}
         </div>
       )}
-      <div className="relative overflow-hidden rounded-md border border-default bg-surface shadow-inset">
+      <div className="relative overflow-hidden rounded-md border border-default bg-surface inset-shadow-highlight">
         <div
           ref={barRef}
           data-testid="master-timeline-bar"
@@ -183,7 +186,7 @@ function MasterTimeline({
             />
           )}
         </div>
-        <div className="flex justify-between border-t border-default px-2 py-[5px] font-mono text-[10px] text-muted">
+        <div className="flex justify-between border-t border-default px-2 py-[5px] font-mono text-label text-muted">
           <span>0:00</span>
           <span>{fmtClock(dur / 2)}</span>
           <span>{fmtClock(dur)}</span>
@@ -287,13 +290,13 @@ export function LongFormEditor({
   // Source playhead — drives the transcript's active segment; transcript
   // clicks seek back. Same sync idiom as the short-form editor, at segment
   // granularity.
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const playerRef = useRef<VideoPlayerHandle>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [streamError, setStreamError] = useState(false)
 
   function seek(t: number) {
-    if (videoRef.current) {
-      videoRef.current.currentTime = t
+    if (playerRef.current) {
+      playerRef.current.seek(t)
       setCurrentTime(t)
     }
   }
@@ -315,15 +318,15 @@ export function LongFormEditor({
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
       <div className="flex flex-col gap-4">
         {sourceAvailable ? (
-          <video
-            ref={videoRef}
+          <VideoPlayer
+            ref={playerRef}
             src={`/videos/${videoId}/stream`}
-            controls
-            playsInline
-            preload="metadata"
-            onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+            label="Long-form source"
+            aspect="landscape"
+            transport
+            onTimeChange={setCurrentTime}
             onError={() => setStreamError(true)}
-            className="aspect-video w-full rounded-xl border border-default bg-black"
+            className="w-full"
           />
         ) : (
           <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black/60 px-6 text-center text-sm text-subtle">
@@ -369,7 +372,7 @@ export function LongFormEditor({
 
         {/* Your clips (Issue 373) — creator-made selections, honest provenance */}
         {creatorClips.length > 0 && (
-          <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+          <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
             <div className="flex items-center gap-2 border-b border-default px-4 py-3.5">
               <Chip pose="laptop" size={24} />
               <span className="text-h3 font-semibold text-fg">Your clips</span>
@@ -387,7 +390,7 @@ export function LongFormEditor({
                   </div>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => onOpenClip(c.id)}>
-                  Open →
+                  Open <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
                 </Button>
               </div>
             ))}
@@ -395,7 +398,7 @@ export function LongFormEditor({
         )}
 
         {/* Suggested clips */}
-        <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+        <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
           <div className="flex items-center gap-2 border-b border-default px-4 py-3.5">
             <Chip pose="idea" size={24} />
             <span className="text-h3 font-semibold text-fg">Suggested clips</span>
@@ -423,7 +426,7 @@ export function LongFormEditor({
                     {TIER_LABEL[tier]}
                   </span>
                   <Button variant="ghost" size="sm" onClick={() => onOpenClip(c.id)}>
-                    Open →
+                    Open <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
                   </Button>
                 </div>
               )
@@ -450,7 +453,7 @@ export function LongFormEditor({
             (engine + your selections) downloads through the existing authed
             endpoint. A single-file source-edit export does not exist in the
             render pipeline; we say so instead of faking it (DECISIONS 2026-07-30). */}
-        <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+        <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
           <div className="border-b border-default px-4 py-3.5 text-h3 font-semibold text-fg">Export</div>
           <div className="flex flex-col gap-2.5 px-4 py-3.5">
             {ranked.filter((c) => c.render_status === 'done').length === 0 ? (

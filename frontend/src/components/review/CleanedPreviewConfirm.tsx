@@ -3,6 +3,7 @@ import { api } from '@/lib/api'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
 import { Button } from '@/components/ui/button'
 import type { ReviewClip } from '@/types'
+import { VideoPlayer } from '@/components/ui/video-player'
 
 // The review-then-confirm affordance shared by the clean pass (Editor) and the
 // trim re-render (Review): poll until the pending cleaned_render_uri lands,
@@ -60,10 +61,11 @@ export function CleanedPreviewConfirm({
   if (!cleanedUri) return null
   return (
     <div>
-      <video
+      <VideoPlayer
         src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
-        controls
-        className="mt-2 w-full rounded-sm border border-default"
+        label="Cleaned clip preview"
+        density="compact"
+        className="mt-2 w-full"
       />
       <div className="mt-2 flex gap-2">
         <Button size="sm" onClick={confirm}>

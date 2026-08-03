@@ -36,7 +36,7 @@ export function AnalysisPanel({
   children: ReactNode
 }) {
   return (
-    <section className="mb-6 rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
+    <section className="mb-6 rounded-md border border-default bg-surface p-5 shadow-sm inset-shadow-highlight">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-sm font-medium uppercase tracking-[0.06em] text-muted">{title}</h2>
         {chip}

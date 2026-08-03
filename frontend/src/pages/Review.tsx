@@ -16,6 +16,9 @@ import { StyleReview } from '@/components/review/StyleReview'
 import { GenerateClipsButton, VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
 import { Button } from '@/components/ui/button'
 import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '@/types'
+import { ArrowLeft, ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
+import { Card } from '@/components/ui/card'
 
 // Issue 216: Honest personalization-status band — shown below the virality disclaimer.
 // Below threshold: "Still learning" with N/threshold progress; above: "Personalized".
@@ -64,9 +67,19 @@ function ReviewClipView({
   const clipDur = clip.end_s - (clip.setup_start_s ?? clip.start_s)
   const [trim, setTrim] = useState({ start: 0, end: clipDur })
 
+  // Asymmetric grid on purpose. A 50/50 layout is structurally symmetric, so no
+  // panel can dominate however it is styled — the eye gets no entry point and
+  // scans linearly, which is what "blocky" describes. max-w-6xl matches the
+  // Editor so the two tool routes share a measure.
   return (
-    <main className="mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-2">
-      {/* Left: player + filmstrip trim + Next */}
+    <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,1fr)]">
+      {/* Left: player + filmstrip trim + Next — the ONE primary panel (L2). It
+          had no container identity at all before, which is why the rail of four
+          equal cards read as heavier than the thing they describe. */}
+      {/* w-fit: the clip is 9:16, so a stretched card would frame a large empty
+          region beside a 320px player — dominance should come from weight, not
+          from enclosing dead space. The wider column still gives it the room. */}
+      <Card level="primary" className="mx-auto h-fit w-fit p-4">
       <ClipPlayer
         clip={clip}
         trimStart={trim.start}
@@ -74,6 +87,7 @@ function ReviewClipView({
         onTrimChange={(start, end) => setTrim({ start, end })}
         onNext={onAdvance}
       />
+      </Card>
 
       {/* Right: Why this clip · Your call · Open in the editor */}
       <div className="flex flex-col gap-4">
@@ -92,21 +106,32 @@ function ReviewClipView({
 
         <YourCall clip={clip} trimStart={trim.start} trimEnd={trim.end} onAdvance={onAdvance} />
 
-        <PublishPanel clip={clip} />
+        {/* Collapsed by default. A rail of four open, equally-weighted cards is
+            the composition problem; the strongest lever for making a secondary
+            panel recede is not a class, it is not being open. */}
+        <CollapsibleTool title="Publish">
+          <PublishPanel clip={clip} />
+        </CollapsibleTool>
 
-        <div className="rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface p-[18px] shadow-sm shadow-inset">
+        {/* Demoted from a gradient card that competed with the player for
+            attention. It is a quiet next step, not a second destination. */}
+        <Card className="p-4">
           <div className="mb-1.5 flex items-center gap-2.5">
-            <Chip pose="laptop" size={30} />
-            <span className="text-h3 font-semibold text-fg">Open in the editor</span>
+            <Chip pose="laptop" size={24} />
+            <span className="text-body font-semibold text-fg">Open in the editor</span>
           </div>
-          <p className="mb-3.5 text-small leading-relaxed text-muted">
+          <p className="mb-3 text-small leading-relaxed text-muted">
             Fine-tune the full edit — caption style &amp; placement, word-by-word transcript cuts,
             filler &amp; silence removal, and pacing to match your style.
           </p>
-          <Button onClick={() => navigate(`/editor?video_id=${videoId}&clip_id=${clip.id}`)}>
-            Refine in editor →
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate(`/editor?video_id=${videoId}&clip_id=${clip.id}`)}
+          >
+            Refine in editor <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Button>
-        </div>
+        </Card>
       </div>
     </main>
   )
@@ -205,7 +230,7 @@ export function Review() {
             onClick={() => setParams({ video_id: videoId })}
             className="text-xs text-muted hover:text-fg"
           >
-            ← Back to clip review
+            <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back to clip review
           </button>
         </div>
         <StyleReview videoId={videoId} />
@@ -252,7 +277,7 @@ export function Review() {
             variant="secondary"
             onClick={() => setParams({ video_id: videoId, mode: 'style' })}
           >
-            Review the style instead →
+            Review the style instead <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Button>
         </main>
       </>
@@ -274,7 +299,7 @@ export function Review() {
           onClick={() => setParams({ video_id: videoId, mode: 'style' })}
           className="text-xs text-muted hover:text-accent-text"
         >
-          Review this video’s overall style →
+          Review this video’s overall style <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
         </button>
       </div>
 

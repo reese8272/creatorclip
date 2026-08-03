@@ -27,7 +27,26 @@ export default defineConfig([
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
       ],
+      // Issue 384: components/ui/icon.tsx is the single seam to the icon
+      // library, so the whole set stays swappable from one file. It re-exports
+      // an explicit allow-list, which is also what keeps the bundle tree-shaken.
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'lucide-react',
+              message: "Import icons from '@/components/ui/icon' instead.",
+            },
+          ],
+        },
+      ],
     },
+  },
+  // The icon seam itself is the one place allowed to reach the library.
+  {
+    files: ['src/components/ui/icon.tsx', 'src/components/ui/iconSizes.ts'],
+    rules: { 'no-restricted-imports': 'off' },
   },
   // Node-side tooling: Playwright E2E specs/fixtures + config. No React rules —
   // the react-hooks plugin otherwise false-positives on Playwright's `use()`

@@ -7,6 +7,8 @@ import { Chip } from '@/components/Chip'
 import { ChipThinking } from '@/components/chip/ChipStates'
 import { Button } from '@/components/ui/button'
 import { subscribeToChatStream, type StreamSubscription } from '@/lib/taskStream'
+import { ArrowRight, RotateCcw } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 interface ChatMsg {
   role: 'user' | 'assistant'
@@ -220,7 +222,7 @@ export function Chat() {
                     key={s}
                     type="button"
                     onClick={() => send(s)}
-                    className="rounded-full border border-strong bg-surface px-3.5 py-1.5 text-small text-fg shadow-inset transition-colors hover:bg-elevated focus:border-accent focus:outline-none"
+                    className="rounded-full border border-strong bg-surface px-3.5 py-1.5 text-small text-fg inset-shadow-highlight transition-colors hover:bg-elevated focus:border-accent focus:outline-none"
                   >
                     {s}
                   </button>
@@ -257,13 +259,13 @@ export function Chat() {
               {error}
               {gated && (
                 <a href="/app/pricing" className="ml-2 font-medium underline">
-                  View plans →
+                  View plans <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
                 </a>
               )}
             </span>
             {retryable && !gated && (
               <Button variant="ghost" size="sm" onClick={retry} className="shrink-0">
-                ↻ Retry
+                <RotateCcw className={ICON_SIZE.sm} aria-hidden="true" /> Retry
               </Button>
             )}
           </div>
@@ -272,7 +274,7 @@ export function Chat() {
         {canRegenerate && (
           <div className="mb-2">
             <Button variant="ghost" size="sm" onClick={regenerate}>
-              ↻ Regenerate
+              <RotateCcw className={ICON_SIZE.sm} aria-hidden="true" /> Regenerate
             </Button>
           </div>
         )}

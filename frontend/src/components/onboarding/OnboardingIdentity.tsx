@@ -73,7 +73,7 @@ function WizardForm({ onSaved }: { onSaved: () => void }) {
         method: 'POST',
         body: { niches: Array.from(selected), audience_summary: audience.trim() },
       })
-      setStatus({ text: '✓ Saved. Continue to step 4.', ok: true })
+      setStatus({ text: 'Saved. Continue to step 4.', ok: true })
       onSaved()
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : 'Could not save — try again.'

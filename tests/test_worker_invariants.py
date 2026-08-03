@@ -174,6 +174,11 @@ _ADMIN_SESSION_ALLOWLIST = frozenset(
         "_run_lifecycle_scan_async",
         "_reconcile_stripe_ledger_async",
         "_refresh_youtube_analytics_async",
+        # Issue 387 — reads candidate videos across ALL creators to give them a
+        # poster frame. The READ is cross-tenant by nature (it is a Beat sweep);
+        # every WRITE reopens db.tenant_session(creator_id), so the update path
+        # is still RLS-enforced.
+        "_backfill_video_posters_async",
         # Spans RLS-exempt notification tables (preferences / deliveries carry
         # no tenant policy); per-creator isolation via explicit predicates.
         "_send_notification_async",

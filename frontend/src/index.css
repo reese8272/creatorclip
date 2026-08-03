@@ -162,7 +162,14 @@
   --shadow-md: 0 6px 16px oklch(0% 0 0 / 0.6), 0 2px 4px oklch(0% 0 0 / 0.4);
   --shadow-lg: 0 16px 40px oklch(0% 0 0 / 0.7), 0 4px 8px oklch(0% 0 0 / 0.45);
   --shadow-accent-glow: 0 0 0 1px oklch(35% 0.1 280), 0 4px 20px oklch(58% 0.18 280 / 0.25);
-  --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / 0.1);
+
+  /* The top-edge highlight lives in Tailwind v4's INSET-shadow namespace, which
+     writes --tw-inset-shadow. It used to be --shadow-inset, in the same namespace
+     as --shadow-sm — so `shadow-sm shadow-inset` did not compose: both set
+     --tw-shadow and the second won, silently dropping the highlight at ~30 of its
+     43 call sites. That highlight is described three lines up as the load-bearing
+     elevation cue on near-black, so losing it is why cards read flat (Issue 400). */
+  --inset-shadow-highlight: inset 0 1px 0 oklch(100% 0 0 / 0.1);
 }
 
 @layer base {

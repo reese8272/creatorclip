@@ -6,6 +6,9 @@ import { FitBadge } from '@/components/ui/fit-badge'
 import { fitTier } from '@/lib/fit'
 import { TrimFilmstrip } from '@/components/review/TrimFilmstrip'
 import type { ReviewClip } from '@/types'
+import { ArrowRight, Play, RotateCcw } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
+import { VideoPlayer } from '@/components/ui/video-player'
 
 // Issue 306 (redesign): the left review column — the 9:16 player, clip meta + fit
 // pill, the filmstrip trim, and "Next clip →". Trim state is owned by the parent
@@ -76,22 +79,19 @@ export function ClipPlayer({
   return (
     <div className="flex animate-fade-in flex-col items-center gap-4">
       {clip.render_uri ? (
-        <video
+        <VideoPlayer
           // Keyed on the artifact, not just the clip: a confirmed trim/clean
           // swap changes render_uri but not the download src, so without a key
           // change the element would keep playing the old media until reload.
-          key={`${clip.id}:${clip.render_uri}`}
+          mediaKey={clip.render_uri ?? undefined}
           src={mediaSrc}
-          controls
-          playsInline
+          label={`Clip ${clip.rank ?? ''} preview`}
           // Chrome blocks unmuted autoplay: the element stays paused on a black
           // first frame until a user gesture (Issue 359d — the "black render"
-          // symptom). Muted autoplay is allowed; the controls let the user unmute.
+          // symptom). The primitive pairs autoPlay with muted for exactly this.
           autoPlay
-          muted
-          preload="auto"
-          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-          className="aspect-[9/16] w-full max-w-[340px] rounded-xl border border-default bg-black shadow-accent-glow"
+          onTimeChange={setCurrentTime}
+          className="w-full max-w-[320px]"
         />
       ) : (
         <div className="flex aspect-[9/16] w-full max-w-[340px] flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black px-6 text-center text-sm text-subtle">
@@ -121,7 +121,7 @@ export function ClipPlayer({
                 onClick={triggerRender}
                 className="rounded-sm border border-strong bg-bg px-3 py-1.5 text-xs text-muted hover:bg-elevated hover:text-fg"
               >
-                ↻ Retry render
+                <RotateCcw className={ICON_SIZE.sm} aria-hidden="true" /> Retry render
               </button>
             </>
           ) : (
@@ -131,7 +131,7 @@ export function ClipPlayer({
                 onClick={triggerRender}
                 className="rounded-sm border border-strong bg-bg px-3 py-1.5 text-xs text-muted hover:bg-elevated hover:text-fg"
               >
-                ▶ Render this clip
+                <Play className={ICON_SIZE.sm} aria-hidden="true" /> Render this clip
               </button>
             </>
           )}
@@ -165,7 +165,7 @@ export function ClipPlayer({
       />
 
       <button onClick={onNext} className="mt-1 text-xs text-muted hover:text-fg">
-        Next clip →
+        Next clip <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
       </button>
     </div>
   )

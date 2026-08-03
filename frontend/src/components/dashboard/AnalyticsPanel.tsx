@@ -4,6 +4,9 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import type { Analytics, AnalyticsPeriod } from '@/types'
+import { Select } from '@/components/ui/select'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 const PERIODS: { value: AnalyticsPeriod; label: string }[] = [
   { value: '7d', label: 'Last 7 days' },
@@ -46,25 +49,21 @@ export function AnalyticsPanel({ variant = 'panel' }: { variant?: 'panel' | 'sid
   })
 
   const periodSelect = (
-    <select
+    <Select
       aria-label="Analytics period"
       value={period}
-      onChange={(e) => setPeriod(e.target.value as AnalyticsPeriod)}
-      className="rounded-sm border border-strong bg-bg px-2 py-1 text-xs text-muted"
-    >
-      {PERIODS.map((p) => (
-        <option key={p.value} value={p.value}>
-          {p.label}
-        </option>
-      ))}
-    </select>
+      onValueChange={(v) => setPeriod(v as AnalyticsPeriod)}
+      options={PERIODS}
+      size="sm"
+      className="w-auto"
+    />
   )
 
   // Sidebar variant (Issue 305 — Dashboard videos-first): recompacted as a
   // vertical metric list in its own card, with a "Full insights →" link.
   if (variant === 'sidebar') {
     return (
-      <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+      <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
         <div className="mb-3 flex items-center justify-between">
           <div className="text-label uppercase tracking-[0.08em] text-muted">YouTube Analytics</div>
           {periodSelect}
@@ -103,14 +102,14 @@ export function AnalyticsPanel({ variant = 'panel' }: { variant?: 'panel' | 'sid
           to="/insights"
           className="mt-3 inline-block text-small text-accent-text hover:underline"
         >
-          Full insights →
+          Full insights <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
         </Link>
       </div>
     )
   }
 
   return (
-    <div className="rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface p-5 shadow-sm inset-shadow-highlight">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-label uppercase tracking-[0.08em] text-muted">YouTube Analytics</div>
         {periodSelect}

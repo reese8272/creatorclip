@@ -20,6 +20,7 @@ function catalogPayload(): CatalogListResponse {
         created_at: '2026-06-01T00:00:00Z',
         origin: 'catalog',
         clippable: false,
+    has_poster: false,
       },
     ],
     total: 1,
@@ -61,11 +62,21 @@ beforeEach(() => stubFetch())
 afterEach(() => vi.unstubAllGlobals())
 
 describe('ChannelBrowser', () => {
-  it('renders one row per catalog video with its title and youtube_video_id', async () => {
+  // DELIBERATE CONTRACT CHANGE (Issue 388). This test was named
+  // "…with its title and youtube_video_id" and asserted the raw ID was visible.
+  // The ID is an internal handle a creator cannot recognise their own footage
+  // by, so the secondary line is now form/length/age and the ID moved to the
+  // row's title attribute. Rewritten, not deleted — and called out here because
+  // in a diff this looks exactly like weakening a test to make it pass.
+  it('renders one row per catalog video with its title and human metadata', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     renderBrowser(qc)
     expect(await screen.findByText('Synced channel video')).toBeInTheDocument()
-    expect(screen.getByText(/abc12345678/)).toBeInTheDocument()
+    // Recognisable metadata, not the opaque ID.
+    expect(screen.getByText(/Long-form/)).toBeInTheDocument()
+    expect(screen.queryByText(/abc12345678/)).toBeNull()
+    // Still available to anyone who needs it, just not as visible chrome.
+    expect(screen.getByTitle('abc12345678')).toBeInTheDocument()
   })
 
   it('"Clip this" posts FormData to /videos/link with youtube_video_id', async () => {

@@ -4,6 +4,117 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-03 (L25 W1) — Batch A COMPLETE: Issues 384, 385, 386, 387, 388, 400 all DONE
+
+**The whole of Lane L25 Batch A — "visual credibility: stop reading as a prototype" — shipped in one
+lane branch (`wave/l25-batch-a`).** Batch B (#389 app shell, #390 Timeline v2) is now unblocked and
+inherits a real primitive layer instead of building on native elements.
+
+| Issue | What landed |
+|---|---|
+| **384** | `lucide-react` behind one swappable seam (`components/ui/icon.tsx`); every emoji/geometric glyph and all ~33 CTA arrows purged. Keep/Drop lose their full-bleed saturation via a new soft `success` variant |
+| **385** | **Six** Radix primitives (Select, Switch, Checkbox, RadioGroup, Tabs, Tooltip) — not the seven specced; Slider/DropdownMenu/Popover had zero call sites and were deferred. Every native `<select>`/checkbox/radio is gone, including the sign-in clickwrap |
+| **400a** | The `--shadow-inset` → `--inset-shadow-highlight` composition fix at **43 sites**, `Card level` prop, elevation-ladder corrections, **seven dead colour tokens**, `docs/UI.md` reconciled + Elevation/Hierarchy sections |
+| **386** | `VideoPlayer` primitive replaces all **8** native `<video controls>`; transport, scrub slider, frame step, J/K/L, ref-based playhead |
+| **388** | Fit tier leads, score behind a disclosure (honesty wording byte-identical), principle as a named badge, the collided action row fixed, raw YouTube IDs replaced with human metadata |
+| **400b** | Composition pass: one dominant panel per tool screen, receding rail, recessed wells, bounded type migration |
+| **387** | Poster frames end-to-end — migration 0050, extraction at ingest + render, authed byte-proxy endpoints, hourly backfill, `PosterThumb` in the library |
+
+**Gates (measured on node 22, matching CI).** Frontend **409 passed / 64 files** (354/55 at W5,
+**+55**), `tsc -b` clean, `npm run lint` 0 errors (3 pre-existing `exhaustive-deps` warnings),
+`npm run build` clean. Backend **2516 passed / 64 skipped / 173 deselected** (2480 at W5, **+36**).
+Layer 0 all green: ruff 0 · mypy 0 · coverage **83.2** (floor 83.00) · module floors all pass, with
+**`clip_engine` 92.72 — UP from 92.51** · bandit 0/0 · pip-audit 0. Clip-quality eval green.
+Playwright **52 passed** across desktop + mobile, including the **editor route newly added to the axe
+gate**. `scripts/check_downgrades.py` clean. Bundle **620,801 → 753,865 B raw** (175,278 → 220,202
+gzip): +10 kB for 27 tree-shaken icons, ~+104 kB for Radix's popper/portal/focus-scope tree, the rest
+the new primitives.
+
+**Four structural gates are new to this repo** (`src/test/sourceScan.ts` + four test files). They read
+the source tree and assert on its structure, which this codebase had never done — honesty constraints
+are asserted as rendered DOM. Justified because the rules are structural: a rendered-DOM assertion
+sees only the component under test, and what must be prevented is a glyph, a native `<select>`, a
+`<video controls>` or an undeclared colour token reappearing at any one of ~200 sites. Implementation
+constraints were **measured, not assumed** — `node:fs` fails `tsc -b` (no `@types/node` in
+`tsconfig.app.json`), a regex false-positives on ~2,600 box-drawing characters in comment banners, and
+`test.css: false` makes every `?raw` CSS import return an empty string.
+
+**What the gates found that review had not.** The design-token contract test surfaced **five** dead
+tokens beyond the two already logged — the worst being `App.tsx`'s `RootError`, the crash-recovery
+screen, written entirely in shadcn's default token names (`bg-background`, `text-foreground`,
+`bg-primary`, `border-border`). It had been rendering with no background, no foreground colour and a
+fill-less "Reload" button: the screen a user sees **after the SPA has already crashed**. It survived
+review precisely because the class names look plausible.
+
+**Two defects were caught only by looking at the screenshots**, which is why that step is in the plan
+and not replaced by green CI: the primary panel stretched to its column and framed a large empty
+region beside a 9:16 player, and Select values wrapped out of their fixed-height trigger.
+
+**Deliberate scope calls, each recorded in `docs/DECISIONS.md` with its reasoning:** #385 builds six
+primitives rather than seven (KISS — the other three have no consumers); #387 retains poster frames
+past the 72h source purge while the extracted WAV is still purged; #387 serves posters through a byte
+proxy rather than the presigned-302 precedent; and `/settings` was **not** added to the axe gate
+because it has pre-existing contrast failures from the 2026-06-23 "Soon" preview rows — logged in
+`OFF_COURSE_BUGS.md` rather than fixed, since adding it first would block the batch on unrelated work.
+
+**Open, and stated rather than implied:**
+1. **Visual baselines must be regenerated on `ubuntu-latest`.** 4 of the 6 (`empty-dashboard` both
+   projects, `login-mobile`, `pricing-mobile`) moved. They cannot be generated locally — WSL2 font
+   anti-aliasing differs and produces false positives — so this needs
+   `gh workflow run ci.yml -f update_snapshots=true --ref wave/l25-batch-a`.
+2. **#387's integration lane has not run.** The RLS-enforced cross-creator cases for the two poster
+   endpoints need a real Postgres, and Docker is unavailable on this box. The mocked-session tests
+   emulate the `get_owned` predicate; they are not proof that RLS holds.
+3. **The ffmpeg poster chain is asserted against mocked `_run`.** It needs one pass over a genuinely
+   ugly real file (VFR screen recording, `.mkv` with a broken index, a source shorter than the seek
+   offset) during the staging soak.
+4. **Toolchain.** Homebrew npm 11.5.2 on node 24.4.0 could not install anything — it exited 1 with an
+   empty error and left a half-extracted `node_modules`. Fixed with `brew reinstall node`, which moved
+   node to 26.5.1; `frontend/.nvmrc` now pins **22** to match CI's three `node-version` jobs, because
+   under node 26 jsdom stops exposing a global `localStorage` and a pre-existing Walkthrough test
+   fails. Full diagnosis + ruled-out hypotheses in `~/.claude/ISSUES_LOG.md` ISSUE-2026-08-03-01.
+
+---
+
+## 2026-08-03 — Tracker reset: `docs/issues.md` rebuilt around **Lane L25 — Editor & Craft** (384–405)
+
+**No code shipped.** The old 7,096-line tracker is archived verbatim at
+`docs/issues-archive-2026-08-03.md`; `docs/issues.md` is now a 1,277-line queue of **22 issues**,
+each with what/why/in-repo-evidence/industry-standard-with-links and a 43-source index.
+A status audit confirmed the W5 claim below: **345–383 are DONE** except **#363** (PARKED, reversible
+— now merged into #394), **#376(b)** (DESCOPED, reversible), and **#381** (OPEN).
+
+**New active lane, filed from a 2026-08-03 review of the editor + presentation layer against the
+2026 field** (Descript V50, Opus Clip, Submagic, Klap, Veed, CapCut). The engine is beta-ready and
+differentiated; the surface is not. Five batches, priority-ordered:
+
+| Batch | Issues | Scope |
+|---|---|---|
+| **A** | 384–388, **400** | icon system · UI primitives · video-player primitive · thumbnails · de-debug surfaces · **visual-hierarchy pass** |
+| **B** | 389–392 | app shell · Timeline v2 · edit document + real undo/redo · replace the fabricated waveform |
+| **C** | 393–397, **401** | client-side cut preview · WYSIWYG captions · **resumable direct-to-R2 upload (#395 — BETA BLOCKER)** · manual overrides · **source-edit export** · assistant-driven editing |
+| **D** | 398–399, **402** | library management · clip triage grid · **library depth** |
+| **E** | **403–405** | B-roll · multi-track · transitions/speed/keyframes — **filed, NOT funded** |
+
+**Batch E is deliberately unfunded** per the archived-#382 precedent (fund the moat, not breadth);
+each carries a reversal trigger and requires a new `[DEC]` before any work. **#403 (B-roll) is the
+likeliest to reverse** — it is table stakes in the category and we lack it.
+
+**Hard sequencing chain: #386 → #390 → #391 → #393.** Timeline v2 needs an app-controlled player;
+client-side preview needs the edit document authoritative server-side. #404 requires #390 shipped;
+#405 requires #396's override-track infrastructure.
+
+Headline evidence: no icon library in `frontend/package.json`; `components/ui/` is 5 files, so 8
+native `<select>` / 9 native checkboxes / 11 native `<video controls>` ship as-is; the editor
+supports one operation (delete a time range) with one-level undo (`Editor.tsx:218`) and
+`localStorage` persistence (`:32`); `LongFormEditor.tsx:131-138` renders a fabricated waveform
+labelled "Source timeline"; `UPLOAD_MAX_MB = 500` rejects typical source footage on a path the ToS
+makes mandatory; and the four-level surface ladder at `index.css:25-28` plus the semantic type scale
+at `:91-115` are **built and unused**, which is why "blocky" is a cheap fix rather than a redesign.
+Full rationale in `docs/DECISIONS.md` (2026-08-03); defects logged in `docs/OFF_COURSE_BUGS.md`.
+
+---
+
 ## 2026-07-31 (latest, W5) — Issues 355 + 380 DONE: the last two buildable issues are closed
 
 **W5 was the whole remaining code-closeable backlog.** With these two, every issue in `docs/issues.md`

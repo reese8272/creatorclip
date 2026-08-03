@@ -30,6 +30,39 @@ Object.defineProperty(window, 'matchMedia', {
   }),
 })
 
+// jsdom implements none of the APIs Radix's Select/Popper layer calls during a
+// normal open-and-pick interaction (Issue 385). Without these stubs EVERY Select
+// test throws `hasPointerCapture is not a function` before it can assert
+// anything — the components are fine, the environment just lacks the surface.
+Element.prototype.hasPointerCapture ??= () => false
+Element.prototype.setPointerCapture ??= () => {}
+Element.prototype.releasePointerCapture ??= () => {}
+Element.prototype.scrollIntoView ??= () => {}
+
+// Radix's positioning measures its trigger and content. jsdom reports zero-sized
+// rects, which is harmless here — we assert on roles and values, never geometry.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+// jsdom does not implement HTMLMediaElement playback: play/pause/load throw
+// "Not implemented", and currentTime/duration are not usefully settable. The
+// VideoPlayer primitive (Issue 386) drives all of them, so stub the surface.
+// requestVideoFrameCallback is deliberately left undefined — that keeps the
+// fps-measurement path (a browser-only refinement) out of unit tests.
+Object.defineProperties(HTMLMediaElement.prototype, {
+  play: { writable: true, value: () => Promise.resolve() },
+  pause: { writable: true, value: () => {} },
+  load: { writable: true, value: () => {} },
+  currentTime: { writable: true, value: 0 },
+  duration: { writable: true, value: 0 },
+  paused: { writable: true, value: true },
+  playbackRate: { writable: true, value: 1 },
+  muted: { writable: true, value: false },
+})
+
 afterEach(() => {
   cleanup()
 })

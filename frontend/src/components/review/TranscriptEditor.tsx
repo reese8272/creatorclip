@@ -5,6 +5,9 @@ import { cn } from '@/lib/utils'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
 import { Button } from '@/components/ui/button'
 import type { ClipTranscript, EditorCut, ReviewClip, TranscriptWord } from '@/types'
+import { TriangleAlert, X } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
+import { VideoPlayer } from '@/components/ui/video-player'
 
 const WARNING_REMOVED_PCT = 40
 const ADJACENT_MERGE_S = 0.05
@@ -167,8 +170,8 @@ export function TranscriptEditor({ clip }: { clip: ReviewClip }) {
   return (
     <div>
       <p className="mb-2 text-xs text-subtle">
-        Drag across words to mark them for removal. Click <strong>×</strong> on a queued cut to undo
-        it.
+        Drag across words to mark them for removal. Use the <strong>remove</strong> button on a
+        queued cut to undo it.
       </p>
 
       <div
@@ -199,7 +202,10 @@ export function TranscriptEditor({ clip }: { clip: ReviewClip }) {
         {cuts.length} cut(s) · would remove {removedS.toFixed(2)}s ({pct.toFixed(0)}%)
       </div>
       {pct >= WARNING_REMOVED_PCT && (
-        <div className="text-sm font-semibold text-danger">⚠ This removes {pct.toFixed(0)}% of your clip.</div>
+        <div className="flex items-center gap-1.5 text-sm font-semibold text-danger">
+          <TriangleAlert className={`${ICON_SIZE.sm} shrink-0`} aria-hidden="true" />
+          This removes {pct.toFixed(0)}% of your clip.
+        </div>
       )}
 
       <div className="mt-2 max-h-[140px] overflow-y-auto rounded-sm border border-default p-2 text-xs">
@@ -217,9 +223,9 @@ export function TranscriptEditor({ clip }: { clip: ReviewClip }) {
               <button
                 onClick={() => removeCut(idx)}
                 aria-label="Remove cut"
-                className="h-[22px] w-[22px] rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
+                className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
               >
-                ×
+                <X className={ICON_SIZE.sm} aria-hidden="true" />
               </button>
             </div>
           ))
@@ -242,10 +248,11 @@ export function TranscriptEditor({ clip }: { clip: ReviewClip }) {
           authed download endpoint (the raw URI is s3:// in prod R2). */}
       {cleanedUri && (
         <div className="mt-3">
-          <video
+          <VideoPlayer
             src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
-            controls
-            className="w-full rounded-sm border border-default"
+            label="Edited clip preview"
+            density="compact"
+            className="w-full"
           />
           <div className="mt-2 flex gap-2">
             <Button size="sm" onClick={confirmFinal}>

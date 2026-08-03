@@ -24,6 +24,10 @@ import type {
   TranscriptWord,
   VideoListResponse,
 } from '@/types'
+import { ArrowLeft, RectangleHorizontal, RectangleVertical, TriangleAlert, X } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
+import { VideoPlayer, type VideoPlayerHandle } from '@/components/ui/video-player'
+import { Card } from '@/components/ui/card'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -159,18 +163,17 @@ export function Editor() {
 
   // ── Playhead state ───────────────────────────────────────────────────────
 
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const playerRef = useRef<VideoPlayerHandle>(null)
+  // Page-level time state is retained deliberately: it is what the transcript
+  // highlight and Timeline read today, and it is behaviourally identical to the
+  // old onTimeUpdate wiring. Pushing the subscription down into those components
+  // is #390's job — doing it here would collide with its prop rewrite.
   const [currentTime, setCurrentTime] = useState(0)
 
-  function handleTimeUpdate() {
-    if (videoRef.current) setCurrentTime(videoRef.current.currentTime)
-  }
 
   function handleSeek(t: number) {
-    if (videoRef.current) {
-      videoRef.current.currentTime = t
-      setCurrentTime(t)
-    }
+    playerRef.current?.seek(t)
+    setCurrentTime(t)
   }
 
   // ── Waveform (client-side WebAudio decode) ───────────────────────────────
@@ -435,7 +438,7 @@ export function Editor() {
               onClick={() => setEditorMode('short')}
               className={cn(TAB_BASE, editorMode === 'short' ? TAB_ACTIVE : TAB_IDLE)}
             >
-              ▮ Short-form clip
+              <RectangleVertical className={ICON_SIZE.sm} aria-hidden="true" /> Short-form clip
             </button>
             <button
               role="tab"
@@ -443,7 +446,7 @@ export function Editor() {
               onClick={() => setEditorMode('long')}
               className={cn(TAB_BASE, editorMode === 'long' ? TAB_ACTIVE : TAB_IDLE)}
             >
-              ▭ Long-form source
+              <RectangleHorizontal className={ICON_SIZE.sm} aria-hidden="true" /> Long-form source
             </button>
           </div>
         </div>
@@ -470,20 +473,26 @@ export function Editor() {
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[1fr_320px]">
             {/* ── Left: player + timeline + transcript ── */}
             <div className="flex flex-col gap-4">
-          {/* Player */}
+          {/* The viewer — player + timeline as ONE primary panel (L2). They are a
+              single instrument; as two bare divs under uppercase micro-labels
+              neither could dominate, which is the composition half of "blocky". */}
+          <Card level="primary" className="flex flex-col gap-4 p-4">
           <div className="flex items-start gap-4">
             {clip.render_uri ? (
-              <video
-                ref={videoRef}
+              <VideoPlayer
+                ref={playerRef}
                 // Keyed on the artifact, not just the clip: a confirmed clean
                 // swap changes render_uri but not the download src, so without
                 // a key change the element would keep playing the old media.
-                key={`${clip.id}:${clip.render_uri}`}
+                mediaKey={clip.render_uri ?? undefined}
                 src={mediaSrc}
-                controls
-                playsInline
-                onTimeUpdate={handleTimeUpdate}
-                className="aspect-[9/16] w-[180px] shrink-0 rounded-xl border border-default bg-black shadow-accent-glow"
+                label="Clip preview"
+                // compact: at 180px wide a full transport bar is unusable, and
+                // scrubbing here belongs to the Timeline below, not the player.
+                density="compact"
+                transport
+                onTimeChange={setCurrentTime}
+                className="w-[180px] shrink-0 shadow-accent-glow"
               />
             ) : (
               <div className="flex aspect-[9/16] w-[180px] shrink-0 items-center justify-center rounded-xl border border-default bg-black text-xs text-subtle">
@@ -493,7 +502,7 @@ export function Editor() {
 
             {/* Clip meta + fit badge */}
             <div className="flex flex-col gap-3 pt-2">
-              <div className="text-center font-mono text-xs text-muted">
+              <div className="text-center font-mono text-mono text-muted">
                 Clip #{clip.rank ?? '—'} ·{' '}
                 {(clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1)}s
               </div>
@@ -503,14 +512,14 @@ export function Editor() {
                 size="sm"
                 onClick={() => navigate(`/review?video_id=${videoId}`)}
               >
-                ← Back to Review
+                <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back to Review
               </Button>
             </div>
           </div>
 
           {/* Chip guidance callout (short-form) */}
           {clip.reasoning && (
-            <div className="flex items-start gap-3 rounded-md border border-default bg-surface px-4 py-3 shadow-inset">
+            <div className="flex items-start gap-3 rounded-md border border-default bg-surface px-4 py-3 inset-shadow-highlight">
               <Chip pose="think" size={30} className="mt-0.5 flex-shrink-0" />
               <p className="text-small leading-relaxed text-muted">{clip.reasoning}</p>
             </div>
@@ -518,7 +527,7 @@ export function Editor() {
 
           {/* Timeline */}
           <div>
-            <h2 className="mb-2 text-xs font-medium uppercase tracking-[0.06em] text-muted">
+            <h2 className="mb-2 text-label font-medium uppercase tracking-[0.06em] text-muted">
               Timeline
             </h2>
             <Timeline
@@ -529,10 +538,11 @@ export function Editor() {
               onSelection={({ start_s, end_s }) => addTimeCut(start_s, end_s)}
               waveformData={waveformData}
             />
-            <p className="mt-1 text-[10px] text-subtle">
-              Click to seek · Drag to mark a cut region
-            </p>
+            {/* Content the creator must actually read: on the semantic scale and
+                on text-muted, not 10px text-subtle. */}
+            <p className="mt-1 text-small text-muted">Click to seek · Drag to mark a cut region</p>
           </div>
+          </Card>
 
           {/* Transcript synced to playhead */}
           <div>
@@ -556,7 +566,9 @@ export function Editor() {
                 aria-readonly="true"
                 aria-label="Clip transcript — drag to select words for removal"
                 onMouseUp={onTranscriptMouseUp}
-                className="max-h-[200px] select-text overflow-y-auto rounded-md border border-default bg-surface px-3 py-2 text-sm leading-[1.9]"
+                // bg-bg inside a panel is an L0 WELL — a scroll region reads as recessed on
+                // dark by dropping a rung, not by adding a shadow.
+                className="max-h-[200px] select-text overflow-y-auto rounded-md border border-default bg-bg px-3 py-2 text-body leading-[1.9]"
               >
                 {words.map((w, i) => (
                   <Fragment key={i}>
@@ -577,17 +589,18 @@ export function Editor() {
             )}
 
             {/* Cut queue */}
-            <div className="mt-2 text-xs text-subtle">
+            <div className="mt-2 text-small text-muted">
               {cuts.length} cut(s) · {removedS.toFixed(2)}s removed ({pct.toFixed(0)}%)
             </div>
             {pct >= WARNING_REMOVED_PCT && (
-              <div className="text-xs font-semibold text-danger">
-                ⚠ This removes {pct.toFixed(0)}% of your clip.
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-danger">
+                <TriangleAlert className={`${ICON_SIZE.xs} shrink-0`} aria-hidden="true" />
+                This removes {pct.toFixed(0)}% of your clip.
               </div>
             )}
 
             {cuts.length > 0 && (
-              <div className="mt-2 max-h-[120px] overflow-y-auto rounded-sm border border-default p-2 text-xs">
+              <div className="mt-2 max-h-[120px] overflow-y-auto rounded-sm border border-default bg-bg p-2 text-xs">
                 {cuts.map((c, idx) => (
                   <div
                     key={idx}
@@ -604,9 +617,9 @@ export function Editor() {
                     <button
                       onClick={() => removeCut(idx)}
                       aria-label="Remove cut"
-                      className="h-[22px] w-[22px] rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
+                      className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
                     >
-                      ×
+                      <X className={ICON_SIZE.sm} aria-hidden="true" />
                     </button>
                   </div>
                 ))}
@@ -648,10 +661,11 @@ export function Editor() {
                 the authed download endpoint (the raw URI is s3:// in prod R2). */}
             {cleanedUri && (
               <div className="mt-3">
-                <video
+                <VideoPlayer
                   src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
-                  controls
-                  className="w-full rounded-sm border border-default"
+                  label="Edited clip preview"
+                  density="compact"
+                  className="w-full"
                 />
                 <div className="mt-2 flex gap-2">
                   <Button size="sm" onClick={confirmFinal}>

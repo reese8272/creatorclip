@@ -12,16 +12,25 @@ import { cva } from 'class-variance-authority'
 export const buttonVariants = cva(
   // radius-sm (6px) per docs/UI.md; motion: standard-eased color+shadow+transform
   // with an active:scale press cue; focus ring uses --color-accent-border. The
-  // shadow-inset top-edge highlight on filled variants restores the 3D affordance
-  // flat dark surfaces lose (docs/UI.md "Shadows").
+  // inset-shadow-highlight top-edge highlight on filled variants restores the 3D
+  // affordance flat dark surfaces lose (docs/UI.md "Shadows").
   'inline-flex items-center justify-center gap-2 rounded-sm font-ui font-medium whitespace-nowrap transition-[background-color,border-color,box-shadow,transform] duration-fast ease-standard active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-border focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none',
   {
     variants: {
       variant: {
-        primary: 'bg-accent text-on-accent shadow-sm shadow-inset hover:bg-accent-hover active:bg-accent-active',
-        secondary: 'border border-strong bg-surface text-fg shadow-inset hover:bg-elevated',
-        confirm: 'bg-success text-bg shadow-sm shadow-inset hover:opacity-90',
+        primary: 'bg-accent text-on-accent shadow-sm inset-shadow-highlight hover:bg-accent-hover active:bg-accent-active',
+        secondary: 'border border-strong bg-surface text-fg inset-shadow-highlight hover:bg-elevated',
+        confirm: 'bg-success text-bg shadow-sm inset-shadow-highlight hover:opacity-90',
         outline: 'border border-strong bg-transparent text-fg hover:border-accent hover:text-accent-text',
+        // `success` / `danger` are the SOFT semantic pair: a low-saturation
+        // surface with a semantic border and semantic text, where the icon
+        // carries the affordance and colour only reinforces it. Use these for
+        // paired choices (Keep / Drop) — a full-bleed saturated fill on both
+        // sides makes colour do the icon's job twice over (Issue 384).
+        // `confirm` stays full-bleed for single-action modal confirmations,
+        // where there is nothing to balance against.
+        success:
+          'border border-[color:var(--color-success-border)] bg-[color:var(--color-success-soft)] text-success hover:bg-success hover:text-bg',
         danger: 'border border-[color:var(--color-danger-border)] bg-[color:var(--color-danger-soft)] text-danger hover:bg-danger hover:text-bg',
         ghost: 'text-muted hover:text-fg hover:bg-elevated',
       },

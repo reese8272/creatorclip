@@ -223,7 +223,7 @@ export function Timeline({
       />
 
       {/* Time ruler: start / mid / end labels. */}
-      <div className="absolute bottom-0 left-0 right-0 flex justify-between px-2 py-1 text-[10px] font-mono text-muted" style={{ pointerEvents: 'none' }}>
+      <div className="absolute bottom-0 left-0 right-0 flex justify-between px-2 py-1 font-mono text-label text-muted" style={{ pointerEvents: 'none' }}>
         <span>0:00</span>
         {duration > 0 && <span>{fmtTime(duration / 2)}</span>}
         <span>{fmtTime(duration)}</span>
@@ -232,7 +232,7 @@ export function Timeline({
       {/* Cursor time tooltip during drag. */}
       {dragStart !== null && dragEnd !== null && (
         <div
-          className="pointer-events-none absolute top-1 rounded-sm bg-elevated px-1.5 py-0.5 text-[10px] font-mono text-fg shadow-sm"
+          className="pointer-events-none absolute top-1 rounded-sm bg-elevated px-1.5 py-0.5 font-mono text-label text-fg shadow-sm"
           style={{ left: `${(Math.min(dragStart, dragEnd) / Math.max(duration, 1)) * 100}%` }}
         >
           {fmtTime(Math.min(dragStart, dragEnd))} → {fmtTime(Math.max(dragStart, dragEnd))}

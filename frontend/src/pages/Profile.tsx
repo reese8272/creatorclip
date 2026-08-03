@@ -16,6 +16,8 @@ import type {
   SavedInsightsResponse,
   VideoListResponse,
 } from '@/types'
+import { ArrowRight, SettingsIcon } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Sidebar Library stat row.
 function StatRow({ label, value, top }: { label: string; value: string; top?: boolean }) {
@@ -83,7 +85,8 @@ export function Profile() {
             <p className="mt-1 text-small text-muted">Channel profile snapshot</p>
           </div>
           <Link to="/settings">
-            <Button variant="secondary">⚙ Editing settings →</Button>
+            <Button variant="secondary">
+              <SettingsIcon className={ICON_SIZE.md} aria-hidden="true" /> Editing settings <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /></Button>
           </Link>
         </div>
 
@@ -91,7 +94,7 @@ export function Profile() {
           {/* Main: DNA snapshot + saved analyses (read-only; editing lives in Settings) */}
           <div className="flex flex-col gap-6">
             <DnaCard identity={identity} niches={niches} />
-            <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+            <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
               <div className="flex items-center justify-between border-b border-default px-[18px] py-4">
                 {/* Issue 355: "Saved insights" everywhere — Insights calls the
                     same endpoint and query key ['saved-insights'] by that name. */}
@@ -127,7 +130,7 @@ export function Profile() {
                       </div>
                     </div>
                     <Link to="/insights" className="text-label text-accent-text hover:underline">
-                      Open →
+                      Open <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
                     </Link>
                   </div>
                 ))
@@ -137,7 +140,7 @@ export function Profile() {
 
           {/* Sidebar: library + YouTube analytics */}
           <div className="flex flex-col gap-4">
-            <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+            <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
               <div className="mb-3 text-label uppercase tracking-[0.08em] text-muted">Library</div>
               <div className="flex flex-col">
                 <StatRow label="Videos" value={String(videos.length)} />

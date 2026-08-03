@@ -1,4 +1,6 @@
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Public marketing landing (Issue 376a). Mirrors static/landing.html — the
 // page FastAPI actually serves at `/` (main.py:index), which works whether or
@@ -47,13 +49,13 @@ export function Landing() {
           <div className="flex flex-wrap justify-center gap-3">
             <a
               href="/auth/login"
-              className="inline-flex items-center justify-center rounded-md border border-fg bg-fg px-5 py-3 text-[15px] font-semibold text-bg transition-opacity hover:opacity-90"
+              className="inline-flex items-center justify-center rounded-md border border-fg bg-fg px-5 py-3 text-body font-semibold text-bg transition-opacity hover:opacity-90"
             >
               Sign in with Google
             </a>
             <a
               href="/app/pricing"
-              className="inline-flex items-center justify-center rounded-md border border-default px-5 py-3 text-[15px] font-semibold text-fg hover:border-strong"
+              className="inline-flex items-center justify-center rounded-md border border-default px-5 py-3 text-body font-semibold text-fg hover:border-strong"
             >
               See pricing
             </a>
@@ -115,7 +117,7 @@ export function Landing() {
             href="/app/insights#proof-of-lift"
             className="mt-3 inline-block text-sm text-accent-text hover:underline"
           >
-            See yours →
+            See yours <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </a>
         </section>
 

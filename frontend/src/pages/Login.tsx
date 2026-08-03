@@ -15,6 +15,7 @@
 // ("13 or older") is the FTC COPPA Rule (16 CFR Part 312, effective 2025-06-23)
 // recommended pattern: a neutral affirmation, not a yes/no that nudges the answer.
 import { useState } from 'react'
+import { Checkbox } from '@/components/ui/checkbox'
 
 export function Login() {
   const params = new URLSearchParams(window.location.search)
@@ -71,15 +72,21 @@ export function Login() {
               Must be checked before the OAuth CTA becomes active.  This is the
               defensible consent artifact per Chabolla v. ClassPass (9th Cir. 2025)
               and GDPR Art. 7 recorded-consent requirement. */}
-          <label className="mb-3 flex cursor-pointer items-start gap-3 rounded-md border border-default bg-surface px-3.5 py-3 text-left text-xs leading-relaxed text-muted">
-            <input
-              type="checkbox"
+          {/* The label is a SIBLING with htmlFor, not a wrapper. Checkbox renders a
+              <button>, which IS labelable — but a wrapping <label> with no htmlFor
+              would silently stop the consent text from toggling the box, and no
+              test would catch it. aria-label is retained so the accessible name
+              (which the tests query, and which is the consent artifact) is
+              unchanged by the swap. */}
+          <div className="mb-3 flex items-start gap-3 rounded-md border border-default bg-surface px-3.5 py-3 text-left text-xs leading-relaxed text-muted">
+            <Checkbox
+              id="tos-consent"
               checked={agreed}
-              onChange={(e) => setAgreed(e.target.checked)}
+              onCheckedChange={setAgreed}
               aria-label="I agree to the Terms of Service and Privacy Policy"
-              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-current"
+              className="mt-0.5 shrink-0"
             />
-            <span>
+            <label htmlFor="tos-consent" className="cursor-pointer">
               I agree to the{' '}
               <a
                 href="/static/tos.html"
@@ -101,28 +108,30 @@ export function Login() {
                 Privacy Policy
               </a>
               . We comply with the YouTube API Services Terms of Service.
-            </span>
-          </label>
+            </label>
+          </div>
 
           {/* Issue 300 — COPPA 13+ minimum-age attestation (unchecked by default).
               Age-neutral phrasing per FTC COPPA Rule (16 CFR Part 312, 2025-06-23):
               "I confirm I am 13 or older" avoids a leading yes/no question.
               Both this and the consent checkbox above must be checked before sign-in. */}
-          <label className="mb-5 flex cursor-pointer items-start gap-3 rounded-md border border-default bg-surface px-3.5 py-3 text-left text-xs leading-relaxed text-muted">
-            <input
-              type="checkbox"
+          <div className="mb-5 flex items-start gap-3 rounded-md border border-default bg-surface px-3.5 py-3 text-left text-xs leading-relaxed text-muted">
+            <Checkbox
+              id="age-attestation"
               checked={ageConfirmed}
-              onChange={(e) => setAgeConfirmed(e.target.checked)}
+              onCheckedChange={setAgeConfirmed}
               aria-label="I confirm I am 13 or older"
-              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-current"
+              className="mt-0.5 shrink-0"
             />
-            <span>I confirm I am 13 or older.</span>
-          </label>
+            <label htmlFor="age-attestation" className="cursor-pointer">
+              I confirm I am 13 or older.
+            </label>
+          </div>
 
           {canSignIn ? (
             <a
               href={signInHref}
-              className="inline-flex w-full items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-[15px] font-semibold text-bg transition-opacity hover:opacity-90"
+              className="inline-flex w-full items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-body font-semibold text-bg transition-opacity hover:opacity-90"
               aria-label="Sign in with Google"
             >
               <svg className="h-[18px] w-[18px] shrink-0" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -138,7 +147,7 @@ export function Login() {
               type="button"
               disabled
               aria-disabled="true"
-              className="inline-flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-[15px] font-semibold text-bg opacity-40"
+              className="inline-flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-body font-semibold text-bg opacity-40"
               aria-label="Sign in with Google (please agree to Terms and confirm your age first)"
             >
               <svg className="h-[18px] w-[18px] shrink-0" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">

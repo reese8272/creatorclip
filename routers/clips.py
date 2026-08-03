@@ -44,7 +44,7 @@ from observability import record_llm_tokens
 from routers._enqueue import enqueue_stream_task, stamp_stream_owner
 from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, TaskQueuedOut, build_envelope_state
-from worker.storage import presigned_download_url, upload_file
+from worker.storage import aread_bytes, presigned_download_url, upload_file
 from youtube.data_api import classify_video_kind
 from youtube.ingest import probe_duration_s
 
@@ -78,6 +78,9 @@ class ClipOut(BaseModel):
     origin: str = "engine"
     # Issue 373 — the export panel surfaces the render's aspect preset.
     aspect: str = "9:16"
+    # Issue 387 — a boolean, never the URI; the bytes come from the authed
+    # /clips/{id}/poster endpoint.
+    has_poster: bool = False
     # Issue 377 — presentation-only shortlist cut: True for the top
     # ``settings.SHORTLIST_SIZE`` engine-ranked clips (rank is None → always
     # False; a creator-made selection was never engine-scored, Issue 373).
@@ -243,6 +246,7 @@ def _clip_response(clip: Clip) -> dict:
         "origin": sj.get("origin", "engine"),
         "aspect": (clip.style_preset or {}).get("aspect") or "9:16",
         "shortlisted": is_shortlisted(clip.rank),
+        "has_poster": clip.poster_uri is not None,
     }
 
 
@@ -1365,6 +1369,31 @@ async def update_clip_metadata(
         setattr(clip, field_name, value)
     await session.commit()
     return _clip_response(clip)
+
+
+@clips_router.get("/{clip_id}/poster", response_model=None)
+# 300/minute for the same reason as the video poster: one request per ROW in a
+# grid, not one per deliberate action. See routers/videos.py::get_video_poster
+# for the full byte-proxy-vs-presigned-302 rationale.
+@limiter.limit("300/minute", key_func=creator_key)
+async def get_clip_poster(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Serve the poster still for a rendered clip (Issue 387)."""
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+    if not clip.poster_uri:
+        raise HTTPException(status_code=404, detail="No poster frame for this clip")
+    data = await aread_bytes(clip.poster_uri)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Poster frame not found")
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=86400, immutable"},
+    )
 
 
 @clips_router.get("/{clip_id}/download", response_model=None)

@@ -5,8 +5,17 @@ import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { Panel } from '@/components/insights/InsightsPanel'
 import { deriveWhyNarrative } from '@/components/insights/narrative'
 import type { Performer, PerformerInsight } from '@/types'
+import { Select, type SelectOption } from '@/components/ui/select'
+import { Star } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 type SortMode = 'score-desc' | 'score-asc' | 'title'
+
+const SORT_OPTIONS: SelectOption[] = [
+  { value: 'score-desc', label: 'Score: high → low' },
+  { value: 'score-asc', label: 'Score: low → high' },
+  { value: 'title', label: 'Title: A → Z' },
+]
 
 function sortPerformers(rows: Performer[], mode: SortMode): Performer[] {
   const sorted = rows.slice()
@@ -47,7 +56,7 @@ function PerformerRow({ p, kind }: { p: Performer; kind: 'top' | 'bottom' }) {
         body: { video_id: p.video_id, performer_kind: kind },
       })
       setAnalysis({ id: data.id, content: data.content })
-      setLabel('Analyzed ✓')
+      setLabel('Analyzed')
     } catch (e) {
       setBusy(false)
       setLabel('Retry')
@@ -93,11 +102,16 @@ function PerformerRow({ p, kind }: { p: Performer; kind: 'top' | 'bottom' }) {
           <div className="mt-2 text-xs leading-relaxed text-muted">
             {analysis.content}{' '}
             {!saved ? (
-              <button onClick={save} className="ml-1 text-accent-text hover:text-fg">
-                ★ Save
+              <button
+                onClick={save}
+                className="ml-1 inline-flex items-center gap-1 text-accent-text hover:text-fg"
+              >
+                <Star className={ICON_SIZE.xs} aria-hidden="true" /> Save
               </button>
             ) : (
-              <span className="ml-1 text-success">★ Saved</span>
+              <span className="ml-1 inline-flex items-center gap-1 text-success">
+                <Star className={ICON_SIZE.xs} aria-hidden="true" /> Saved
+              </span>
             )}
           </div>
         )}
@@ -130,19 +144,17 @@ export function PerformerPanel({
   const sorted = useMemo(() => sortPerformers(performers, mode), [performers, mode])
 
   const aside = (
-    <label className="ml-auto flex items-center gap-2 whitespace-nowrap text-xs text-muted">
+    <div className="ml-auto flex items-center gap-2 whitespace-nowrap text-xs text-muted">
       Sort
-      <select
+      <Select
         value={mode}
-        onChange={(e) => setMode(e.target.value as SortMode)}
+        onValueChange={(v) => setMode(v as SortMode)}
+        options={SORT_OPTIONS}
         aria-label={`Sort ${title}`}
-        className="rounded-sm border border-strong bg-bg px-2 py-0.5 text-xs"
-      >
-        <option value="score-desc">Score: high → low</option>
-        <option value="score-asc">Score: low → high</option>
-        <option value="title">Title: A → Z</option>
-      </select>
-    </label>
+        size="sm"
+        className="w-auto"
+      />
+    </div>
   )
 
   return (

@@ -11,6 +11,8 @@ import { FitBadge } from '@/components/ui/fit-badge'
 import { fitTier } from '@/lib/fit'
 import { Button } from '@/components/ui/button'
 import type { Summary, SummaryListResponse, SummaryQueued, SummarySegment } from '@/types'
+import { ArrowLeft, ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // The server rejects a 4th concurrent SSE stream with this named error event
 // (routers/tasks.py) — the render itself is still queued and running, so it
@@ -142,7 +144,7 @@ export function Recap() {
     <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8">
       <div className="mb-6">
         <Link to={`/video/${videoId}`} className="text-xs text-accent-text hover:underline">
-          ← Video timeline
+          <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Video timeline
         </Link>
         <h1 className="mt-2 text-lg font-medium text-fg">Recap</h1>
         <p className="text-xs text-subtle">
@@ -197,7 +199,7 @@ export function Recap() {
                 to="/dashboard"
                 className="text-accent-text underline-offset-2 hover:underline"
               >
-                Upload again →
+                Upload again <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
               </Link>
             </div>
           ) : (

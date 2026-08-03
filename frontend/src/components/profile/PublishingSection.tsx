@@ -1,5 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
+import { Check } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Issue 194 — opt into the youtube.upload write scope via incremental consent.
 // The button hits the server redirect (/auth/connect-publishing) which sends the
@@ -13,8 +15,9 @@ export function PublishingSection({ canPublish }: { canPublish: boolean }) {
       />
       <CardBody className="flex flex-col gap-3 text-sm">
         {canPublish ? (
-          <p className="text-success">
-            ✓ Publishing is enabled. AutoClip can upload clips to your channel.
+          <p className="flex items-start gap-2 text-success">
+            <Check className={`${ICON_SIZE.md} shrink-0`} aria-hidden="true" />
+            Publishing is enabled. AutoClip can upload clips to your channel.
           </p>
         ) : (
           <>

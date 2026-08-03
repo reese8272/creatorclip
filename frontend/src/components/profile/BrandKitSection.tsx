@@ -2,10 +2,30 @@ import { useEffect, useState } from 'react'
 import { api, ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
+import { Select, type SelectOption } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import type { BrandKit } from '@/types'
 
-const selectCls =
-  'rounded-md border border-default bg-surface px-2 py-1.5 text-sm text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft'
+// Same option sets the per-clip panel offers (components/review/CaptionStylePanel),
+// since a brand kit is just the default those controls start from. '' means
+// "unset" and is stored as null.
+const SUBTITLE_OPTIONS: SelectOption[] = [
+  { value: '', label: 'None — no captions' },
+  { value: 'bold_pop', label: 'Bold Pop — one word, scale-pops' },
+  { value: 'bold_pop_highlight', label: 'Bold Pop Highlight — keywords in yellow' },
+  { value: 'gradient_slide', label: 'Gradient Slide — indigo→white fade-in' },
+  { value: 'minimal', label: 'Minimal — plain phrase captions' },
+]
+const ASPECT_OPTIONS: SelectOption[] = [
+  { value: '', label: '9:16 — vertical Short (default)' },
+  { value: '1:1', label: '1:1 — square' },
+  { value: '16:9', label: '16:9 — horizontal' },
+]
+const BACKGROUND_OPTIONS: SelectOption[] = [
+  { value: '', label: 'Default (black)' },
+  { value: 'blur', label: 'Blur' },
+  { value: 'black', label: 'Black' },
+]
 
 const defaultKit: BrandKit = {
   subtitle: null,
@@ -106,73 +126,67 @@ export function BrandKitSection() {
               </div>
             </div>
           )}
-          <label className="flex items-center justify-between gap-3 text-sm text-fg">
-            Caption style
-            <select
+          <div className="flex items-center justify-between gap-3 text-sm text-fg">
+            <label htmlFor="kit-subtitle">Caption style</label>
+            <Select
+              id="kit-subtitle"
               value={kit.subtitle ?? ''}
-              onChange={(e) => setKit({ ...kit, subtitle: e.target.value || null })}
-              className={selectCls}
-            >
-              <option value="">None — no captions</option>
-              <option value="bold_pop">Bold Pop — one word, scale-pops</option>
-              <option value="bold_pop_highlight">Bold Pop Highlight — keywords in yellow</option>
-              <option value="gradient_slide">Gradient Slide — indigo→white fade-in</option>
-              <option value="minimal">Minimal — plain phrase captions</option>
-            </select>
-          </label>
+              onValueChange={(v) => setKit({ ...kit, subtitle: v || null })}
+              options={SUBTITLE_OPTIONS}
+              className="w-[58%]"
+            />
+          </div>
 
-          <label className="flex items-center justify-between gap-3 text-sm text-fg">
-            Aspect ratio
-            <select
+          <div className="flex items-center justify-between gap-3 text-sm text-fg">
+            <label htmlFor="kit-aspect">Aspect ratio</label>
+            <Select
+              id="kit-aspect"
               value={kit.aspect ?? ''}
-              onChange={(e) => setKit({ ...kit, aspect: e.target.value || null })}
-              className={selectCls}
-            >
-              <option value="">9:16 — vertical Short (default)</option>
-              <option value="1:1">1:1 — square</option>
-              <option value="16:9">16:9 — horizontal</option>
-            </select>
-          </label>
+              onValueChange={(v) => setKit({ ...kit, aspect: v || null })}
+              options={ASPECT_OPTIONS}
+              className="w-[58%]"
+            />
+          </div>
 
-          <label className="flex items-center justify-between gap-3 text-sm text-fg">
-            Background fill
-            <select
+          <div className="flex items-center justify-between gap-3 text-sm text-fg">
+            <label htmlFor="kit-background">Background fill</label>
+            <Select
+              id="kit-background"
               value={kit.background ?? ''}
-              onChange={(e) => setKit({ ...kit, background: e.target.value || null })}
-              className={selectCls}
-            >
-              <option value="">Default (black)</option>
-              <option value="blur">Blur</option>
-              <option value="black">Black</option>
-            </select>
-          </label>
+              onValueChange={(v) => setKit({ ...kit, background: v || null })}
+              options={BACKGROUND_OPTIONS}
+              className="w-[58%]"
+            />
+          </div>
 
-          <label className="flex items-center justify-between gap-3 text-sm text-fg">
-            Captions on
-            <input
-              type="checkbox"
+          {/* Label as a SIBLING with htmlFor — Radix renders a button, and a
+              wrapping label without htmlFor stops toggling on text click. */}
+          <div className="flex items-center justify-between gap-3 text-sm text-fg">
+            <label htmlFor="kit-captions">Captions on</label>
+            <Switch
+              id="kit-captions"
               checked={kit.captions_enabled}
-              onChange={(e) => setKit({ ...kit, captions_enabled: e.target.checked })}
+              onCheckedChange={(v) => setKit({ ...kit, captions_enabled: v })}
             />
-          </label>
+          </div>
 
-          <label className="flex items-center justify-between gap-3 text-sm text-fg">
-            Punch-in at peak
-            <input
-              type="checkbox"
+          <div className="flex items-center justify-between gap-3 text-sm text-fg">
+            <label htmlFor="kit-zoom">Punch-in at peak</label>
+            <Switch
+              id="kit-zoom"
               checked={kit.zoom_on_peak}
-              onChange={(e) => setKit({ ...kit, zoom_on_peak: e.target.checked })}
+              onCheckedChange={(v) => setKit({ ...kit, zoom_on_peak: v })}
             />
-          </label>
+          </div>
 
-          <label className="flex items-center justify-between gap-3 text-sm text-fg">
-            Reduce background noise
-            <input
-              type="checkbox"
+          <div className="flex items-center justify-between gap-3 text-sm text-fg">
+            <label htmlFor="kit-denoise">Reduce background noise</label>
+            <Switch
+              id="kit-denoise"
               checked={kit.denoise}
-              onChange={(e) => setKit({ ...kit, denoise: e.target.checked })}
+              onCheckedChange={(v) => setKit({ ...kit, denoise: v })}
             />
-          </label>
+          </div>
 
           <div className="flex items-center gap-3">
             <Button variant="primary" size="sm" onClick={save}>

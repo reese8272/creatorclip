@@ -199,7 +199,7 @@ describe('Insights — narrative rebuild (Issue 212)', () => {
     expect(analyzeBtns.length).toBeGreaterThan(0)
     await userEvent.click(analyzeBtns[0])
     expect(await screen.findByText(/Strong hook in the first 3 seconds/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '★ Save' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
   })
 
   // Issue 157: loading state instead of misleading empty/"build DNA" copy mid-fetch.

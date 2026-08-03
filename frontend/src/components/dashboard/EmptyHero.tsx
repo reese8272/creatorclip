@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { buttonVariants } from '@/components/ui/buttonVariants'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 const STEPS = [
   {
@@ -27,7 +29,7 @@ export function EmptyHero({ onUploadClick }: { onUploadClick: () => void }) {
   return (
     <section
       aria-label="Get started"
-      className="my-6 animate-slide-up rounded-xl border border-default bg-surface px-7 py-8 shadow-sm shadow-inset"
+      className="my-6 animate-slide-up rounded-xl border border-default bg-surface px-7 py-8 shadow-sm inset-shadow-highlight"
     >
       <h2 className="mb-2 text-h2 text-fg">Let's get your first clip.</h2>
       <p className="mb-5 max-w-[60ch] text-sm leading-relaxed text-muted">
@@ -49,7 +51,7 @@ export function EmptyHero({ onUploadClick }: { onUploadClick: () => void }) {
           "start here". Upload is the one primary; the other two are real but
           secondary paths, so they read as a muted row of text actions. */}
       <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={onUploadClick}>Upload a video →</Button>
+        <Button onClick={onUploadClick}>Upload a video <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /></Button>
         <span className="text-small text-subtle">or</span>
         <Link to="/profile" className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
           Get your API key

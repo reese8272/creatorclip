@@ -15,8 +15,15 @@ const badgeVariants = cva(
         danger:
           'bg-[color:var(--color-danger-soft)] text-danger border border-[color:var(--color-danger-border)]',
       },
+      // The base is uppercase with wide tracking — correct for a one-word status
+      // chip, wrong for a sentence-length label like a clipping principle. Adding
+      // the variant beats fighting the base with per-call-site className overrides.
+      casing: {
+        upper: '',
+        sentence: 'normal-case tracking-normal',
+      },
     },
-    defaultVariants: { variant: 'muted' },
+    defaultVariants: { variant: 'muted', casing: 'upper' },
   },
 )
 
@@ -24,6 +31,6 @@ export interface BadgeProps
   extends HTMLAttributes<HTMLSpanElement>,
     VariantProps<typeof badgeVariants> {}
 
-export function Badge({ className, variant, ...props }: BadgeProps) {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />
+export function Badge({ className, variant, casing, ...props }: BadgeProps) {
+  return <span className={cn(badgeVariants({ variant, casing }), className)} {...props} />
 }

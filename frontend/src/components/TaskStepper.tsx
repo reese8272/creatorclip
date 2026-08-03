@@ -1,4 +1,6 @@
 import type { TaskStatus } from '@/hooks/useTaskStream'
+import { Check } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Formats elapsed milliseconds as a human-readable string: "0s", "1m 23s", etc.
 function formatElapsed(ms: number): string {
@@ -42,11 +44,15 @@ export function TaskStepper({
             // While streaming, the last step is still in-progress.
             const completed = isDone || !isLast || isError
             return (
-              <li key={i} className="flex items-center gap-2">
+              // data-state carries the step's state for tests and styling: the
+              // check icon is aria-hidden, so it is not a queryable signal.
+              <li
+                key={i}
+                data-state={completed ? 'complete' : 'active'}
+                className="flex items-center gap-2"
+              >
                 {completed ? (
-                  <span className="text-success" aria-hidden="true">
-                    ✓
-                  </span>
+                  <Check className={`${ICON_SIZE.xs} text-success`} aria-hidden="true" />
                 ) : (
                   <span
                     className="inline-block h-3 w-3 animate-spin rounded-full border border-current border-t-transparent text-accent"

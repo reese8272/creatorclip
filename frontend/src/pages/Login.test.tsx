@@ -36,6 +36,23 @@ describe('Login — clickwrap + age gate (Issues 299 + 300)', () => {
     boxes.forEach((box) => expect(box).not.toBeChecked())
   })
 
+  // Issue 385: the checkboxes are now Radix (a <button>), so the label is a
+  // SIBLING with htmlFor rather than a wrapper. If that wiring is ever lost,
+  // clicking the consent SENTENCE stops toggling the box while clicking the box
+  // itself still works — which every other test in this file would miss, because
+  // they all click the control directly. This is the consent artifact, so the
+  // text must stay clickable.
+  it('toggles consent when the clickwrap SENTENCE is clicked, not just the box', async () => {
+    const user = userEvent.setup()
+    renderLogin()
+
+    await user.click(screen.getByText(/I agree to the/i))
+    expect(screen.getByRole('checkbox', { name: /i agree to the terms/i })).toBeChecked()
+
+    await user.click(screen.getByText(/I confirm I am 13 or older\./i))
+    expect(screen.getByRole('checkbox', { name: /i confirm i am 13/i })).toBeChecked()
+  })
+
   it('OAuth CTA is disabled on mount (neither box checked)', () => {
     renderLogin()
     expect(screen.getByRole('button', { name: /sign in with google/i })).toBeDisabled()

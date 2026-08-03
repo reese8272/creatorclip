@@ -70,7 +70,7 @@ export function IdentitySection({ niches, identity, conflict, onSaved }: Props) 
     try {
       const data = await api<{ version: number }>('/creators/me/identity', { method: 'POST', body: payload })
       setStatus({
-        text: `Saved (v${data.version}). Hit ↺ Rebuild DNA above to apply this to your next clip pass.`,
+        text: `Saved (v${data.version}). Hit Rebuild DNA above to apply this to your next clip pass.`,
         tone: 'success',
       })
       onSaved()

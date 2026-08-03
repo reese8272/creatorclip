@@ -44,6 +44,7 @@ function makeVideo(over: Partial<Video> = {}): Video {
     duration_s: 600,
     created_at: '2026-06-01T00:00:00Z',
     origin: 'upload',
+    has_poster: false,
     clippable: true,
     ...over,
   }
@@ -70,6 +71,16 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('VideoTable — StageStepper integration', () => {
+  // Issue 388: the secondary line was `{kind} · {youtube_video_id}` — a raw ID
+  // like dQw4w9WgXcQ, which is how you identify a row in a database, not how a
+  // creator identifies their own footage.
+  it('shows human metadata instead of the raw YouTube id', () => {
+    renderTable([makeVideo({ youtube_video_id: 'dQw4w9WgXcQ', duration_s: 754, kind: 'long' })])
+    expect(screen.queryByText(/dQw4w9WgXcQ/)).toBeNull()
+    expect(screen.getByText(/Long-form/)).toBeInTheDocument()
+    expect(screen.getByText(/12:34/)).toBeInTheDocument()
+  })
+
   it('shows the Badge (not the stepper) for a done video — no SSE connection opened', () => {
     renderTable([makeVideo({ ingest_status: 'done', clippable: true })])
     expect(FakeEventSource.instances).toHaveLength(0)
@@ -159,7 +170,7 @@ describe('VideoTable — StageStepper integration', () => {
     )
     renderTable([makeVideo({ ingest_status: 'pending', clippable: true })])
     await userEvent.click(screen.getByRole('button', { name: 'Queue for analysis' }))
-    const btn = await screen.findByRole('button', { name: 'Queued ✓' })
+    const btn = await screen.findByRole('button', { name: 'Queued' })
     expect(btn).toBeDisabled()
   })
 

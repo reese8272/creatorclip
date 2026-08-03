@@ -26,6 +26,8 @@ import { subscribeToTaskStream, type StreamSubscription } from '@/lib/taskStream
 import { sendActivity } from '@/lib/activity'
 import { api } from '@/lib/api'
 import type { NotificationItem, NotificationList } from '@/types'
+import { X } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 // ── Motion guard ──────────────────────────────────────────────────────────────
 
@@ -205,7 +207,7 @@ function NotificationRow({
         onClick={() => onDismiss(item.id)}
         className="shrink-0 text-xs text-muted hover:text-fg"
       >
-        ✕
+        <X className={ICON_SIZE.sm} aria-hidden="true" />
       </button>
     </div>
   )
@@ -253,7 +255,7 @@ export function ActivityPanel() {
         width: 'min(22rem, 90vw)',
       }}
       className={[
-        'flex flex-col gap-1.5 rounded-lg border border-border bg-surface shadow-lg p-3',
+        'flex flex-col gap-1.5 rounded-lg border border-default bg-surface shadow-lg p-3',
         reducedMotion ? '' : 'transition-all duration-200',
       ]
         .filter(Boolean)

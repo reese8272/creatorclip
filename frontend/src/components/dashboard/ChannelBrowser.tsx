@@ -3,6 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import type { CatalogListResponse, Video } from '@/types'
+import { ArrowLeft, ArrowRight, X } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
+import { Badge } from '@/components/ui/badge'
+import { videoMetaLine } from '@/lib/videoMeta'
 
 const PAGE_SIZE = 50
 
@@ -60,7 +64,7 @@ function CatalogRow({ video }: { video: Video }) {
     : adopt.isPending
       ? 'Adding…'
       : adopt.isSuccess
-        ? 'Added ✓'
+        ? 'Added'
         : adopt.isError
           ? 'Retry'
           : null
@@ -68,10 +72,10 @@ function CatalogRow({ video }: { video: Video }) {
   return (
     <tr className="border-b border-default hover:bg-elevated">
       <td className="px-4 py-3.5 align-middle">
-        <div className="max-w-[280px] truncate text-fg">{video.title || '—'}</div>
-        <div className="font-mono text-xs text-subtle">
-          {video.kind} · {video.youtube_video_id}
+        <div className="max-w-[280px] truncate text-fg" title={video.youtube_video_id ?? undefined}>
+          {video.title || <Badge variant="muted">Untitled</Badge>}
         </div>
+        <div className="text-small text-muted">{videoMetaLine(video)}</div>
       </td>
       <td className="px-4 py-3.5 align-middle text-right">
         <Button size="sm" disabled={busy} onClick={clip}>
@@ -112,7 +116,7 @@ export function ChannelBrowser({ open, onClose }: { open: boolean; onClose: () =
       onClick={onClose}
     >
       <div
-        className="mt-8 w-full max-w-3xl rounded-md border border-default bg-surface shadow-sm shadow-inset"
+        className="mt-8 w-full max-w-3xl rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-default px-5 py-4">
@@ -123,7 +127,7 @@ export function ChannelBrowser({ open, onClose }: { open: boolean; onClose: () =
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close">
-            ✕
+            <X className={ICON_SIZE.sm} aria-hidden="true" />
           </Button>
         </div>
 
@@ -172,7 +176,7 @@ export function ChannelBrowser({ open, onClose }: { open: boolean; onClose: () =
               disabled={!hasPrev}
               onClick={() => setOffset((o) => Math.max(0, o - limit))}
             >
-              ← Prev
+              <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Prev
             </Button>
             <Button
               variant="secondary"
@@ -180,7 +184,7 @@ export function ChannelBrowser({ open, onClose }: { open: boolean; onClose: () =
               disabled={!hasNext}
               onClick={() => setOffset((o) => o + limit)}
             >
-              Next →
+              Next <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
             </Button>
           </div>
         </div>
