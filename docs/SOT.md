@@ -26,7 +26,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Auth | Google OAuth 2.0 (YouTube scopes) + server-side session JWT | PyJWT; bcrypt where local creds needed |
 | Token encryption at rest | `cryptography` MultiFernet on token columns | Primary key from `TOKEN_ENCRYPTION_KEY`; optional previous key for zero-downtime rotation |
 | Preference model | LightGBM (or logistic regression) reranker | Recency-decayed sample weights; retrained per session |
-| Frontend | **React + TypeScript (Vite, Tailwind v4, shadcn-style)** — strangler-fig migration from the legacy vanilla UI is COMPLETE (legacy app pages retired, Issue 226). Data layer **TanStack Query v5**; routing **React Router v7 Data Mode**; tests **Vitest + React Testing Library** (unit/component) and **Playwright** (E2E/visual harness, `frontend/e2e/`, backend mocked — Issue 162). | Framework resolved 2026-06-17; foundation + design system 2026-06-18 (Issue 85a, DECISIONS.md). SPA served under `/app/*`; the legacy `static/` app pages have been RETIRED (Issue 226). Layouts = `AuthGate` (protects routes) + `AppChrome` (Nav/Footer shell); four route contexts (protected/public × chrome/bare). Ported: Dashboard (`/app/dashboard`, live status via gated TanStack refetch — Issue 85c), Onboarding (`/app/onboarding`, protected+bare 5-step flow w/ dual SSE consoles — Issue 85d), Insights + Analysis (`/app/insights`, `/app/analysis` — LLM-streaming via new `useTaskResult` hook — Issue 85e), Review/Editor (`/app/review` — player-first redesign + transcript editor — Issue 85f), Profile, Chat, Pricing (public-or-authed), Login, Walkthrough. **Cutover COMPLETE: `/` redirects to `/app/dashboard` (`main.py` `_SPA_BUILT` gate). The legacy vanilla app pages were retired (Issue 226) and backend `next_action` URLs repointed `/static/*.html` → `/app/*`. Only `tos`/`privacy`/`accessibility` HTML + shared/legacy CSS/JS remain under `/static`.** Build: `npm --prefix frontend run build` → `frontend/dist/`. Design system in `docs/UI.md` (warmer OKLCH dark-Linear palette in the SPA `@theme`); legacy pages keep `static/_design-tokens.css`. |
+| Frontend | **React + TypeScript (Vite, Tailwind v4, Radix primitives + lucide icons)** — strangler-fig migration from the legacy vanilla UI is COMPLETE (legacy app pages retired, Issue 226). Data layer **TanStack Query v5**; routing **React Router v7 Data Mode**; tests **Vitest + React Testing Library** (unit/component) and **Playwright** (E2E/visual harness, `frontend/e2e/`, backend mocked — Issue 162). | Framework resolved 2026-06-17; foundation + design system 2026-06-18 (Issue 85a, DECISIONS.md). SPA served under `/app/*`; the legacy `static/` app pages have been RETIRED (Issue 226). Layouts = `AuthGate` (protects routes) + `AppChrome` (Nav/Footer shell); four route contexts (protected/public × chrome/bare). Ported: Dashboard (`/app/dashboard`, live status via gated TanStack refetch — Issue 85c), Onboarding (`/app/onboarding`, protected+bare 5-step flow w/ dual SSE consoles — Issue 85d), Insights + Analysis (`/app/insights`, `/app/analysis` — LLM-streaming via new `useTaskResult` hook — Issue 85e), Review/Editor (`/app/review` — player-first redesign + transcript editor — Issue 85f), Profile, Chat, Pricing (public-or-authed), Login, Walkthrough. **Cutover COMPLETE: `/` redirects to `/app/dashboard` (`main.py` `_SPA_BUILT` gate). The legacy vanilla app pages were retired (Issue 226) and backend `next_action` URLs repointed `/static/*.html` → `/app/*`. Only `tos`/`privacy`/`accessibility` HTML + shared/legacy CSS/JS remain under `/static`.** Build: `npm --prefix frontend run build` → `frontend/dist/`. Design system in `docs/UI.md` (warmer OKLCH dark-Linear palette in the SPA `@theme`, plus the four-level elevation ladder + hierarchy rules added by Issue 400a); legacy pages keep `static/_design-tokens.css`. **Primitive layer (Lane L25 Batch A, 2026-08-03):** `components/ui/` holds Button, Badge, Card (`level="panel"|"primary"`), FitBadge, Modal, Disclosure, **Select / Switch / Checkbox / RadioGroup / Tabs / Tooltip on Radix**, a **VideoPlayer** that owns the transport (no native `<video controls>` anywhere), and `icon.tsx` — the single seam to `lucide-react`, an explicit tree-shaken allow-list. Four **source-scanning gates** in `src/test/` (`sourceScan.ts`) enforce these structurally: no glyph icons, no native form controls, no `<video controls>`, no undeclared colour token. |
 | Transactional email | Resend (Python SDK v2.32.2) | `NOTIFY_BACKEND=console` in dev/CI (logs only); `NOTIFY_BACKEND=resend` in production. Jinja2 paired `.txt`/`.html` templates in `notify/templates/`. Native idempotency-key API maps onto Celery at-least-once retry. SPF/2048-bit DKIM/DMARC DNS runbook in `docs/RUNBOOKS.md`. Issue 242. |
 | Containerization | Docker Compose (dev) | `app`, `worker`, `beat`, `postgres`, `redis`. Beta prod (`docker-compose.prod.yml`) adds `cloudflared` (tunnel, no host port) + `autoheal` (restart-on-unhealthy) + app/worker healthchecks |
 | Production deployment | Kubernetes — **chart written, GKE deploy unvalidated** | Architecture locked (DECISIONS): **GKE Autopilot + Cloud SQL PG16 + KEDA + External Secrets**; Helm chart at `deploy/charts/creatorclip/` (rolling-update + probes, KEDA-on-Redis-depth, PgBouncer sidecar). It has **never run on K8s** — "staging" is still Docker-Compose on the prod VM, so the scale/pool `[DEC]`s are unverified. **Issue 275** (GKE staging + first Helm deploy) is the linchpin; gaps tracked as Issues 275–280 (Lane L12). Docker Compose = dev/test only. See `docs/DEPLOYMENT.md` + `docs/issues.md`. |
@@ -277,7 +277,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │
 └── docs/
     ├── README.md              # ← START HERE: full documentation index (Issue 146)
-    ├── UI.md                   # Frontend design system (Issue 85; SPA tokens, type, motion, confidence badges)
+    ├── UI.md                   # Frontend design system (Issue 85; SPA tokens, type, motion, confidence badges, elevation ladder + hierarchy rules — Issue 400a)
     ├── PRD.md
     ├── SOT.md                  # (this file)
     ├── DECISIONS.md
@@ -324,6 +324,11 @@ videos
     the extracted audio WAV; source_uri STAYS the original video so the renderer
     can extract keyframes. Ingest no longer overwrites source_uri with audio /
     deletes the mp4; both are purged at 72h by purge_stale_source_media),
+  poster_uri (NULLABLE, migration 0050 — one 640px JPEG still at
+    posters/{creator_id}/{video_id}.jpg, extracted during ingest. DELIBERATELY
+    SURVIVES the 72h purge, unlike audio_uri: a lossy single frame reconstructs
+    nothing and functions as an index entry, where the WAV is a lossless
+    substitute for the whole audio track. See docs/COMPLIANCE.md + Issue 387),
   origin (catalog/link/upload),
   captions_available, ingest_status (pending/running/done/failed),
   failure_reason (NULLABLE, migration 0036 — creator-safe reason set when status=failed,
@@ -402,6 +407,9 @@ clips
   id, video_id (FK), creator_id (FK), setup_start_s, start_s, end_s, peak_s,
   score, dna_match, signals_jsonb, format (short/horizontal),
   render_uri, cleaned_render_uri, render_status, rank, created_at,
+  poster_uri (NULLABLE, migration 0050 — poster still for the RENDERED
+    deliverable at posters/{creator_id}/clip-{clip_id}.jpg: reframed,
+    captions burned in, correct aspect. Issue 387),
   applied_title, applied_description   -- creator-approved publish metadata
                                        -- (migration 0047; NULL = publish falls
                                        -- back to video.title / "#Shorts")
