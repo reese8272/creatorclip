@@ -4,6 +4,65 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-03 (L25 W2) — Batch B opens: Issue 389 DONE (the tool routes become an application)
+
+**Editor and Review stopped being scrolling documents.** They now render under a new `ToolChrome`
+route layout: `100dvh` at `lg`, no page scroll, no marketing footer, independently-scrolling panels,
+and the honesty statement docked in a persistent status bar. Below `lg` the shell disengages entirely
+and the page stacks and scrolls exactly as before.
+
+| Commit | What landed |
+|---|---|
+| `150ddfe` | `LegalLinks` extracted from `Footer` — one href list, two consumers |
+| `191537d` | `ToolChrome` + `ToolShell` + `ToolStatusBar`, built but unwired (zero visual change) |
+| `ae80961` | Route split; every Editor/Review branch wrapped; **ten** inline `DisclaimerBand` sites deleted; `<main>` → `<div>` in the two shared sub-components |
+| `d3975f3` | `ShortFormEditor` extracted — `Editor.tsx` 700 → 181 lines |
+| `ca90933` | Editor three-region workspace + full-width timeline dock |
+| `c59dc37` | Review three-region workspace; three stacked bands → one toolbar strip |
+| `6e3bcb4` | Long-form panels; source player height-bounded |
+| `0c43752` | Fireable `ResizeObserver` fake + `e2e/tool-shell.spec.ts` |
+
+**Gates.** Frontend **430 passed / 69 files** (409/64 at Batch A, **+21**), `tsc -b` clean, lint 0
+errors (1 pre-existing warning — two `exhaustive-deps` warnings disappeared with the extraction).
+Playwright **58 + 16 = 74 passed** across desktop + mobile; axe **10 routes** (long-form editor mode
+added). The three pixel baselines still pass, which is the evidence `index.css` was never touched.
+Backend untouched.
+
+**The load-bearing constraint, worth remembering.** `Editor.test.tsx` and `Review.test.tsx` render
+the pages **standalone**, with no layout element, and assert the disclaimer — and an acceptance
+criterion required them to stay green. That single fact is why the status bar lives in `ToolShell`
+(a component the page renders) and not in `ToolChrome` (the route layout). Hoisting it looks like a
+tidy-up and would break them; there is a `WHY` comment pinning it. All four affected page/component
+test files pass **unedited**.
+
+**Two plan assumptions were wrong, and measuring caught both.**
+1. Stacking the clip meta under the player was supposed to remove the dead region. It does — but it
+   also makes the player *smaller*, because in a height-constrained column at 9:16 every pixel spent
+   beside the media comes out of the player's height. Meta became one compact row; the engine's case
+   for the clip moved to the transcript column.
+2. **This project's root font-size is ~14.39px, not 16px.** The player-sizing constants were derived
+   at 16px/rem, came out ~10% short, and the viewer card silently overflowed its row with the meta
+   clipped below the fold. All three constants are now measured in Chromium at 1440×900.
+
+**Defects the shell exposed and this issue fixed:** the long-form source player was `aspect-video
+w-full` → 605px tall, pushing the master timeline to the viewport edge (top y=831 → 536); the Editor
+transcript was a latent axe `scrollable-region-focusable` failure (SERIOUS) that only passed because
+the fixture is two words long; and `fullPage: true` audit screenshots silently degraded to viewport
+captures under the shell (a second `-expanded` artifact now recovers the content — editor-long
+900 → 1060px).
+
+**Batch B order changed to 389 → 392 → 390 → 391** (user decision). #392 is the batch's only live
+honesty-constraint violation, is pure backend, and hands #390 the final waveform contract before #390
+designs its renderer. Four findings are logged in `docs/OFF_COURSE_BUGS.md` and assigned: the
+`mergeAdjacent` shallow-copy mutation (which already makes today's single-level undo wrong for merged
+cuts) and index-keyed cuts both go to **#390**; `restoreMocks` + the prototype-wide rect spy also
+**#390**; the keyboard shortcut bus **#390**; cut-state de-duplication **#391**.
+
+**Next:** Issue 392 — real audio peaks (`Video.peaks_uri`, JSON at ~10 peaks/s, following the Issue
+387 poster template beat-for-beat).
+
+---
+
 ## 2026-08-03 (L25 W1) — Batch A COMPLETE: Issues 384, 385, 386, 387, 388, 400 all DONE
 
 **The whole of Lane L25 Batch A — "visual credibility: stop reading as a prototype" — shipped in one

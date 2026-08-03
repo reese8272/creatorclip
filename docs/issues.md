@@ -5,9 +5,17 @@ queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `d
 (2026-08-03). This file is the live queue.
 
 **Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
-2026-08-03) — see `docs/PROJECT_STATE.md`. **Batch B (389–392) is next and is now unblocked:** it
-inherits the primitive layer, the `VideoPlayer` that #390's timeline attaches to, and the elevation
-rules #389's app shell composes against. Filed from the 2026-08-03 review of the
+2026-08-03). **Batch B is in progress: #389 is DONE** (the tool-route app shell) — see
+`docs/PROJECT_STATE.md`.
+
+> **Batch B order was changed at build time to 389 → 392 → 390 → 391** (user decision, 2026-08-03).
+> #392 is the batch's only live honesty-constraint violation, it is pure backend (zero overlap with
+> the frontend files the others rewrite), and it hands #390 the final waveform data contract *before*
+> #390 designs its zoom/LOD renderer — landing it last would force a second pass over code #390 had
+> just written. #389 also turned out to be a soft prerequisite for #390: "zoom-to-fit" and "playhead
+> stays in view" are not demonstrable in a scrolling document where the timeline itself scrolls away.
+
+Filed from the 2026-08-03 review of the
 editor and presentation layer against the 2026 field. Every issue below carries: what we're doing,
 the analysis behind it, in-repo evidence (file:line or a committed screenshot), and the external
 sources that set the bar. Research links are listed inline per issue and collected in
@@ -31,7 +39,7 @@ changes the gut reaction to the product.
 | Batch | Theme | Issues | Size |
 |-------|-------|--------|------|
 | **A** ✅ | Visual credibility — stop reading as a prototype | 384–388, **400** — **ALL DONE 2026-08-03** | days |
-| **B** | Make it an application, not a webpage | 389–392 | 1–2 weeks |
+| **B** | Make it an application, not a webpage | **389 DONE**, 392 → 390 → 391 | 1–2 weeks |
 | **C** | Close the capability gap | 393–397, **401** | multi-week |
 | **D** | Asset management | 398–399, **402** | ~1 week |
 | **E** | Breadth — scope-call cluster, do not start before D closes | **403–405** | multi-week |
@@ -404,7 +412,12 @@ professionalism and reliability
 # Batch B — Make it an application
 
 ### Issue 389: App-shell layout for Editor and Review
-- [ ] **Status:** open · **Batch:** B · **Size:** M · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** B · **Size:** M
+- **Scope extended at build time** (see `docs/DECISIONS.md` 2026-08-03): also extracted
+  `components/editor/ShortFormEditor.tsx` out of the 700-line `Editor.tsx` (all four Batch-B issues
+  rewrite that file, so the split makes them conflict in different files) and made the
+  `ResizeObserver` test stub fireable, without which #390's zoom-math acceptance criterion is
+  untestable. The keyboard shortcut bus went to #390 and the cut-state de-duplication to #391.
 
 **What we're doing.** Converting the tool routes from centered document pages to a full-height
 application shell: `100vh`, panel regions that scroll independently, no marketing footer, and the
@@ -443,12 +456,35 @@ simplified timeline with transcript editing inside a single sustained workspace
 [Descript Complete Guide 2026](https://aitoolsdevpro.com/ai-tools/descript-guide/)).
 
 **Acceptance**
-- [ ] Editor and Review render at `100vh` with no page scroll; panels scroll independently
-- [ ] Marketing footer removed from tool routes; legal links reachable from shell chrome
-- [ ] Disclaimer text **unchanged**, still present and visible on every tool route
-- [ ] Existing structural test asserting the disclaimer on tool routes stays green
-- [ ] Player sized proportionally to its importance; no dead regions at 1440px
-- [ ] Responsive down to tablet; mobile keeps a stacked layout (no horizontal page scroll)
+- [x] Editor and Review render at `100dvh` with no page scroll; panels scroll independently —
+      `ToolChrome` + `ToolShell`, engaged at `lg`. Measured: chrome height == viewport height,
+      `scrollBy(0,500)` leaves `scrollY === 0`, ≥2 `[data-tool-scroll]` regions per route
+      (`e2e/tool-shell.spec.ts`). `dvh` over `svh`/`vh` justified in DECISIONS.
+- [x] Marketing footer removed from tool routes; legal links reachable from shell chrome —
+      `LegalLinks` extracted from `Footer` and rendered in the docked status bar; tests assert
+      exactly ONE legal-link set (two would mean the footer came back, zero a lost Google-
+      verification requirement)
+- [x] Disclaimer text **unchanged**, still present and visible on every tool route — one
+      `HONESTY_STATEMENT` constant replacing ten byte-identical inline call sites; asserted as an
+      exact string (not a regex) so softened wording fails loudly, and `toBeInViewport()` on every
+      route in both projects
+- [x] Existing structural test asserting the disclaimer on tool routes stays green — `Editor.test.tsx`,
+      `Review.test.tsx`, `StyleReview.test.tsx` and `VideoPickerLanding.test.tsx` all pass
+      **unedited**. This is what forced the status bar into `ToolShell` rather than the route layout
+- [x] Player sized proportionally to its importance; no dead regions at 1440px — Editor player
+      **180px → 257px**, Review off a frozen `max-w-[320px]`, both height-derived in
+      `lib/toolLayout.ts`; card-width-minus-player-width < 40px asserted in e2e
+- [x] Responsive down to tablet; mobile keeps a stacked layout (no horizontal page scroll) —
+      shell disengages below `lg` (chrome and `main` both `overflow: visible`), panels keep
+      viewport-relative caps, no horizontal overflow; asserted on the Pixel 5 project
+
+**Also fixed** (defects the shell exposed, not in the original brief)
+- [x] The long-form source player was `aspect-video w-full` → 605px tall at the column width,
+      pushing the master timeline to the viewport edge and the clip lists off-screen (top y=831 → 536)
+- [x] The Editor transcript was a latent axe `scrollable-region-focusable` failure (SERIOUS) that
+      only passed because the fixture is two words long — logged in `docs/OFF_COURSE_BUGS.md`
+- [x] `fullPage: true` audit screenshots silently degraded to viewport captures under the shell;
+      a second `-expanded` artifact recovers the full content (editor-long: 900px → 1060px)
 
 ---
 

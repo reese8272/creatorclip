@@ -5,6 +5,74 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-03 — Issue 389: the tool routes get their own chrome, and why the disclaimer moved
+
+**What was decided.** `/editor` and `/review` render under a new `ToolChrome` route layout — a
+full-height, non-scrolling application shell — instead of `AppChrome`'s centred document with a
+marketing footer. Five sub-decisions, each recorded because each diverges from something that
+already existed.
+
+**1. A sibling route layout, not a `variant` prop on `AppChrome`.** The two chromes differ in
+element set (no `Footer`), height model (`h-dvh` vs `min-h-screen`), overflow (clipped vs visible)
+and bottom inset. Forking four things behind one boolean makes every `AppChrome` consumer's tree
+depend on a flag and hides "no footer on tool routes" inside a shared component instead of showing
+it in the route tree. `AppChrome` itself exists because `AppLayout` was split for this same reason
+(Issue 85b). *Evidence:* `frontend/src/components/AppChrome.tsx:15-24`, `App.tsx` route tree.
+
+**2. The honesty statement moved from a top band to a docked status bar — but stays inside the
+PAGE's component tree, not the route layout.** `CLAUDE.md` makes the wording a hard constraint, so
+this was the risk-bearing part of the issue. The text is byte-identical (all ten former inline
+`DisclaimerBand` call sites carried the same string, now a single `HONESTY_STATEMENT` constant), it
+is always visible without scrolling, and `e2e/tool-shell.spec.ts` asserts `toBeInViewport()` on
+every tool route in both projects. It is rendered by `ToolShell` rather than `ToolChrome` because
+`Editor.test.tsx` and `Review.test.tsx` render the pages **standalone**, with no layout element, and
+assert the disclaimer — an acceptance criterion of this issue required those tests to stay green.
+Hoisting the status bar into the route layout looks like a tidy-up and would break them; there is a
+`WHY` comment on `ToolShell` pinning this. *Evidence:* `frontend/src/pages/Editor.test.tsx:103-113`.
+
+**3. `dvh`, not `svh` or `100vh`.** MDN cautions that `dvh` resizes content mid-scroll as browser UI
+retracts, and industry guidance defaults to `svh` for stability
+([MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/length),
+[Tailwind](https://tailwindcss.com/docs/height)). That caution does not apply here: the shell does
+not document-scroll at `lg`, so the toolbar transition is unreachable from inside it. `svh` would
+permanently reserve the retractable-toolbar height and leave dead background under the status bar —
+the exact "dead region" the issue forbids — and `100vh` resolves to the *large* viewport on mobile
+Safari, which would push the honesty statement under the browser chrome.
+
+**4. No new dependency.** `react-resizable-panels` is the purpose-built choice for VS-Code-style
+splits ([npm-compare](https://npm-compare.com/react-grid-layout,react-resizable-panels,react-split-pane,react-splitter-layout),
+[LogRocket](https://blog.logrocket.com/essential-tools-implementing-react-panel-layouts/)), but this
+issue needs independently-*scrolling* regions, not user-*draggable* ones. Plain CSS grid, zero deps.
+Revisit when #390 or #394 actually wants a draggable split.
+
+**5. `index.css` was NOT touched.** The global `min-height: 100vh` on `html, body, #root` is a
+*minimum*; a descendant at `100dvh` satisfies it exactly. Changing it would move the footer on the
+nine other `min-h-screen` pages and put the `empty-dashboard` pixel baseline at risk — and baselines
+can only be regenerated on `ubuntu-latest`, costing a CI round-trip. The three visual-regression
+tests still pass, which is the evidence this held.
+
+**Divergences from the plan, found by measuring rather than reasoning.** Both are recorded because
+the plan asserted the opposite:
+
+- The plan said stacking the clip meta *under* the player would remove the dead region. It does
+  remove it, but it also makes the player **smaller**: in a height-constrained column at 9:16 every
+  pixel spent beside the media comes out of the player's height. The meta became one compact row and
+  the engine's case for the clip moved to the transcript column, where the evidence already lives.
+- **This project's root font-size is ~14.39px, not 16px.** The player-sizing constants in
+  `lib/toolLayout.ts` were first derived at 16px/rem, came out ~10% short, and the viewer card
+  silently overflowed its grid row with the meta clipped below the fold. All three constants are now
+  measured in Chromium at 1440×900 and the trap is documented at the constant and in `docs/UI.md`.
+
+**Deferred, deliberately.** The keyboard shortcut bus goes to **#390** (which adds the first
+competing bindings — `VideoPlayer` already owns space/←→/J/K/L via a document listener), and the
+cut-state de-duplication between `ShortFormEditor` and `review/TranscriptEditor` goes to **#391**
+(which deletes the duplicated state outright; extracting it earlier would pay for it twice and put
+the merge conflict inside the newly-extracted file).
+
+**Date:** 2026-08-03
+
+---
+
 ## 2026-08-03 — Issue 387: poster frames — three calls that read as inconsistent and are not
 
 **What was decided.** Videos and clips gain a `poster_uri` column (migration 0050), a poster still is
