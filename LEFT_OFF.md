@@ -1,132 +1,196 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-07-31 (W5 close-out — **the code-closeable backlog is empty**)
-**Branch at close:** `wave/l24-and-hygiene` — **pushed**, PR **#67** open against `main`
-**Working tree:** clean · **Worktrees:** none (all 8 removed) · **Stale branches:** 21 deleted
+**Last updated:** 2026-08-03 (Lane **L25 Batch A** shipped to production)
+**Branch:** `main` @ `40a53d3` — **working tree clean**, `0 0` vs `origin/main`
+**staging:** `0 0` vs `main` (a 314-commit drift was closed this session)
+**Prod DB head:** **`0050`** (was 0049 — `0050_poster_frames` applied by the deploy's staging gate)
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
 ---
 
-## WHERE THIS LANDED
+## CURRENT FOCUS
 
-**Every issue in `docs/issues.md` that code can close is now closed.** W5 finished the last two
-(#355, #380). What remains is external (Google review, operator clicks), DESCOPED-BETA (the K8s/scale
-lanes), or code-complete-pending-live-verification. There is no buildable work left in the tracker.
+**Start Lane L25 Batch B (Issues 389–392) — "make it an application, not a webpage."**
+Batch A is merged, deployed and verified live; Batch B is unblocked and there is nothing left to
+finish behind it.
 
-**16 issues closed across W0–W5.** W0–W4 were a previous session; W5 is #355 + #380.
+### → NEXT ACTION
 
-### → NEXT ACTIONS
+1. **Read the queue first.** `docs/issues.md` → `# Batch B` (389–392). Each brief carries
+   what/why/in-repo-evidence/industry-standard-with-links; the evidence line numbers were accurate as
+   of 2026-08-03 but **Batch A moved a lot of frontend code — re-grep before trusting any `file:line`
+   in a Batch B brief.**
+2. **Respect the hard sequencing chain.** `docs/PROJECT_STATE.md` records it:
+   **#386 → #390 → #391 → #393.** #386 is DONE, so **#390 (Timeline v2) is next and can start now** —
+   it attaches to the `VideoPlayer` primitive shipped this session.
+   **#389 (app shell) is independent** and is the cheapest visible win in the batch.
+3. **Branch off `main`, not `staging`.** `docs/BRANCHING.md` documents `feature/* → staging → main`,
+   but the last three lanes (PRs #67, #68, #69) went **lane-branch → `main`** directly, and `staging`
+   is only kept in sync afterwards. Follow the practice, not the doc, unless you intend to fix the doc.
+   Suggested: `git checkout -b wave/l25-batch-b`.
+4. **Run local gates on Node 22**, not the system default (see CONSTRAINTS):
+   `export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH`
+5. **Before any `clip_engine/` change**, the eval harness must stay green:
+   `.venv/bin/python -m pytest tests/test_clip_engine.py -q`
 
-1. **PR #67 → merge → prod.** Merging fires **Docker publish → Deploy to production**, which runs a
-   **staging-parity gate first** (Issue 298: migration + critical-journey smoke on the persistent
-   `ccstage` stack) before prod. **No migrations in this branch — prod DB head stays `0049`.**
-2. **Live smoke — two live surfaces change:**
-   - `GET /` serves `static/landing.html` to anonymous visitors; authenticated users still 302 to
-     `/app/dashboard`. Verify **both** paths (the branch point is a best-effort JWT cookie decode,
-     `main.py:211`).
-   - **CSP no longer allow-lists Google Fonts** — `style-src 'self' 'unsafe-inline'`, `font-src
-     'self'` (`main.py:330`). Confirm fonts render and the console shows no CSP violation.
-   - Spot-check: `POST /clips/{id}/clean/discard` · `GET /creators/me/insights/lift` ·
-     `GET /creators/me/insights/originality` · `POST /creators/me/fingerprint/share`.
-3. **Operator punch-list** (no code can close these — `docs/GO_LIVE.md` is canonical):
-   - **#29 Google OAuth verification** — unblocked since #376a shipped the homepage Google requires.
-   - **#26** add the friend's Gmail as an OAuth test user → then **#28** friend smoke.
-   - **#282** uptime monitor — still OPEN and beta-critical (a 31h silent outage on 2026-07-29 proved
-     the gap).
-   - **#255** off-box key escrow.
-   - **`MAILING_ADDRESS`** is unset and that is CORRECT — `config.py:752` makes `send_notification`
-     skip every lifecycle email while it is empty, because CAN-SPAM requires a real postal address on
-     commercial mail. **Do not "fix" this in code.** Whatever is set becomes public in every footer.
+**No blocker.** Nothing is half-finished; there is no in-flight failure to resume.
 
 ---
 
-## WHAT WORKS NOW (don't re-investigate)
+## WHAT WORKS NOW (verified this session — do not re-investigate)
 
 | Gate | Value |
 |---|---|
-| Backend pytest | **2480 passed, 64 skipped, 173 deselected** |
-| Frontend vitest | **354 passed** (55 files) — was 337 at W5 start |
-| ruff / ruff format / mypy | 0 / clean / 0 |
-| coverage | **83.51%** (baseline 83.00) |
-| module floors | clip_engine 92.54 · preference 90.45 · crypto/limiter/auth 100.0 |
-| bandit / pip-audit | 0 high, 0 medium / 0 |
-| tsc / eslint / vite build | clean / 0 errors / clean |
-| **Layer 0** | **ALL GREEN** |
-| **CI (PR #67)** | 12/12 after the baseline regen |
+| Backend pytest | **2516 passed**, 64 skipped, 173 deselected (2480 at W5) |
+| Frontend vitest | **409 passed / 64 files** (354/55 at W5) |
+| ruff · ruff format · mypy | 0 · clean · 0 |
+| coverage | **83.2%** (floor 83.00) |
+| module floors | **clip_engine 92.72** (floor 91.0, up from 92.51) · preference 90.45 · crypto/limiter/auth 100.0 |
+| bandit · pip-audit | 0/0 · 0 |
+| Playwright | **52 passed** desktop+mobile; **axe 20/20** (10 routes × 2 projects) |
+| CI on `b24aade` | **12/12 jobs**, incl. Visual regression + Integration tests |
+| Deploy | Docker publish ✓ → **Staging gate (data-bearing DB) ✓** → Deploy → autoclip.studio ✓ |
+| Live | `GET /health` **200** — postgres/redis/storage all `ok`; `/app/login` 200 |
 
-### Verified findings — do NOT re-derive
+### Batch A shipped (all six, zero unchecked acceptance boxes)
 
-**#380 is decided and closed: the free trial stays one-time 60 min / 7 days.** The comparison that
-motivated the issue was never like-for-like — **Opus's and Vizard's "60 min/month" free tiers are
-watermarked with 3-day storage** (`docs/COMPETITIVE_RESEARCH.md:63`), where our 60 trial minutes are
-full-fidelity and permanently stored. Matching the number unrestricted = 720 min/yr, **3.6× the whole
-Starter pack**, and a one-upload-a-month creator never converts. 2026 benchmarks: opt-in time-boxed
-trials convert **8.9–25.2%** vs freemium **2–8%**; the category moved to trials (57%) over freemium
-(26%) on AI-cost grounds. **COGS is NOT the argument** — a recurring grant costs ~$0.35–0.45 per
-creator per month, under $45/mo at the full 100-user cap. The issue brief's risk (2) overstated this;
-do not re-cite it. Runner-up **option (d), a watermarked recurring tier**, is deferred with an
-explicit re-open trigger (signups open past the 100-user cap, or conversion drop-off at Starter).
+**384** icon system · **385** six Radix primitives · **400a** token/elevation foundation ·
+**386** `VideoPlayer` · **388** de-debug surfaces · **400b** composition pass · **387** poster frames.
+Full detail in `docs/PROJECT_STATE.md` (top entry) and four `docs/DECISIONS.md` entries.
 
-**Three L24 claims were fabricated or wrong and are retracted (#383).** No YouTube "three-strike
-ladder" exists; the policy rename was **15 July 2025**, not 2026 (so all urgency framing is wrong);
-and the two OpusClip quotes **do not exist** — never publish them.
+### Proven this session — do NOT re-derive
 
-**The YouTube-native threat is real but narrower than the L24 filing implied.** Studio's Video Clips
-is **16:9 only and cannot generate Shorts**; AI suggestions are podcast-playlists/English/10
-countries; Shorts integration is announced, not shipped.
+- **#387's integration lane PASSED in CI.** The RLS-enforced cross-creator cases for the two poster
+  endpoints could not run locally (no Docker) but are green on the runner. Migration `0050` also ran
+  against the **persistent data-bearing staging DB** in the deploy gate, so the schema is proven on
+  real data, not just a fresh test schema.
+- **#385 builds SIX primitives, not the seven its brief specced.** Slider / DropdownMenu / Popover
+  have **zero call sites**; RadioGroup (not on the list, but with a live consumer) replaced them. The
+  acceptance criteria in `docs/issues.md` were amended. Their first real consumers are #390 / #394 /
+  #396 / #398 — **build them when you get there, not before.**
+- **Radix Select THROWS on `value=""`.** `components/ui/select.tsx` owns a `__none__` sentinel and
+  translates both ways, so call sites keep passing `''`. Do not "simplify" it away.
+- **`--shadow-inset` never composed with `--shadow-sm`** (same Tailwind namespace, both write
+  `--tw-shadow`). Now `--inset-shadow-highlight` in v4's inset namespace. Verified in the built CSS.
+- **Seven colour tokens were dead**, incl. `App.tsx`'s crash-recovery screen written entirely in
+  shadcn defaults the project never declared. All fixed; `src/test/design-tokens.contract.test.ts`
+  now makes it a test failure.
+- **axe's caption rule lands in `results.incomplete`, not `violations`,** for a `<track>`-less video —
+  measured, so a caption-less `VideoPlayer` does not trip the a11y gate.
 
-**Publishing pooled cross-creator metrics is ToS-prohibited (#378).** Developer Policies III.E.2 +
-III.E.4.h; **creator consent cannot cure it** — it is a Google-to-us term. Does not constrain #374
-(a creator seeing their own data, III.E.3.b).
+---
+
+## THE ARC THAT LED HERE
+
+1. **W0–W5 (previous sessions)** closed every buildable issue in the old tracker; the queue emptied.
+2. **2026-08-03, tracker reset.** The 7,096-line `docs/issues.md` had stopped working as a queue.
+   Archived verbatim to `docs/issues-archive-2026-08-03.md`; rebuilt around **Lane L25 — Editor &
+   Craft (384–405)** in five batches from a review of the editor/presentation layer against the 2026
+   field. Finding: the engine is beta-ready and differentiated; the surface is not.
+3. **This session built all of Batch A** (384–388 + 400) sequentially on `wave/l25-batch-a`.
+4. **A toolchain outage interrupted it** — Homebrew npm could not install anything. Diagnosed,
+   repaired, and logged (see CONSTRAINTS).
+5. **Merged as PR #69 → `main` (`40a53d3`)**, deployed to production, `staging` re-synced, lane branch
+   deleted local and remote.
+
+---
+
+## KEY COORDINATES & FACTS
+
+| Thing | Value |
+|---|---|
+| Repo | `github.com/reese8272/creatorclip` |
+| Production | `https://autoclip.studio` — VM + docker-compose + Cloudflare tunnel (**not** Render) |
+| Branches | `main`, `staging` only — both at `40a53d3` |
+| Last PR | **#69** — L25 Batch A (merged 2026-08-03) |
+| Deploy chain | push to `main` → `docker-publish.yml` → `deploy.yml` (staging gate → prod) |
+| Baseline regen | `gh workflow run ci.yml -f update_snapshots=true --ref <branch>` → `gh run download <id> -n visual-baselines-<sha>` |
+| Node for local gates | `/home/reese/.nvm/versions/node/v22.17.1/bin` (**`frontend/.nvmrc` = 22**) |
+| Python | `.venv/bin/python` (system `python3` lacks pydantic) |
+| Redis for unit lane | `redis-server --daemonize yes --save '' --appendonly no` |
+| Layer 0 | `.venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py` |
+| Alembic head | `0050_poster_frames` |
+| New R2 prefix | `posters/{creator_id}/…` — creator-scoped so `DELETE /auth/me` reaches it |
+| New Beat task | `backfill-video-posters-hourly` → `worker.tasks.backfill_video_posters` |
+| Secrets | `.env` on the VM; `TOKEN_ENCRYPTION_KEY` rotation in `docs/RUNBOOKS.md`. **Names only — never values.** |
 
 ---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Visual baselines MUST be regenerated on the CI runner**, never locally — WSL2 font anti-aliasing
-  differs from ubuntu-latest. Path: `gh workflow run ci.yml --ref <branch> -f update_snapshots=true`,
-  then `gh run download <id> -n visual-baselines-<sha>`. Copy only the PNGs that actually changed and
-  verify the rest are byte-identical (W5 did: only the 2 `empty-dashboard` files moved).
+- **Merging to `main` deploys to production.** No confirmation step beyond the staging gate.
+- **Use Node 22 locally.** `brew reinstall node` this session moved the system Node to **26.5.1**,
+  under which **jsdom stops exposing a global `localStorage`** and `Walkthrough.test.tsx` fails —
+  pre-existing, passes on 22, and 22 is what CI's three `node-version` jobs pin.
+- **Homebrew npm 11.5.2 on Node 24 could not install anything** — exited 1 with an *empty* error and
+  left a half-extracted `node_modules`. Fixed by `brew reinstall node`. **Never try
+  `npm install -g npm@…` as the repair; it destroys the brew npm.** Full diagnosis + every ruled-out
+  hypothesis: `~/.claude/ISSUES_LOG.md` **ISSUE-2026-08-03-01**. A silent npm exit-1 is a *toolchain*
+  signal — reproduce in a scratch dir before touching the project's lockfile.
+- **Visual baselines MUST come from `ubuntu-latest`**, never locally (WSL2 anti-aliasing).
+  **`--update-snapshots` only rewrites snapshots that FAIL** the `maxDiffPixelRatio: 0.01` comparison,
+  so an unchanged PNG in the artifact is expected, not a bug — verify by diffing artifacts, don't guess.
+- **CI runs `ruff format --check`, which the local Layer-0 script does not.** Run
+  `ruff format --check .` before pushing — it was this session's only CI lint failure.
+- **Integration tests cannot run on this box** (no Docker) — CI-verified only.
+- **The unit lane needs a live Redis** (the rate limiter has no in-memory fallback).
+- **Four structural gates now exist** in `frontend/src/test/` (`sourceScan.ts`): no glyph icons, no
+  native form controls, no `<video controls>`, no undeclared colour token. They read the **source
+  tree**, so a new emoji / `<select>` / `<video controls>` fails `npm test`, not just review.
+  They use `import.meta.glob(?raw)` + the TypeScript AST **deliberately** — `node:fs` fails `tsc -b`
+  (no `@types/node` in `tsconfig.app.json`) and a regex false-positives on ~2,600 box-drawing
+  characters in comment banners.
+- **`docs/UI.md` is the design SoT; `frontend/src/index.css` is the implementation SoT.** They were
+  reconciled this session — when they disagree, fix the mismatch, don't fork.
+- **The honesty constraint is load-bearing and structurally tested.** "Predicts fit, does not promise
+  virality" and the estimate-not-guarantee wording must stay verbatim on every tool surface.
 - **A failed visual-regression run uploads no diff artifact** — you cannot see what changed from the
-  run alone. Logged in `OFF_COURSE_BUGS.md`; workaround is the regen-and-compare above.
-- **The unit lane needs a live Redis** (the rate limiter has no in-memory fallback):
-  `redis-server --daemonize yes --save '' --appendonly no`.
-- **Integration tests cannot collect on this box** (a conftest guard aborts without Postgres) — they
-  are CI-verified only. They passed on PR #67.
-- **`ORIGINALITY_SIMILARITY_THRESHOLD=0.92` is UNVALIDATED** — no Voyage key/pgvector/clip corpus here,
-  so the real same-channel cosine distribution was never measured. A silent advisory currently means
-  "unmeasured", not "clean". Recipe in `docs/OFF_COURSE_BUGS.md`.
-- **Agent-reported test counts from worktrees are unreliable** — worktrees have no built
-  `frontend/dist`, so SPA-dependent tests skip. Every number above was measured in the main checkout.
-- **CI also runs `ruff format --check`**, which the local Layer-0 script does not.
-- **`docs/issues.md` #194/#195 have no `Status` line**, so automated status scans walk into a
-  neighbouring issue's block and miscount. Logged.
+  run alone. Workaround is the regen-and-compare above.
 
 ---
 
-## OPEN, LOGGED, NOT FIXED (from W5)
+## OPEN, LOGGED, NOT FIXED
 
-Three defects found outside #355's scope and deliberately left in `docs/OFF_COURSE_BUGS.md` rather
-than fixed inline:
+Canonical list is `docs/OFF_COURSE_BUGS.md`. The ones most likely to matter next:
 
-1. **Review-queue badge counts rendered clips, not shortlisted-unreviewed ones** — so it disagrees
-   with the queue post-#377. Needs a new field on `/videos/clips/counts` (a backend change #355 was
-   scoped to avoid). #355 fixed only the zero state.
-2. **`App.tsx`'s `*` route silently redirects typos to `/dashboard`** — no 404, no index route.
-3. **The visual-regression diff artifact never uploads** (above).
+1. **`/settings` has pre-existing serious contrast failures** (2.14–2.54:1) from the 2026-06-23 "Soon"
+   preview rows — decorative disabled mocks under `pointer-events-none opacity-50`, which halves
+   contrast while leaving fake controls in the accessibility tree. **This is why `settings` is the one
+   dense route still outside the axe gate.** Likely a one-attribute fix (`aria-hidden` on the mock).
+   Worth promoting to a real issue.
+2. **#387's ffmpeg poster chain is asserted against mocked `_run` only.** The staging gate proved the
+   *schema*, not frame extraction. It needs one pass over a genuinely awkward real file — a VFR screen
+   recording, an `.mkv` with a broken index, or a source shorter than the seek offset — which is
+   exactly what the seek-0 fallback exists for. **Do this during the next staging soak.**
+3. **`clips/` is not creator-scoped**, so `DELETE /auth/me`'s `clips/{creator_id}/` prefix purge
+   matches nothing — a live right-to-erasure gap. Flagged, not fixed (needs an object migration).
+   `posters/` deliberately does not replicate the pattern.
+4. **Review-queue badge counts rendered clips, not shortlisted-unreviewed ones** (needs a backend field).
+5. **`App.tsx`'s `*` route silently redirects typos to `/dashboard`** instead of 404ing.
+6. **`ORIGINALITY_SIMILARITY_THRESHOLD=0.92` is UNVALIDATED** — a silent advisory means "unmeasured",
+   not "clean".
+
+**Operator punch-list** (no code can close these — `docs/GO_LIVE.md` is canonical): **#29** Google
+OAuth verification · **#26/#28** friend beta · **#282** uptime monitor (still open, beta-critical) ·
+**#255** off-box key escrow · **`MAILING_ADDRESS` is deliberately unset** — `config.py` skips all
+lifecycle email while empty, because CAN-SPAM requires a real postal address. **Do not "fix" this in
+code**; whatever is set becomes public in every footer.
 
 ---
 
 ## POINTERS
 
 | Doc | Purpose |
-|-----|---------|
-| `docs/issues.md` | Work queue — **no buildable issues remain** |
-| `docs/GO_LIVE.md` | Canonical launch scorecard — **#29 unblocked by #376a** |
-| `docs/PROJECT_STATE.md` | Progress log — top entry is W5 |
-| `docs/DECISIONS.md` | Top entries: #380 free trial, #355's two structural calls |
-| `docs/COMPETITIVE_RESEARCH.md` | **Read the corrections section before citing anything** |
+|---|---|
+| `docs/issues.md` | Work queue — **Batch A ✅ done; Batch B (389–392) is next** |
+| `docs/PROJECT_STATE.md` | Progress log — top entry is the Batch A close-out |
+| `docs/DECISIONS.md` | Top four entries are this session (387, 400a, 385, 384) |
+| `docs/UI.md` | Design system — **new Elevation + Hierarchy sections** |
+| `docs/SOT.md` | Stack, schema, structure — primitive layer + `poster_uri` documented |
+| `docs/COMPLIANCE.md` | ToS/retention — **new poster-frame row + sharpened audio row** |
 | `docs/OFF_COURSE_BUGS.md` | Logged-not-fixed defects |
-| `docs/COMPLIANCE.md` · `docs/SOT.md` | ToS/retention · stack, schema, structure |
+| `docs/GO_LIVE.md` | Canonical launch scorecard |
+| `docs/BRANCHING.md` | Promotion model (**note the practice/doc divergence above**) |
+| `~/.claude/ISSUES_LOG.md` | Cross-project incident log — **ISSUE-2026-08-03-01** is the npm outage |
 | Memory dir | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` |

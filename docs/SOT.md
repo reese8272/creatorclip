@@ -74,6 +74,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ```
 /                               # project root
 ├── CLAUDE.md
+├── LEFT_OFF.md                 # Session handoff — entry point for a fresh context, NOT a source of truth; points to docs/
 ├── .env / .env.example
 ├── requirements.txt
 ├── requirements-dev.txt        # assessment/dev tooling: mypy, pytest-cov, bandit, pip-audit, mutmut, locust
