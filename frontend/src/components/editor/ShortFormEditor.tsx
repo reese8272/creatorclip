@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { fitTier } from '@/lib/fit'
+import { EDITOR_PLAYER_W } from '@/lib/toolLayout'
 import { Timeline } from '@/components/editor/Timeline'
 import { FitBadge } from '@/components/ui/fit-badge'
 import { Button } from '@/components/ui/button'
@@ -95,7 +96,15 @@ function activeWordIndex(words: TranscriptWord[], currentTime: number): number {
  * mp4. That is Issue 392's target — it fetches the whole artifact and builds a
  * full-length Float32Array on the main thread per clip switch.
  */
-export function ShortFormEditor({ clip, videoId }: { clip: ReviewClip; videoId: string }) {
+export function ShortFormEditor({
+  clip,
+  videoId,
+  className,
+}: {
+  clip: ReviewClip
+  videoId: string
+  className?: string
+}) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -292,84 +301,26 @@ export function ShortFormEditor({ clip, videoId }: { clip: ReviewClip; videoId: 
   const mediaSrc = `/clips/${clip.id}/download?disposition=inline`
 
   return (
-    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[1fr_320px]">
-      {/* ── Left: player + timeline + transcript ── */}
-      <div className="flex flex-col gap-4">
-        {/* The viewer — player + timeline as ONE primary panel (L2). They are a
-            single instrument; as two bare divs under uppercase micro-labels
-            neither could dominate, which is the composition half of "blocky". */}
-        <Card level="primary" className="flex flex-col gap-4 p-4">
-          <div className="flex items-start gap-4">
-            {clip.render_uri ? (
-              <VideoPlayer
-                ref={playerRef}
-                // Keyed on the artifact, not just the clip: a confirmed clean
-                // swap changes render_uri but not the download src, so without
-                // a key change the element would keep playing the old media.
-                mediaKey={clip.render_uri ?? undefined}
-                src={mediaSrc}
-                label="Clip preview"
-                // compact: at 180px wide a full transport bar is unusable, and
-                // scrubbing here belongs to the Timeline below, not the player.
-                density="compact"
-                transport
-                onTimeChange={setCurrentTime}
-                className="w-[180px] shrink-0 shadow-accent-glow"
-              />
-            ) : (
-              <div className="flex aspect-[9/16] w-[180px] shrink-0 items-center justify-center rounded-xl border border-default bg-black text-xs text-subtle">
-                Not yet rendered
-              </div>
-            )}
-
-            {/* Clip meta + fit badge */}
-            <div className="flex flex-col gap-3 pt-2">
-              <div className="text-center font-mono text-mono text-muted">
-                Clip #{clip.rank ?? '—'} ·{' '}
-                {(clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1)}s
-              </div>
-              <FitBadge tier={fitTier(clip.score)} />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => navigate(`/review?video_id=${videoId}`)}
-              >
-                <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back to
-                Review
-              </Button>
-            </div>
-          </div>
-
-          {/* Chip guidance callout (short-form) */}
+    <div className={cn('flex flex-col gap-3', className)}>
+      {/* Three regions at lg: evidence (transcript) · the media · actions.
+          grid-rows-[minmax(0,1fr)] is the grid analogue of min-h-0 — without it
+          an `auto` track grows to its content and overflows the clipped shell. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(280px,1.4fr)_auto_minmax(272px,340px)] lg:grid-rows-[minmax(0,1fr)]">
+        {/* ── A · Transcript — the evidence panel ── */}
+        <section
+          aria-label="Clip transcript"
+          className="flex min-h-0 flex-col gap-2 lg:overflow-hidden"
+        >
+          {/* The engine's case for this clip sits with the evidence, not on the
+              player. In a height-constrained column every pixel spent beside the
+              media comes straight out of the player's height. */}
           {clip.reasoning && (
-            <div className="flex items-start gap-3 rounded-md border border-default bg-surface px-4 py-3 inset-shadow-highlight">
-              <Chip pose="think" size={30} className="mt-0.5 flex-shrink-0" />
-              <p className="text-small leading-relaxed text-muted">{clip.reasoning}</p>
-            </div>
+            <p className="flex shrink-0 items-start gap-2 rounded-md border border-default bg-surface px-3 py-2 text-small leading-relaxed text-muted inset-shadow-highlight">
+              <Chip pose="think" size={26} className="mt-0.5 flex-shrink-0" />
+              <span>{clip.reasoning}</span>
+            </p>
           )}
-
-          {/* Timeline */}
-          <div>
-            <h2 className="mb-2 text-label font-medium uppercase tracking-[0.06em] text-muted">
-              Timeline
-            </h2>
-            <Timeline
-              duration={clipDuration}
-              currentTime={currentTime}
-              cuts={cuts}
-              onSeek={handleSeek}
-              onSelection={({ start_s, end_s }) => addTimeCut(start_s, end_s)}
-              waveformData={waveformData}
-            />
-            {/* Content the creator must actually read: on the semantic scale and
-                on text-muted, not 10px text-subtle. */}
-            <p className="mt-1 text-small text-muted">Click to seek · Drag to mark a cut region</p>
-          </div>
-        </Card>
-
-        {/* Transcript synced to playhead */}
-        <div>
-          <h2 className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.06em] text-muted">
+          <h2 className="flex shrink-0 items-center gap-2 text-xs font-medium uppercase tracking-[0.06em] text-muted">
             <Chip pose="papers" size={22} />
             Transcript
           </h2>
@@ -384,14 +335,21 @@ export function ShortFormEditor({ clip, videoId }: { clip: ReviewClip; videoId: 
           )}
           {words.length > 0 && (
             <div
+              data-tool-scroll
               role="textbox"
               aria-multiline="true"
               aria-readonly="true"
               aria-label="Clip transcript — drag to select words for removal"
+              // tabIndex is required, not decorative: this scroll region holds only
+              // plain spans, so without it axe's scrollable-region-focusable fails
+              // at SERIOUS impact (WCAG 2.1.1) and both tool routes are gated on it.
+              // Before 389 the region was capped at 200px and only passed because
+              // the test fixture was two words long.
+              tabIndex={0}
               onMouseUp={onTranscriptMouseUp}
               // bg-bg inside a panel is an L0 WELL — a scroll region reads as recessed on
               // dark by dropping a rung, not by adding a shadow.
-              className="max-h-[200px] select-text overflow-y-auto rounded-md border border-default bg-bg px-3 py-2 text-body leading-[1.9]"
+              className="min-h-0 flex-1 select-text overflow-y-auto rounded-md border border-default bg-bg px-3 py-2 text-body leading-[1.9] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               {words.map((w, i) => (
                 <Fragment key={i}>
@@ -410,47 +368,126 @@ export function ShortFormEditor({ clip, videoId }: { clip: ReviewClip; videoId: 
               ))}
             </div>
           )}
+        </section>
 
-          {/* Cut queue */}
-          <div className="mt-2 text-small text-muted">
-            {cuts.length} cut(s) · {removedS.toFixed(2)}s removed ({pct.toFixed(0)}%)
-          </div>
-          {pct >= WARNING_REMOVED_PCT && (
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-danger">
-              <TriangleAlert className={`${ICON_SIZE.xs} shrink-0`} aria-hidden="true" />
-              This removes {pct.toFixed(0)}% of your clip.
+        {/* ── B · Viewer — the single primary panel (L2), on an `auto` track ──
+            The dead region is gone because the track is `auto` and the card is
+            `w-fit`: the card is exactly as wide as the player, so there is no
+            enclosed empty space to frame. Everything that is not the media went
+            elsewhere — the case for the clip to column A, the transport to the
+            dock — because in a height-constrained column, pixels spent next to
+            the player come out of the player. */}
+        <section aria-label="Clip preview" className="flex min-h-0 justify-center lg:overflow-y-auto">
+          <Card level="primary" className="flex h-fit w-fit flex-col gap-2 p-3">
+            {clip.render_uri ? (
+              <VideoPlayer
+                ref={playerRef}
+                // Keyed on the artifact, not just the clip: a confirmed clean
+                // swap changes render_uri but not the download src, so without
+                // a key change the element would keep playing the old media.
+                mediaKey={clip.render_uri ?? undefined}
+                src={mediaSrc}
+                label="Clip preview"
+                // compact: scrubbing belongs to the Timeline dock below, not to a
+                // full transport bar competing with it.
+                density="compact"
+                transport
+                onTimeChange={setCurrentTime}
+                className={cn(EDITOR_PLAYER_W, 'shadow-accent-glow')}
+              />
+            ) : (
+              <div
+                className={cn(
+                  EDITOR_PLAYER_W,
+                  'flex aspect-[9/16] items-center justify-center rounded-xl border border-default bg-black text-xs text-subtle',
+                )}
+              >
+                Not yet rendered
+              </div>
+            )}
+
+            {/* One compact row, not a stack: a ~110px meta column under the
+                player would cost the player ~110px of height, and height is what
+                sets its width at 9:16. */}
+            <div
+              className={cn(
+                EDITOR_PLAYER_W,
+                'flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1',
+              )}
+            >
+              <span className="font-mono text-mono text-muted">
+                Clip #{clip.rank ?? '—'} ·{' '}
+                {(clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1)}s
+              </span>
+              <FitBadge tier={fitTier(clip.score)} />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate(`/review?video_id=${videoId}`)}
+              >
+                <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back to
+                Review
+              </Button>
             </div>
-          )}
 
-          {cuts.length > 0 && (
-            <div className="mt-2 max-h-[120px] overflow-y-auto rounded-sm border border-default bg-bg p-2 text-xs">
-              {cuts.map((c, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between border-b border-default py-1 last:border-b-0"
-                >
-                  <span className="text-subtle line-through">
-                    {words
-                      .slice(c.indices[0], c.indices[1] + 1)
-                      .map((w) => w.word)
-                      .join(' ')
-                      .slice(0, 60)}{' '}
-                    <span className="font-mono">· {(c.end_s - c.start_s).toFixed(2)}s</span>
-                  </span>
-                  <button
-                    onClick={() => removeCut(idx)}
-                    aria-label="Remove cut"
-                    className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
-                  >
-                    <X className={ICON_SIZE.sm} aria-hidden="true" />
-                  </button>
+            {/* cleanedUri is the readiness signal only; playback goes through
+                the authed download endpoint (the raw URI is s3:// in prod R2). */}
+            {cleanedUri && (
+              <div className={cn(EDITOR_PLAYER_W, 'flex flex-col gap-2')}>
+                <VideoPlayer
+                  src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
+                  label="Edited clip preview"
+                  density="compact"
+                  className="w-full"
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={confirmFinal}>
+                    Use edited version
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={discardFinal}>
+                    Keep original
+                  </Button>
                 </div>
-              ))}
-            </div>
-          )}
+              </div>
+            )}
 
-          {/* Cut actions */}
-          <div className="mt-2 flex flex-wrap gap-2">
+            {status && <div className={cn(EDITOR_PLAYER_W, 'text-xs text-subtle')}>{status}</div>}
+          </Card>
+        </section>
+
+        {/* ── C · Render options — the actions panel ── */}
+        <section
+          data-tool-scroll
+          aria-label="Render options"
+          className="flex min-h-0 flex-col gap-4 lg:overflow-y-auto"
+        >
+          <h2 className="text-xs font-medium uppercase tracking-[0.06em] text-muted">
+            Render options
+          </h2>
+          <CollapsibleTool title="Caption style" defaultOpen>
+            <CaptionStylePanel clip={clip} />
+          </CollapsibleTool>
+          <CollapsibleTool title="Clean filler + silence">
+            <CleanPassPanel clip={clip} />
+          </CollapsibleTool>
+        </section>
+      </div>
+
+      {/* ── Timeline dock — full width, pinned below the regions ──
+          Full-bleed rather than trapped in a 1fr column: at 1440px this is a
+          ~1100px timeline instead of ~630px, which is also the width Issue 390's
+          zoom-to-fit and playhead-in-view arithmetic measures against. */}
+      <div className="grid shrink-0 grid-cols-1 gap-4 border-t border-default pt-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="min-w-0">
+          <Timeline
+            duration={clipDuration}
+            currentTime={currentTime}
+            cuts={cuts}
+            onSeek={handleSeek}
+            onSelection={({ start_s, end_s }) => addTimeCut(start_s, end_s)}
+            waveformData={waveformData}
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button
               variant="secondary"
               size="sm"
@@ -478,44 +515,54 @@ export function ShortFormEditor({ clip, videoId }: { clip: ReviewClip; videoId: 
             <Button size="sm" onClick={apply} disabled={applying}>
               {applying ? 'Applying…' : 'Apply cuts'}
             </Button>
+            {/* Content the creator must actually read: on the semantic scale and
+                on text-muted, not 10px text-subtle. */}
+            <span className="text-small text-muted">Click to seek · Drag to mark a cut region</span>
           </div>
+        </div>
 
-          {/* cleanedUri is the readiness signal only; playback goes through
-              the authed download endpoint (the raw URI is s3:// in prod R2). */}
-          {cleanedUri && (
-            <div className="mt-3">
-              <VideoPlayer
-                src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
-                label="Edited clip preview"
-                density="compact"
-                className="w-full"
-              />
-              <div className="mt-2 flex gap-2">
-                <Button size="sm" onClick={confirmFinal}>
-                  Use edited version
-                </Button>
-                <Button variant="secondary" size="sm" onClick={discardFinal}>
-                  Keep original
-                </Button>
-              </div>
+        <div className="flex min-h-0 flex-col gap-1">
+          <div className="shrink-0 text-small text-muted">
+            {cuts.length} cut(s) · {removedS.toFixed(2)}s removed ({pct.toFixed(0)}%)
+          </div>
+          {pct >= WARNING_REMOVED_PCT && (
+            <div className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-danger">
+              <TriangleAlert className={`${ICON_SIZE.xs} shrink-0`} aria-hidden="true" />
+              This removes {pct.toFixed(0)}% of your clip.
             </div>
           )}
-
-          {status && <div className="mt-2 text-xs text-subtle">{status}</div>}
+          {cuts.length > 0 && (
+            /* No tabIndex needed — the Remove-cut buttons already make this
+               scroll region keyboard-reachable (scrollable-region-focusable). */
+            <div
+              data-tool-scroll
+              className="min-h-0 flex-1 overflow-y-auto rounded-sm border border-default bg-bg p-2 text-xs"
+            >
+              {cuts.map((c, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between border-b border-default py-1 last:border-b-0"
+                >
+                  <span className="text-subtle line-through">
+                    {words
+                      .slice(c.indices[0], c.indices[1] + 1)
+                      .map((w) => w.word)
+                      .join(' ')
+                      .slice(0, 60)}{' '}
+                    <span className="font-mono">· {(c.end_s - c.start_s).toFixed(2)}s</span>
+                  </span>
+                  <button
+                    onClick={() => removeCut(idx)}
+                    aria-label="Remove cut"
+                    className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
+                  >
+                    <X className={ICON_SIZE.sm} aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      </div>
-
-      {/* ── Right rail: caption + clean tools (relocated from Review) ── */}
-      <div className="flex flex-col gap-4">
-        <h2 className="text-xs font-medium uppercase tracking-[0.06em] text-muted">
-          Render options
-        </h2>
-        <CollapsibleTool title="Caption style" defaultOpen>
-          <CaptionStylePanel clip={clip} />
-        </CollapsibleTool>
-        <CollapsibleTool title="Clean filler + silence">
-          <CleanPassPanel clip={clip} />
-        </CollapsibleTool>
       </div>
     </div>
   )

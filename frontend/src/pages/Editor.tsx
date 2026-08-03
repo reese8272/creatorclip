@@ -120,13 +120,19 @@ export function Editor() {
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <ToolShell>
-      <div className="mx-auto w-full max-w-6xl px-4 py-6">
+    // scroll={false}: <main> clips and the workspace regions own their own
+    // scrolling, so the timeline can never leave the viewport while you edit
+    // against it (Issue 389). <main> is itself the flex column, which gives the
+    // workspace a definite height to divide up.
+    <ToolShell scroll={false} className="flex flex-col gap-3 px-4 py-3 lg:px-6">
+      <>
         {/* Header + mode toggle (Issue 307) */}
-        <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+        <div className="flex shrink-0 flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="font-display text-h1 text-fg">Editor</h1>
-            <p className="mt-1 text-small text-muted">
+            {/* text-h2, and the sub-line only at xl: the header is chrome above
+                the work, so it gives up ~30px of vertical budget to the panels. */}
+            <h1 className="font-display text-h2 text-fg">Editor</h1>
+            <p className="mt-1 hidden text-small text-muted xl:block">
               Refine a single clip, or work the full source timeline.
             </p>
           </div>
@@ -156,13 +162,14 @@ export function Editor() {
 
         {editorMode === 'long' ? (
           <LongFormEditor
+            className="min-h-0 flex-1"
             clips={clips}
             videoId={videoId}
             video={videoRow}
             onOpenClip={openClipInShortEditor}
           />
         ) : !clip ? (
-          <div className="flex flex-col items-center gap-3 py-16 text-center">
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-center">
             <Chip pose="confused" size={64} />
             <p className="max-w-md text-body text-muted">
               No clip selected. Switch to <strong className="text-fg">Long-form source</strong> to
@@ -173,9 +180,9 @@ export function Editor() {
             </Button>
           </div>
         ) : (
-          <ShortFormEditor clip={clip} videoId={videoId} />
+          <ShortFormEditor className="min-h-0 flex-1" clip={clip} videoId={videoId} />
         )}
-      </div>
+      </>
     </ToolShell>
   )
 }

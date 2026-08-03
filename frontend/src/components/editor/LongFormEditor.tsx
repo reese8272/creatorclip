@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { fitTier } from '@/lib/fit'
 import { fmtClock, parseClock } from '@/lib/timecode'
 import type { FitTier } from '@/components/ui/fit-badge'
@@ -260,6 +261,7 @@ export function LongFormEditor({
   videoId,
   video,
   onOpenClip,
+  className,
 }: {
   clips: ReviewClip[]
   videoId: string
@@ -267,6 +269,8 @@ export function LongFormEditor({
    *  clippable (source presence) for proactive retention honesty. */
   video?: Video
   onOpenClip: (clipId: string) => void
+  /** Sizing from the tool shell (Issue 389) — the parent owns the height. */
+  className?: string
 }) {
   // Issue 373: engine candidates keep the ranked "Suggested" list; creator-made
   // selections get their own honest group (never a fake fit tier).
@@ -315,7 +319,15 @@ export function LongFormEditor({
     clips.reduce((max, c) => Math.max(max, c.end_s), 0)
 
   return (
-    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+    <div
+      className={cn(
+        'grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]',
+        // Scrolls as one region inside the clipped shell; the per-panel split is
+        // the next commit.
+        'lg:overflow-y-auto',
+        className,
+      )}
+    >
       <div className="flex flex-col gap-4">
         {sourceAvailable ? (
           <VideoPlayer

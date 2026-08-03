@@ -12,18 +12,23 @@
 // tall display. Note the underscores — an arbitrary value cannot contain literal
 // spaces, so calc() operands are joined with `_`.
 
-/** Editor viewer: full height minus nav, header strip, timeline dock and status bar. */
-export const EDITOR_PLAYER_W = 'w-[min(26rem,calc((100dvh_-_24rem)*0.5625))]'
-
-/** Review player: full height minus nav, toolbar strip and status bar (no dock). */
-export const REVIEW_PLAYER_W = 'w-[min(26rem,calc((100dvh_-_20rem)*0.5625))]'
+// Because 0.5625 × 16/9 == 1 exactly, `(100dvh - X) * 0.5625` produces a 9:16
+// player whose HEIGHT is exactly `100dvh - X`. So X is not a fudge factor: it is
+// the total non-player vertical chrome, and both values below were MEASURED in
+// Chromium at 1440×900, not estimated.
+//
+// ⚠ This project's root font-size is ~14.39px, NOT 16px (index.css sets a fluid
+// base). Do not convert these rem figures at 16px/rem — an X derived that way
+// comes out ~10% short and the viewer card silently overflows its grid row,
+// clipping the meta row below the fold.
 
 /**
- * Height of the Editor's docked timeline rail.
- *
- * Budget: ruler ~20px + wave/cut lane ~96px + action row ~28px + padding. Issue
- * 390 rebuilds the timeline into this box, so it must stay a definite height —
- * an `auto` anywhere in the chain makes the rail measure 0 and divides by zero
- * in the zoom math. It is also the value ToolChrome feeds to --app-bottom-inset.
+ * Editor viewer width. X = 30.5rem ≈ 439px covers nav + header strip + timeline
+ * dock + status bar + main/card padding + the compact meta row. Measured at
+ * 1440×900: the viewer row is 584px and the card adds 117px around the video,
+ * so the player gets 467px of height — 257px wide, up from a frozen 180px.
  */
-export const TIMELINE_RAIL_H = 176
+export const EDITOR_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_30.5rem)*0.5625))]'
+
+/** Review player width. No timeline dock, so less chrome to subtract. */
+export const REVIEW_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_22rem)*0.5625))]'
