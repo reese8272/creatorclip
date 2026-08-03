@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import type { ClipTranscript, EditorCut, ReviewClip, TranscriptWord } from '@/types'
 import { TriangleAlert, X } from '@/components/ui/icon'
 import { ICON_SIZE } from '@/components/ui/iconSizes'
+import { VideoPlayer } from '@/components/ui/video-player'
 
 const WARNING_REMOVED_PCT = 40
 const ADJACENT_MERGE_S = 0.05
@@ -247,10 +248,11 @@ export function TranscriptEditor({ clip }: { clip: ReviewClip }) {
           authed download endpoint (the raw URI is s3:// in prod R2). */}
       {cleanedUri && (
         <div className="mt-3">
-          <video
+          <VideoPlayer
             src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
-            controls
-            className="w-full rounded-sm border border-default"
+            label="Edited clip preview"
+            density="compact"
+            className="w-full"
           />
           <div className="mt-2 flex gap-2">
             <Button size="sm" onClick={confirmFinal}>

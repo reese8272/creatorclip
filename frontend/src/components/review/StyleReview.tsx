@@ -11,6 +11,7 @@ import type {
 } from '@/types'
 import { ThumbsDown, ThumbsUp } from '@/components/ui/icon'
 import { ICON_SIZE } from '@/components/ui/iconSizes'
+import { VideoPlayer } from '@/components/ui/video-player'
 
 // Video-level style tag taxonomy (Issue 370) — grounded in the clip-level
 // APPROVE/DENY tags (YourCall) and extended with tone/structure/visuals.
@@ -100,13 +101,12 @@ export function StyleReview({ videoId }: { videoId: string }) {
               style take from memory.</span>
           </div>
         ) : (
-          <video
+          <VideoPlayer
             src={`/videos/${videoId}/stream`}
-            controls
-            playsInline
-            preload="metadata"
+            label="Video being style-reviewed"
+            aspect="landscape"
             onError={() => setStreamError(true)}
-            className="aspect-video w-full rounded-xl border border-default bg-black"
+            className="w-full"
           />
         )}
         <p className="text-small text-muted">

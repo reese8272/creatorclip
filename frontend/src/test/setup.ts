@@ -47,6 +47,22 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 }
 
+// jsdom does not implement HTMLMediaElement playback: play/pause/load throw
+// "Not implemented", and currentTime/duration are not usefully settable. The
+// VideoPlayer primitive (Issue 386) drives all of them, so stub the surface.
+// requestVideoFrameCallback is deliberately left undefined — that keeps the
+// fps-measurement path (a browser-only refinement) out of unit tests.
+Object.defineProperties(HTMLMediaElement.prototype, {
+  play: { writable: true, value: () => Promise.resolve() },
+  pause: { writable: true, value: () => {} },
+  load: { writable: true, value: () => {} },
+  currentTime: { writable: true, value: 0 },
+  duration: { writable: true, value: 0 },
+  paused: { writable: true, value: true },
+  playbackRate: { writable: true, value: 1 },
+  muted: { writable: true, value: false },
+})
+
 afterEach(() => {
   cleanup()
 })

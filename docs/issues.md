@@ -160,7 +160,7 @@ ListBox WAI-ARIA pattern ([Radix Select](https://www.radix-ui.com/primitives/doc
 ---
 
 ### Issue 386: `VideoPlayer` primitive — replace all native `<video controls>`
-- [ ] **Status:** open · **Batch:** A · **Size:** M · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** A · **Size:** M
 
 **What we're doing.** One custom player component with a real transport, used everywhere. Removing
 the `controls` attribute from all 11 call sites.
@@ -192,11 +192,19 @@ cross-NLE convention for the viewer transport, with I/O for in/out points
 [DaVinci Resolve Keyboard Shortcuts 2026](https://pixflow.net/blog/davinci-resolve-keyboard-shortcuts/)).
 
 **Acceptance**
-- [ ] One `VideoPlayer` primitive: transport, scrub bar, time display, volume, speed, fullscreen
-- [ ] Keyboard: space (play/pause), ←/→ (±5s), `,` / `.` (frame step), J/K/L (shuttle)
-- [ ] Exposes `currentTime` + imperative `seek()` — replaces the per-page `onTimeUpdate` handlers
-- [ ] Zero `<video controls>` outside the primitive (grep test)
-- [ ] Keyboard-accessible and screen-reader labelled; axe pass
+- [x] One `VideoPlayer` primitive: transport, scrub bar, time display, speed readout, fullscreen.
+      **Volume is deliberately omitted** — every call site is a short muted-or-unmuted preview and
+      the OS/browser owns system volume; add it when a consumer needs per-clip level control
+- [x] Keyboard: space, ←/→ (±5s), `,` / `.` (frame step), J/K/L (shuttle). J runs a rAF loop —
+      browsers reject a negative `playbackRate`. Frame step states its assumed fps in the tooltip
+      rather than implying accuracy we don't have (the render pipeline pins no output rate)
+- [x] Exposes `getCurrentTime()` (pull), `subscribeTime()` (push) and imperative `seek()`; the
+      per-page `onTimeUpdate` handlers are gone. Pushing the subscription *down* into Timeline is
+      left to #390, which rewrites that component's props anyway
+- [x] Zero `<video controls>` outside the primitive — `src/test/no-native-video-controls.test.ts`
+- [x] Keyboard-accessible, `role="group"` with a **required** `label` so no player ships unnamed;
+      scrub bar is a `role="slider"` with `aria-valuetext`. Editor route added to the axe gate and
+      passing (10 routes)
 
 ---
 

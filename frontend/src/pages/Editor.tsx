@@ -26,6 +26,7 @@ import type {
 } from '@/types'
 import { ArrowLeft, RectangleHorizontal, RectangleVertical, TriangleAlert, X } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
+import { VideoPlayer, type VideoPlayerHandle } from '@/components/ui/video-player'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -161,18 +162,17 @@ export function Editor() {
 
   // ── Playhead state ───────────────────────────────────────────────────────
 
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const playerRef = useRef<VideoPlayerHandle>(null)
+  // Page-level time state is retained deliberately: it is what the transcript
+  // highlight and Timeline read today, and it is behaviourally identical to the
+  // old onTimeUpdate wiring. Pushing the subscription down into those components
+  // is #390's job — doing it here would collide with its prop rewrite.
   const [currentTime, setCurrentTime] = useState(0)
 
-  function handleTimeUpdate() {
-    if (videoRef.current) setCurrentTime(videoRef.current.currentTime)
-  }
 
   function handleSeek(t: number) {
-    if (videoRef.current) {
-      videoRef.current.currentTime = t
-      setCurrentTime(t)
-    }
+    playerRef.current?.seek(t)
+    setCurrentTime(t)
   }
 
   // ── Waveform (client-side WebAudio decode) ───────────────────────────────
@@ -475,17 +475,20 @@ export function Editor() {
           {/* Player */}
           <div className="flex items-start gap-4">
             {clip.render_uri ? (
-              <video
-                ref={videoRef}
+              <VideoPlayer
+                ref={playerRef}
                 // Keyed on the artifact, not just the clip: a confirmed clean
                 // swap changes render_uri but not the download src, so without
                 // a key change the element would keep playing the old media.
-                key={`${clip.id}:${clip.render_uri}`}
+                mediaKey={clip.render_uri ?? undefined}
                 src={mediaSrc}
-                controls
-                playsInline
-                onTimeUpdate={handleTimeUpdate}
-                className="aspect-[9/16] w-[180px] shrink-0 rounded-xl border border-default bg-black shadow-accent-glow"
+                label="Clip preview"
+                // compact: at 180px wide a full transport bar is unusable, and
+                // scrubbing here belongs to the Timeline below, not the player.
+                density="compact"
+                transport
+                onTimeChange={setCurrentTime}
+                className="w-[180px] shrink-0 shadow-accent-glow"
               />
             ) : (
               <div className="flex aspect-[9/16] w-[180px] shrink-0 items-center justify-center rounded-xl border border-default bg-black text-xs text-subtle">
@@ -651,10 +654,11 @@ export function Editor() {
                 the authed download endpoint (the raw URI is s3:// in prod R2). */}
             {cleanedUri && (
               <div className="mt-3">
-                <video
+                <VideoPlayer
                   src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
-                  controls
-                  className="w-full rounded-sm border border-default"
+                  label="Edited clip preview"
+                  density="compact"
+                  className="w-full"
                 />
                 <div className="mt-2 flex gap-2">
                   <Button size="sm" onClick={confirmFinal}>

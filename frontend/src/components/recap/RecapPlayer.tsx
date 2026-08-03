@@ -1,5 +1,6 @@
 import { sendActivity } from '@/lib/activity'
 import type { Summary } from '@/types'
+import { VideoPlayer } from '@/components/ui/video-player'
 
 // Issue 192: the 16:9 recap player — the ClipPlayer media idiom rotated to
 // landscape (aspect-video, not aspect-[9/16]). Presentational: rendering
@@ -26,13 +27,13 @@ export function RecapPlayer({ summary }: { summary: Summary }) {
   }
 
   return (
-    <video
-      key={summary.id}
+    <VideoPlayer
+      mediaKey={summary.id}
       src={mediaSrc}
-      controls
-      playsInline
+      label="Weekly recap"
+      aspect="landscape"
       onPlay={() => sendActivity('click', 'recap_watched', { summary_id: summary.id })}
-      className="aspect-video w-full rounded-xl border border-default bg-black shadow-accent-glow"
+      className="w-full shadow-accent-glow"
     />
   )
 }

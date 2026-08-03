@@ -12,6 +12,7 @@ import { FullTranscriptPanel } from '@/components/editor/FullTranscriptPanel'
 import type { Chapter, ReviewClip, Video, VideoTranscript } from '@/types'
 import { ArrowRight } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
+import { VideoPlayer, type VideoPlayerHandle } from '@/components/ui/video-player'
 
 const TIER_LABEL: Record<FitTier, string> = {
   strong: 'Strong',
@@ -289,13 +290,13 @@ export function LongFormEditor({
   // Source playhead — drives the transcript's active segment; transcript
   // clicks seek back. Same sync idiom as the short-form editor, at segment
   // granularity.
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const playerRef = useRef<VideoPlayerHandle>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [streamError, setStreamError] = useState(false)
 
   function seek(t: number) {
-    if (videoRef.current) {
-      videoRef.current.currentTime = t
+    if (playerRef.current) {
+      playerRef.current.seek(t)
       setCurrentTime(t)
     }
   }
@@ -317,15 +318,15 @@ export function LongFormEditor({
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
       <div className="flex flex-col gap-4">
         {sourceAvailable ? (
-          <video
-            ref={videoRef}
+          <VideoPlayer
+            ref={playerRef}
             src={`/videos/${videoId}/stream`}
-            controls
-            playsInline
-            preload="metadata"
-            onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+            label="Long-form source"
+            aspect="landscape"
+            transport
+            onTimeChange={setCurrentTime}
             onError={() => setStreamError(true)}
-            className="aspect-video w-full rounded-xl border border-default bg-black"
+            className="w-full"
           />
         ) : (
           <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black/60 px-6 text-center text-sm text-subtle">
