@@ -5,6 +5,8 @@ import { CleanedPreviewConfirm } from '@/components/review/CleanedPreviewConfirm
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { FeedbackAction, FeedbackPayload, ReviewClip, TaskQueued } from '@/types'
+import { Download, RotateCcw, Scissors, ThumbsDown, ThumbsUp } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 const APPROVE_TAGS = [
   { id: 'titles_fit_style', label: 'Titles fit my style' },
@@ -83,7 +85,7 @@ export function YourCall({
     if (feedbackNote) body.feedback_note = feedbackNote
     try {
       await api(`/clips/${clip.id}/feedback`, { method: 'POST', body })
-      setFlash(action === 'trim' ? 'Trim saved ✓' : `${action} recorded ✓`)
+      setFlash(action === 'trim' ? 'Trim saved' : `${action} recorded`)
       setTimeout(() => setFlash(''), 1500)
       if (action !== 'trim') onAdvance()
     } catch {
@@ -124,11 +126,11 @@ export function YourCall({
       </div>
 
       <div className="flex gap-2.5">
-        <Button variant="confirm" className="h-[46px] flex-1 text-base" onClick={() => openPanel('upvote')}>
-          👍 Keep
+        <Button variant="success" className="h-[46px] flex-1 text-base" onClick={() => openPanel('upvote')}>
+          <ThumbsUp className={ICON_SIZE.md} aria-hidden="true" /> Keep
         </Button>
         <Button variant="danger" className="h-[46px] flex-1 text-base" onClick={() => openPanel('downvote')}>
-          👎 Drop
+          <ThumbsDown className={ICON_SIZE.md} aria-hidden="true" /> Drop
         </Button>
       </div>
 
@@ -137,7 +139,7 @@ export function YourCall({
           Skip
         </Button>
         <Button variant="secondary" size="sm" className="h-[38px] flex-1" onClick={() => sendFeedback('trim')}>
-          ✂ Save trim
+          <Scissors className={ICON_SIZE.sm} aria-hidden="true" /> Save trim
         </Button>
         {clip.render_uri ? (
           <a
@@ -145,11 +147,11 @@ export function YourCall({
             download
             className="inline-flex h-[38px] flex-1 items-center justify-center gap-1.5 rounded-sm border border-strong bg-bg text-small text-muted shadow-inset hover:bg-elevated hover:text-fg"
           >
-            ⬇ Download
+            <Download className={ICON_SIZE.sm} aria-hidden="true" /> Download
           </a>
         ) : (
-          <span className="inline-flex h-[38px] flex-1 items-center justify-center rounded-sm border border-strong bg-bg text-small text-subtle">
-            ⬇ Download
+          <span className="inline-flex h-[38px] flex-1 items-center justify-center gap-1.5 rounded-sm border border-strong bg-bg text-small text-subtle">
+            <Download className={ICON_SIZE.sm} aria-hidden="true" /> Download
           </span>
         )}
       </div>
@@ -162,7 +164,7 @@ export function YourCall({
           disabled={trimApplying || !clip.render_uri}
           onClick={applyTrimRender}
         >
-          ⟳ Apply trim &amp; re-render
+          <RotateCcw className={ICON_SIZE.sm} aria-hidden="true" /> Apply trim &amp; re-render
         </Button>
         {trimStatus && (
           <p className={cn('text-xs', trimStatus.error ? 'text-danger' : 'text-subtle')}>

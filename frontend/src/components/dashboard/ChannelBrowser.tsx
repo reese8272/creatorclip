@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import type { CatalogListResponse, Video } from '@/types'
+import { ArrowLeft, ArrowRight, X } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 const PAGE_SIZE = 50
 
@@ -60,7 +62,7 @@ function CatalogRow({ video }: { video: Video }) {
     : adopt.isPending
       ? 'Adding…'
       : adopt.isSuccess
-        ? 'Added ✓'
+        ? 'Added'
         : adopt.isError
           ? 'Retry'
           : null
@@ -123,7 +125,7 @@ export function ChannelBrowser({ open, onClose }: { open: boolean; onClose: () =
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close">
-            ✕
+            <X className={ICON_SIZE.sm} aria-hidden="true" />
           </Button>
         </div>
 
@@ -172,7 +174,7 @@ export function ChannelBrowser({ open, onClose }: { open: boolean; onClose: () =
               disabled={!hasPrev}
               onClick={() => setOffset((o) => Math.max(0, o - limit))}
             >
-              ← Prev
+              <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Prev
             </Button>
             <Button
               variant="secondary"
@@ -180,7 +182,7 @@ export function ChannelBrowser({ open, onClose }: { open: boolean; onClose: () =
               disabled={!hasNext}
               onClick={() => setOffset((o) => o + limit)}
             >
-              Next →
+              Next <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
             </Button>
           </div>
         </div>

@@ -11,6 +11,8 @@ import { OnboardingIdentity } from '@/components/onboarding/OnboardingIdentity'
 import { TaskStepper } from '@/components/TaskStepper'
 import { Footer } from '@/components/Footer'
 import type { DataGate, DnaResponse, IdentityResponse, TaskQueued } from '@/types'
+import { ArrowRight, Check, Circle } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 async function logout() {
   await api('/auth/logout', { method: 'POST', redirectOn401: false }).catch(() => {})
@@ -20,7 +22,11 @@ async function logout() {
 function DataGateStatus({ gate }: { gate: DataGate | undefined }) {
   if (!gate) return <p className="mb-4 text-sm text-muted">Checking…</p>
   const mark = (ok: boolean) =>
-    ok ? <span className="text-success">✓</span> : <span className="text-warning">•</span>
+    ok ? (
+      <Check className={`${ICON_SIZE.xs} ${ICON_INLINE} text-success`} aria-hidden="true" />
+    ) : (
+      <Circle className={`${ICON_SIZE.xs} ${ICON_INLINE} text-warning`} aria-hidden="true" />
+    )
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
   // Issue 203: per-kind unlock delta, computed server-side — the UI never
   // re-derives the thresholds. Only shown for a kind that hasn't unlocked.
@@ -214,7 +220,7 @@ export function Onboarding() {
             the dashboard's DNA CTA and the per-step state both persist. */}
         {user && (
           <Link to="/dashboard" className="text-xs text-muted hover:text-fg">
-            Skip to dashboard →
+            Skip to dashboard <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Link>
         )}
         <button onClick={logout} className="text-xs text-muted hover:text-fg">
@@ -279,8 +285,9 @@ export function Onboarding() {
           </Button>
           {buildError && <p className="mt-2 text-center text-xs text-warning">{buildError}</p>}
           {(dna.status === 'done' || briefReady) && (
-            <p className="mt-2 text-center text-xs text-success">
-              ✓ Your Creator Brief is ready — review &amp; confirm it in step 5 below.
+            <p className="mt-2 flex items-center justify-center gap-1.5 text-center text-xs text-success">
+              <Check className={`${ICON_SIZE.xs} shrink-0`} aria-hidden="true" />
+              Your Creator Brief is ready — review &amp; confirm it in step 5 below.
             </p>
           )}
           {dna.status === 'error' && dna.error && (
@@ -295,7 +302,7 @@ export function Onboarding() {
           </p>
           <Link to="/profile">
             <Button variant="secondary" className="w-full">
-              View &amp; confirm brief →
+              View &amp; confirm brief <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
             </Button>
           </Link>
         </StepCard>

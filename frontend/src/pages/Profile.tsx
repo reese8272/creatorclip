@@ -16,6 +16,8 @@ import type {
   SavedInsightsResponse,
   VideoListResponse,
 } from '@/types'
+import { ArrowRight, SettingsIcon } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Sidebar Library stat row.
 function StatRow({ label, value, top }: { label: string; value: string; top?: boolean }) {
@@ -83,7 +85,8 @@ export function Profile() {
             <p className="mt-1 text-small text-muted">Channel profile snapshot</p>
           </div>
           <Link to="/settings">
-            <Button variant="secondary">⚙ Editing settings →</Button>
+            <Button variant="secondary">
+              <SettingsIcon className={ICON_SIZE.md} aria-hidden="true" /> Editing settings <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /></Button>
           </Link>
         </div>
 
@@ -127,7 +130,7 @@ export function Profile() {
                       </div>
                     </div>
                     <Link to="/insights" className="text-label text-accent-text hover:underline">
-                      Open →
+                      Open <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
                     </Link>
                   </div>
                 ))

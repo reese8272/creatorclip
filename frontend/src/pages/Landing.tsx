@@ -1,4 +1,6 @@
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Public marketing landing (Issue 376a). Mirrors static/landing.html — the
 // page FastAPI actually serves at `/` (main.py:index), which works whether or
@@ -115,7 +117,7 @@ export function Landing() {
             href="/app/insights#proof-of-lift"
             className="mt-3 inline-block text-sm text-accent-text hover:underline"
           >
-            See yours →
+            See yours <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </a>
         </section>
 

@@ -40,7 +40,7 @@ Batches run in order. **Batch E is filed but explicitly not funded** — see the
 # Batch A — Visual credibility
 
 ### Issue 384: Adopt an icon system — purge emoji and geometric glyphs
-- [ ] **Status:** open · **Batch:** A · **Size:** S · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** A · **Size:** S
 
 **What we're doing.** Adding a real icon library (`lucide-react`), routing it through a single
 re-export module, and removing every emoji and Unicode geometric character currently doing an
@@ -76,13 +76,19 @@ not from weight and saturation
 ([Dark Mode Design Systems: Patterns, Tokens, and Hierarchy](https://muz.li/blog/dark-mode-design-systems-a-complete-guide-to-patterns-tokens-and-hierarchy/)).
 
 **Acceptance**
-- [ ] `lucide-react` added; all icons imported through one `components/ui/icon.tsx` re-export so the
-      set is swappable without touching call sites
-- [ ] Zero emoji and zero geometric-block characters used as icons anywhere in `frontend/src`
-      (enforced by a grep test in the suite, not just a manual pass)
-- [ ] Keep/Drop restyled: icon + neutral surface + semantic accent border; no full-bleed saturation
-- [ ] Icon sizes drawn from the existing spacing scale in `index.css`; decorative icons `aria-hidden`
-- [ ] Bundle-size delta recorded (tree-shaken per-icon imports, not the barrel import)
+- [x] `lucide-react` added; all icons imported through one `components/ui/icon.tsx` re-export so the
+      set is swappable without touching call sites — enforced by ESLint `no-restricted-imports` AND
+      a test, so it fails `npm test` as well as `npm run lint`
+- [x] Zero emoji and zero geometric-block characters used as icons anywhere in `frontend/src` —
+      `src/test/no-glyph-icons.test.ts`, a TypeScript-AST source scan (0 false positives across the
+      ~2,600 box-drawing characters in comment banners; see DECISIONS for why not a regex)
+- [x] Keep/Drop restyled: new soft `success` button variant mirroring `danger` — semantic border +
+      soft surface, icon carries the affordance, no full-bleed saturation. `confirm` stays
+      full-bleed for single-action modal confirmations
+- [x] Icon sizes drawn from the spacing scale (`iconSizes.ts`, `size-*` utilities — never lucide's
+      `size` prop, which emits inline px); decorative icons `aria-hidden`, gate-enforced
+- [x] Bundle-size delta recorded: **+10,360 B raw / +2,768 B gzip** for 27 icons of 6,014 available
+      (620,801 → 631,161 raw; 175,278 → 178,046 gzip). Installing without importing cost 0 bytes
 
 ---
 

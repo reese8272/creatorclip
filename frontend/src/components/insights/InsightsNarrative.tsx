@@ -21,6 +21,8 @@ import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { Panel } from '@/components/insights/InsightsPanel'
 import type { Analytics, InsightsResponse } from '@/types'
+import { TrendingDown, TrendingUp } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 // ── What-Changed diff ────────────────────────────────────────────────────────
 
@@ -44,7 +46,12 @@ function DiffChip({ value }: { value: number | null }) {
       className={`font-mono text-xs font-semibold ${up ? 'text-success' : 'text-danger'}`}
       aria-label={`${up ? 'up' : 'down'} ${Math.abs(value).toFixed(0)}%`}
     >
-      {up ? '▲' : '▼'} {Math.abs(value).toFixed(0)}%
+      {up ? (
+        <TrendingUp className={ICON_SIZE.xs} aria-hidden="true" />
+      ) : (
+        <TrendingDown className={ICON_SIZE.xs} aria-hidden="true" />
+      )}{' '}
+      {Math.abs(value).toFixed(0)}%
     </span>
   )
 }

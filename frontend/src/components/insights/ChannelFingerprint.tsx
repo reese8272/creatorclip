@@ -5,6 +5,8 @@ import { Panel, Cell, gridCls } from '@/components/insights/InsightsPanel'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { Chip } from '@/components/Chip'
 import type { DnaStats, FingerprintShare } from '@/types'
+import { Check, Sparkles } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 /**
  * Channel Fingerprint (Issue 379) — the DNA rendered as an artifact a
@@ -99,7 +101,14 @@ export function ChannelFingerprint({ dna }: { dna: DnaStats }) {
             disabled={shareMutation.isPending}
             className="rounded-md border border-default bg-bg px-3 py-2 text-sm font-medium text-fg transition-colors hover:bg-surface disabled:opacity-50"
           >
-            {shareMutation.isPending ? 'Building your fingerprint…' : '✦ Create shareable fingerprint'}
+            {shareMutation.isPending ? (
+              'Building your fingerprint…'
+            ) : (
+              <>
+                <Sparkles className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Create
+                shareable fingerprint
+              </>
+            )}
           </button>
         ) : (
           <div className="rounded-md border border-dashed border-default bg-bg p-4">
@@ -114,7 +123,13 @@ export function ChannelFingerprint({ dna }: { dna: DnaStats }) {
                 onClick={copyCard}
                 className="rounded px-2 py-1 text-xs text-muted transition-colors hover:text-fg"
               >
-                {copied ? '✓ Copied' : 'Copy'}
+                {copied ? (
+                  <>
+                    <Check className={`${ICON_SIZE.xs} ${ICON_INLINE}`} aria-hidden="true" /> Copied
+                  </>
+                ) : (
+                  'Copy'
+                )}
               </button>
             </div>
 

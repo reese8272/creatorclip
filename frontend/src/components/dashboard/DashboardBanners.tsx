@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { safeUrl } from '@/lib/safeUrl'
 import type { Balance, SetupStep } from '@/types'
+import { ArrowRight, X } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // DNA setup CTA — shown until onboarding reaches `complete`. `link_first_video`
 // is intentionally excluded: the EmptyHero already owns that nudge, so showing
@@ -27,11 +29,11 @@ export function DnaCta({ setup }: { setup: SetupStep | null | undefined }) {
       <p className="text-sm text-muted">{setup.label}</p>
       {spaRoute ? (
         <Link to={spaRoute}>
-          <Button>Set up →</Button>
+          <Button>Set up <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /></Button>
         </Link>
       ) : (
         <a href={safeUrl(setup.next_action_url) ?? '/app/onboarding'}>
-          <Button>Set up →</Button>
+          <Button>Set up <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /></Button>
         </a>
       )}
     </div>
@@ -99,9 +101,9 @@ export function TrialBanner({ balance }: { balance: Balance | null }) {
             type="button"
             onClick={dismiss}
             aria-label="Dismiss"
-            className="px-1 text-lg leading-none text-subtle hover:text-fg"
+            className="px-1 leading-none text-subtle hover:text-fg"
           >
-            ×
+            <X className={ICON_SIZE.sm} aria-hidden="true" />
           </button>
         )}
       </div>

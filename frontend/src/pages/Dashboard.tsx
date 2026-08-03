@@ -18,6 +18,8 @@ import { DnaCta, TrialBanner, LowBalanceWarning } from '@/components/dashboard/D
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { videosRefetchInterval } from '@/lib/videosPoll'
 import type { ClipCountsResponse, DnaProfile, DnaResponse, VideoListResponse } from '@/types'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Sidebar: clips waiting in the review queue (Issue 305).
 //
@@ -41,7 +43,7 @@ function ReviewQueueCard({ count }: { count: number }) {
           <div className="mb-1 mt-2 font-mono text-2xl font-semibold text-fg">{count}</div>
           <div className="mb-3.5 text-small text-muted">clips ready to review</div>
           <Link to="/review" className={cn(buttonVariants(), 'w-full')}>
-            Open review →
+            Open review <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Link>
         </>
       )}
@@ -68,7 +70,7 @@ function CreatorDnaCard({ dna }: { dna: DnaProfile | null }) {
         to="/profile"
         className="mt-3 inline-block text-small text-accent-text hover:underline"
       >
-        View profile →
+        View profile <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
       </Link>
     </div>
   )

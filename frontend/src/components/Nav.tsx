@@ -3,6 +3,8 @@ import { Link, NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import type { Balance, CurrentUser } from '@/types'
+import { Menu, X } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Issue 355 finding 1: nav vocabulary has to match what each page calls itself,
 // or a first-run creator can't map a label to a destination. Every label below
@@ -205,7 +207,11 @@ export function Nav({ user, balance }: { user: CurrentUser | null; balance: Bala
           onClick={() => setOpen((o) => !o)}
           className="rounded-sm px-2 py-1 text-md text-muted transition-colors duration-fast hover:bg-elevated hover:text-fg sm:hidden"
         >
-          {open ? '✕' : '☰'}
+          {open ? (
+            <X className={ICON_SIZE.lg} aria-hidden="true" />
+          ) : (
+            <Menu className={ICON_SIZE.lg} aria-hidden="true" />
+          )}
         </button>
       </div>
 

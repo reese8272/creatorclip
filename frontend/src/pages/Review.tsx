@@ -16,6 +16,8 @@ import { StyleReview } from '@/components/review/StyleReview'
 import { GenerateClipsButton, VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
 import { Button } from '@/components/ui/button'
 import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '@/types'
+import { ArrowLeft, ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Issue 216: Honest personalization-status band — shown below the virality disclaimer.
 // Below threshold: "Still learning" with N/threshold progress; above: "Personalized".
@@ -104,7 +106,7 @@ function ReviewClipView({
             filler &amp; silence removal, and pacing to match your style.
           </p>
           <Button onClick={() => navigate(`/editor?video_id=${videoId}&clip_id=${clip.id}`)}>
-            Refine in editor →
+            Refine in editor <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Button>
         </div>
       </div>
@@ -205,7 +207,7 @@ export function Review() {
             onClick={() => setParams({ video_id: videoId })}
             className="text-xs text-muted hover:text-fg"
           >
-            ← Back to clip review
+            <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back to clip review
           </button>
         </div>
         <StyleReview videoId={videoId} />
@@ -252,7 +254,7 @@ export function Review() {
             variant="secondary"
             onClick={() => setParams({ video_id: videoId, mode: 'style' })}
           >
-            Review the style instead →
+            Review the style instead <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Button>
         </main>
       </>
@@ -274,7 +276,7 @@ export function Review() {
           onClick={() => setParams({ video_id: videoId, mode: 'style' })}
           className="text-xs text-muted hover:text-accent-text"
         >
-          Review this video’s overall style →
+          Review this video’s overall style <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
         </button>
       </div>
 

@@ -35,7 +35,7 @@ const RENDERERS: Record<string, (d: StreamEvent) => string> = {
   thinking: (d) => d.chunk || '',
   token: (d) => d.chunk || '',
   error: (d) => `! ${d.message || 'unknown error'}`,
-  done: (d) => `✓ done${d.version != null ? ` v${d.version}` : ''}`,
+  done: (d) => `done${d.version != null ? ` v${d.version}` : ''}`,
 }
 
 const INLINE = new Set(['thinking', 'token'])

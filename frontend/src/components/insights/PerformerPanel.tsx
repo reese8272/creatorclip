@@ -5,6 +5,8 @@ import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { Panel } from '@/components/insights/InsightsPanel'
 import { deriveWhyNarrative } from '@/components/insights/narrative'
 import type { Performer, PerformerInsight } from '@/types'
+import { Star } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 type SortMode = 'score-desc' | 'score-asc' | 'title'
 
@@ -47,7 +49,7 @@ function PerformerRow({ p, kind }: { p: Performer; kind: 'top' | 'bottom' }) {
         body: { video_id: p.video_id, performer_kind: kind },
       })
       setAnalysis({ id: data.id, content: data.content })
-      setLabel('Analyzed ✓')
+      setLabel('Analyzed')
     } catch (e) {
       setBusy(false)
       setLabel('Retry')
@@ -93,11 +95,16 @@ function PerformerRow({ p, kind }: { p: Performer; kind: 'top' | 'bottom' }) {
           <div className="mt-2 text-xs leading-relaxed text-muted">
             {analysis.content}{' '}
             {!saved ? (
-              <button onClick={save} className="ml-1 text-accent-text hover:text-fg">
-                ★ Save
+              <button
+                onClick={save}
+                className="ml-1 inline-flex items-center gap-1 text-accent-text hover:text-fg"
+              >
+                <Star className={ICON_SIZE.xs} aria-hidden="true" /> Save
               </button>
             ) : (
-              <span className="ml-1 text-success">★ Saved</span>
+              <span className="ml-1 inline-flex items-center gap-1 text-success">
+                <Star className={ICON_SIZE.xs} aria-hidden="true" /> Saved
+              </span>
             )}
           </div>
         )}

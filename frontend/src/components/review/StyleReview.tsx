@@ -9,6 +9,8 @@ import type {
   VideoFeedbackPayload,
   VideoSentiment,
 } from '@/types'
+import { ThumbsDown, ThumbsUp } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Video-level style tag taxonomy (Issue 370) — grounded in the clip-level
 // APPROVE/DENY tags (YourCall) and extended with tone/structure/visuals.
@@ -55,7 +57,7 @@ export function StyleReview({ videoId }: { videoId: string }) {
       setSentiment(null)
       setSelected(new Set())
       setNote('')
-      setFlash('Style note saved ✓ — this teaches your ranking')
+      setFlash('Style note saved — this teaches your ranking')
       setTimeout(() => setFlash(''), 2500)
     },
   })
@@ -126,18 +128,18 @@ export function StyleReview({ videoId }: { videoId: string }) {
 
           <div className="flex gap-2.5">
             <Button
-              variant={sentiment === 'like' ? 'confirm' : 'secondary'}
+              variant={sentiment === 'like' ? 'success' : 'secondary'}
               className="h-[42px] flex-1"
               onClick={() => setSentiment('like')}
             >
-              👍 Works for me
+              <ThumbsUp className={ICON_SIZE.md} aria-hidden="true" /> Works for me
             </Button>
             <Button
               variant={sentiment === 'dislike' ? 'danger' : 'secondary'}
               className="h-[42px] flex-1"
               onClick={() => setSentiment('dislike')}
             >
-              👎 Not my style
+              <ThumbsDown className={ICON_SIZE.md} aria-hidden="true" /> Not my style
             </Button>
           </div>
 
@@ -200,8 +202,21 @@ export function StyleReview({ videoId }: { videoId: string }) {
             items.map((item) => (
               <div key={item.id} className="border-b border-default px-4 py-3 last:border-b-0">
                 <div className="mb-1 flex items-center gap-2 text-xs">
-                  <span className={item.sentiment === 'like' ? 'text-success' : 'text-danger'}>
-                    {item.sentiment === 'like' ? '👍 Works' : '👎 Not my style'}
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1',
+                      item.sentiment === 'like' ? 'text-success' : 'text-danger',
+                    )}
+                  >
+                    {item.sentiment === 'like' ? (
+                      <>
+                        <ThumbsUp className={ICON_SIZE.xs} aria-hidden="true" /> Works
+                      </>
+                    ) : (
+                      <>
+                        <ThumbsDown className={ICON_SIZE.xs} aria-hidden="true" /> Not my style
+                      </>
+                    )}
                   </span>
                   <span className="font-mono text-subtle">
                     {new Date(item.created_at).toLocaleDateString()}

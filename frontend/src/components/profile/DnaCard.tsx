@@ -7,6 +7,8 @@ import { Card, CardBody, CardHeader } from '@/components/ui/card'
 import { Chip } from '@/components/Chip'
 import { Brief } from './Brief'
 import type { DnaProfile, DnaResponse, Identity, NicheOption, StyleNotes } from '@/types'
+import { ArrowRight, RefreshCw } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -223,11 +225,17 @@ export function DnaCard({
               {isActive ? (
                 <>
                   <Button variant="outline" onClick={resync}>
-                    ↺ Re-sync DNA
+                    <RefreshCw className={ICON_SIZE.md} aria-hidden="true" /> Re-sync DNA
                   </Button>
                   {profile.brief_text && (
                     <Button variant="ghost" onClick={() => setShowBrief((s) => !s)}>
-                      {showBrief ? 'Hide full DNA' : 'View full DNA →'}
+                      {showBrief ? (
+                        'Hide full DNA'
+                      ) : (
+                        <>
+                          View full DNA <ArrowRight className={ICON_SIZE.md} aria-hidden="true" />
+                        </>
+                      )}
                     </Button>
                   )}
                 </>
@@ -237,7 +245,7 @@ export function DnaCard({
                     Confirm &amp; activate
                   </Button>
                   <Button variant="outline" onClick={resync}>
-                    ↺ Rebuild DNA
+                    <RefreshCw className={ICON_SIZE.md} aria-hidden="true" /> Rebuild DNA
                   </Button>
                 </>
               )}

@@ -4,6 +4,8 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import type { Analytics, AnalyticsPeriod } from '@/types'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 const PERIODS: { value: AnalyticsPeriod; label: string }[] = [
   { value: '7d', label: 'Last 7 days' },
@@ -103,7 +105,7 @@ export function AnalyticsPanel({ variant = 'panel' }: { variant?: 'panel' | 'sid
           to="/insights"
           className="mt-3 inline-block text-small text-accent-text hover:underline"
         >
-          Full insights →
+          Full insights <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
         </Link>
       </div>
     )

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Footer } from '@/components/Footer'
+import { ArrowLeft, ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Port of static/walkthrough.html — the first-run explainer (5 panels). Local
 // only: no API calls until "Set up my AutoClip", which marks it seen and routes
@@ -54,7 +56,10 @@ const PANELS: Panel[] = [
             'The upload windows your audience is online',
           ].map((t) => (
             <li key={t} className="relative pl-6 text-sm leading-relaxed text-fg">
-              <span className="absolute left-0 font-mono text-accent-text">→</span>
+              <ArrowRight
+                className={`${ICON_SIZE.sm} absolute left-0 top-1 text-accent-text`}
+                aria-hidden="true"
+              />
               {t}
             </li>
           ))}
@@ -101,7 +106,10 @@ const PANELS: Panel[] = [
             ['failed', 'something broke; your minutes are automatically refunded'],
           ].map(([k, v]) => (
             <li key={k} className="relative pl-6 text-sm leading-relaxed text-fg">
-              <span className="absolute left-0 font-mono text-accent-text">→</span>
+              <ArrowRight
+                className={`${ICON_SIZE.sm} absolute left-0 top-1 text-accent-text`}
+                aria-hidden="true"
+              />
               <strong className="text-fg">{k}</strong> — {v}
             </li>
           ))}
@@ -182,7 +190,7 @@ export function Walkthrough() {
       <div className="w-full max-w-xl">
         <div className="mb-4 flex justify-end">
           <button onClick={skip} className="text-xs text-subtle hover:text-muted">
-            Skip to dashboard →
+            Skip to dashboard <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </button>
         </div>
         <div className="mb-10 flex justify-center gap-2">
@@ -209,7 +217,7 @@ export function Walkthrough() {
                 onClick={() => setCurrent((c) => c - 1)}
                 className="text-xs text-subtle hover:text-muted"
               >
-                ← Back
+                <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back
               </button>
             ) : (
               <span />
@@ -222,14 +230,14 @@ export function Walkthrough() {
                 onClick={finish}
                 className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-on-accent hover:bg-accent-hover"
               >
-                Set up my AutoClip →
+                Set up my AutoClip <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
               </button>
             ) : (
               <button
                 onClick={() => setCurrent((c) => c + 1)}
                 className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-on-accent hover:bg-accent-hover"
               >
-                Continue →
+                Continue <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
               </button>
             )}
           </div>

@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button'
 import { ChaptersPanel } from '@/components/analysis/ChaptersPanel'
 import { FullTranscriptPanel } from '@/components/editor/FullTranscriptPanel'
 import type { Chapter, ReviewClip, Video, VideoTranscript } from '@/types'
+import { ArrowRight } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 const TIER_LABEL: Record<FitTier, string> = {
   strong: 'Strong',
@@ -387,7 +389,7 @@ export function LongFormEditor({
                   </div>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => onOpenClip(c.id)}>
-                  Open →
+                  Open <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
                 </Button>
               </div>
             ))}
@@ -423,7 +425,7 @@ export function LongFormEditor({
                     {TIER_LABEL[tier]}
                   </span>
                   <Button variant="ghost" size="sm" onClick={() => onOpenClip(c.id)}>
-                    Open →
+                    Open <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
                   </Button>
                 </div>
               )

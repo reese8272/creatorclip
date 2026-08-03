@@ -15,6 +15,8 @@ import type {
   ReviewClip,
   TitleSuggestionsResponse,
 } from '@/types'
+import { Check } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // ── CopyButton — click-to-copy affordance ─────────────────────────────────────
 
@@ -32,7 +34,13 @@ function CopyButton({ text }: { text: string }) {
       className="ml-2 rounded px-1.5 py-0.5 text-xs text-muted hover:text-fg transition-colors"
       aria-label="Copy to clipboard"
     >
-      {copied ? '✓ Copied' : 'Copy'}
+      {copied ? (
+        <>
+          <Check className={`${ICON_SIZE.xs} ${ICON_INLINE}`} aria-hidden="true" /> Copied
+        </>
+      ) : (
+        'Copy'
+      )}
     </button>
   )
 }
@@ -48,7 +56,12 @@ function ApplyButton({
   pending: boolean
   onApply: () => void
 }) {
-  if (applied) return <span className="ml-1 shrink-0 px-1.5 py-0.5 text-xs text-success">✓ Applied</span>
+  if (applied)
+    return (
+      <span className="ml-1 inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 text-xs text-success">
+        <Check className={ICON_SIZE.xs} aria-hidden="true" /> Applied
+      </span>
+    )
   return (
     <button
       onClick={onApply}

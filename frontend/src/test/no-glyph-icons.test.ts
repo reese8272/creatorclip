@@ -39,9 +39,13 @@ const INTERACTIVE = new Set(['button', 'a', 'Button', 'Link', 'NavLink'])
 // assertions must read the CODE, not the prose that documents it.
 const ICON_SOURCE = (sourceText('/src/components/ui/icon.tsx') ?? '').replace(/\/\/.*$/gm, '')
 
-/** The icon allow-list, parsed from icon.tsx so the gate can't drift from it. */
+/**
+ * The icon allow-list, parsed from icon.tsx so the gate can't drift from it.
+ * Captures the LOCAL name, so an alias (`Settings as SettingsIcon`) is recorded
+ * under the name call sites actually use.
+ */
 const ICON_NAMES = new Set(
-  ICON_SOURCE.match(/^\s{2}([A-Z][A-Za-z]*),$/gm)?.map((line) => line.trim().replace(',', '')) ?? [],
+  [...ICON_SOURCE.matchAll(/^ {2}(?:[A-Z][A-Za-z]* as )?([A-Z][A-Za-z]*),$/gm)].map((m) => m[1]),
 )
 
 function jsxTextViolations(pattern: RegExp, onlyWhenIconLike: boolean) {

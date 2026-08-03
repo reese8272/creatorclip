@@ -159,7 +159,7 @@ describe('VideoTable — StageStepper integration', () => {
     )
     renderTable([makeVideo({ ingest_status: 'pending', clippable: true })])
     await userEvent.click(screen.getByRole('button', { name: 'Queue for analysis' }))
-    const btn = await screen.findByRole('button', { name: 'Queued ✓' })
+    const btn = await screen.findByRole('button', { name: 'Queued' })
     expect(btn).toBeDisabled()
   })
 

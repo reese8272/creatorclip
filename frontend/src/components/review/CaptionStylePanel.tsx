@@ -45,7 +45,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
     subRef.current = subscribeToTaskStream(streamUrl, {
       onDone: () => {
         setRendering(false)
-        setStatus('Styled render ready ✓')
+        setStatus('Styled render ready')
         // Editor + Review read the clip list under this key — refetch so the
         // new render_uri (and render_status) surface without a manual refresh.
         void queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })

@@ -128,13 +128,13 @@ function VideoRow({
           busy={busy}
           label={label}
           onQueue={() =>
-            act.mutate({ url: `/videos/${video.id}/queue`, pending: 'Queuing…', done: 'Queued ✓' })
+            act.mutate({ url: `/videos/${video.id}/queue`, pending: 'Queuing…', done: 'Queued' })
           }
           onGenerate={() =>
             act.mutate({
               url: `/videos/${video.id}/clips/generate`,
               pending: 'Generating…',
-              done: 'Queued ✓',
+              done: 'Queued',
             })
           }
         />

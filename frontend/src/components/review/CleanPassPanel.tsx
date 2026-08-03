@@ -4,6 +4,8 @@ import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
 import { CleanedPreviewConfirm } from '@/components/review/CleanedPreviewConfirm'
 import { Button } from '@/components/ui/button'
 import type { CleanPreview, ReviewClip } from '@/types'
+import { TriangleAlert } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Issue 134 — filler + long-silence clean pass: preview the cuts, render a
 // cleaned version, then swap it in (or keep the original). The confirm-swap
@@ -57,7 +59,10 @@ export function CleanPassPanel({ clip }: { clip: ReviewClip }) {
             {preview.cuts.length} segment(s) would be removed —{' '}
             {preview.percent_removed.toFixed(0)}% of the clip.
           </p>
-          {preview.warning && <p className="font-semibold text-danger">⚠ {preview.warning}</p>}
+          {preview.warning && <p className="flex items-start gap-1.5 font-semibold text-danger">
+              <TriangleAlert className={`${ICON_SIZE.sm} mt-0.5 shrink-0`} aria-hidden="true" />
+              {preview.warning}
+            </p>}
           <div className="max-h-[140px] overflow-y-auto rounded-sm border border-default p-2 text-xs">
             {preview.cuts.map((c, i) => (
               <div key={i} className="text-subtle line-through">

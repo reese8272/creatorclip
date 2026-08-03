@@ -161,7 +161,7 @@ describe('Review', () => {
     vi.stubGlobal('fetch', mockFetch())
     renderReview('/app/review?video_id=v1')
     await screen.findByText(/Clip #1/)
-    await userEvent.click(screen.getByRole('button', { name: '👍 Keep' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Keep' }))
     expect(screen.getByText('Why are you keeping this?')).toBeInTheDocument()
   })
 })

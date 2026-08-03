@@ -24,20 +24,19 @@ describe('TaskStepper', () => {
   })
 
   it('shows a check icon for completed steps and a spinner for the active last step', () => {
-    render(
+    const { container } = render(
       <TaskStepper steps={['Fetch', 'Embed', 'Persist']} status="streaming" elapsedMs={3000} />,
     )
-    const checks = screen.getAllByText('✓')
     // First two steps done; last step still in-progress (spinner, not check).
-    expect(checks).toHaveLength(2)
+    expect(container.querySelectorAll('[data-state="complete"]')).toHaveLength(2)
+    expect(container.querySelectorAll('[data-state="active"]')).toHaveLength(1)
   })
 
   it('marks all steps completed when status is done', () => {
-    render(
+    const { container } = render(
       <TaskStepper steps={['Fetch', 'Embed', 'Persist']} status="done" elapsedMs={90000} />,
     )
-    const checks = screen.getAllByText('✓')
-    expect(checks).toHaveLength(3)
+    expect(container.querySelectorAll('[data-state="complete"]')).toHaveLength(3)
   })
 
   it('formats elapsed seconds under 60 as "<n>s"', () => {

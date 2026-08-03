@@ -53,5 +53,6 @@ export {
   // Accents.
   Star,
   Sparkles,
-  Settings,
+  // Aliased: `Settings` is also this app's settings page component.
+  Settings as SettingsIcon,
 } from 'lucide-react'

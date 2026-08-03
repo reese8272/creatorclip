@@ -24,6 +24,8 @@ import type {
   TranscriptWord,
   VideoListResponse,
 } from '@/types'
+import { ArrowLeft, RectangleHorizontal, RectangleVertical, TriangleAlert, X } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -435,7 +437,7 @@ export function Editor() {
               onClick={() => setEditorMode('short')}
               className={cn(TAB_BASE, editorMode === 'short' ? TAB_ACTIVE : TAB_IDLE)}
             >
-              ▮ Short-form clip
+              <RectangleVertical className={ICON_SIZE.sm} aria-hidden="true" /> Short-form clip
             </button>
             <button
               role="tab"
@@ -443,7 +445,7 @@ export function Editor() {
               onClick={() => setEditorMode('long')}
               className={cn(TAB_BASE, editorMode === 'long' ? TAB_ACTIVE : TAB_IDLE)}
             >
-              ▭ Long-form source
+              <RectangleHorizontal className={ICON_SIZE.sm} aria-hidden="true" /> Long-form source
             </button>
           </div>
         </div>
@@ -503,7 +505,7 @@ export function Editor() {
                 size="sm"
                 onClick={() => navigate(`/review?video_id=${videoId}`)}
               >
-                ← Back to Review
+                <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back to Review
               </Button>
             </div>
           </div>
@@ -581,8 +583,9 @@ export function Editor() {
               {cuts.length} cut(s) · {removedS.toFixed(2)}s removed ({pct.toFixed(0)}%)
             </div>
             {pct >= WARNING_REMOVED_PCT && (
-              <div className="text-xs font-semibold text-danger">
-                ⚠ This removes {pct.toFixed(0)}% of your clip.
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-danger">
+                <TriangleAlert className={`${ICON_SIZE.xs} shrink-0`} aria-hidden="true" />
+                This removes {pct.toFixed(0)}% of your clip.
               </div>
             )}
 
@@ -604,9 +607,9 @@ export function Editor() {
                     <button
                       onClick={() => removeCut(idx)}
                       aria-label="Remove cut"
-                      className="h-[22px] w-[22px] rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
+                      className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
                     >
-                      ×
+                      <X className={ICON_SIZE.sm} aria-hidden="true" />
                     </button>
                   </div>
                 ))}

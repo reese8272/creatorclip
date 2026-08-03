@@ -151,13 +151,13 @@ describe('Apply suggestions', () => {
     )
   })
 
-  it('marks the row ✓ Applied when it matches clip.applied_title', async () => {
+  it('marks the row Applied when it matches clip.applied_title', async () => {
     vi.stubGlobal('fetch', suggestionFetch())
     const user = userEvent.setup()
     render(<WhyThisClip clip={{ ...CLIP, applied_title: 'The 3-Second Hook' }} />, { wrapper })
 
     await user.click(screen.getByText(/Suggest titles \/ rewrite hook/i))
-    expect(await screen.findByText('✓ Applied')).toBeInTheDocument()
+    expect(await screen.findByText('Applied')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull()
   })
 

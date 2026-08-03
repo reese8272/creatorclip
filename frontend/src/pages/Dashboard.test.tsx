@@ -177,7 +177,7 @@ describe('Dashboard', () => {
     // query, so the populated card is not present on first paint. The old
     // assertion passed vacuously because the card rendered the same button at
     // any count — including zero, which Issue 355 changed.
-    expect(await screen.findByRole('link', { name: 'Open review →' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Open review' })).toHaveAttribute(
       'href',
       '/app/review',
     )
@@ -196,7 +196,7 @@ describe('Dashboard', () => {
       'href',
       '/app/review',
     )
-    expect(screen.queryByRole('link', { name: 'Open review →' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Open review' })).toBeNull()
   })
 
   it('header carries exactly one primary action, and Analyze is not one of them', async () => {

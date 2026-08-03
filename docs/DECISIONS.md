@@ -5,6 +5,74 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-03 — Issue 384: icon system — one swappable seam, a source-scanning gate, and the glyph ruling
+
+**What was decided.** `lucide-react@1.28` is adopted and routed through a single
+`frontend/src/components/ui/icon.tsx`, which re-exports an **explicit named allow-list** and nothing
+else. Every call site imports from there; an ESLint `no-restricted-imports` rule plus a test both
+forbid reaching `lucide-react` directly, so the whole icon set is swappable by editing one file.
+
+**Why a barrel does not defeat tree-shaking (the issue's acceptance names this tension).**
+`lucide-react` is `sideEffects: false` with an ESM entry, so Rollup's named-export tracing drops
+every re-export nobody imports — the barrel is a *compile-time* alias, not a runtime one. What the
+acceptance criterion actually guards against is `export *` or a runtime name→component map, both of
+which defeat static analysis. Both are forbidden and asserted against. **Measured, as the acceptance
+requires:** 620,801 B raw / 175,278 B gzip → **631,161 B raw / 178,046 B gzip** = **+10,360 B raw /
++2,768 B gzip** for 27 icons drawn from a library of 6,014. Installing the library without importing
+from it cost 0 bytes, which is the tree-shaking proof.
+
+**The glyph ruling, stated once because it decides ~200 sites.**
+> A glyph is an **icon** when it names an affordance. It is **prose** when it relates two values.
+
+So all ~33 CTA arrows are in scope (`Refine in editor →`, `← Prev`) — they were also producing wrong
+accessible names, announced as "Refine in editor, right arrow" — while arrows *between* values stay
+(`Setup → peak → end`, `<option>Score: high → low</option>`, `0:30 → 2:00`). For check marks inside
+status strings the rule is that **strings never carry glyphs; the component decides whether to render
+an icon**: a durable state marker (`Applied`, a completed step, `Copied`) gets a `<Check/>`, while a
+transient flash already rendered in `text-success` (`'Trim saved'`, `'Analyzed'`, `'Queued'`) simply
+loses the glyph — a check mark beside green "Saved" is the same information twice. Deliberately NOT
+done: refactoring `useState<string>` status into `{text, tone}` shapes so an icon could hang off
+them. That is a signature change per component with test fallout, for no user-visible gain.
+
+**Three divergences from the issue brief.**
+
+1. **A `success` button variant was added** (`components/ui/buttonVariants.ts`). The brief asks for
+   Keep/Drop to lose their full-bleed saturation. `danger` already used the right idiom — soft
+   surface, semantic border, semantic text — but its counterpart `confirm` is a full-bleed
+   `bg-success`. Rather than change `confirm` (correct for a single-action modal confirmation, and
+   used as such at `DnaCard.tsx:236`), `success` was added as its soft twin so the *paired* choice
+   reads symmetrically and the icon carries the affordance with colour only reinforcing it.
+2. **`Settings` is exported aliased as `SettingsIcon`.** It collides with this app's `Settings` page
+   component, which is a `tsc` duplicate-identifier error, not a style preference.
+3. **The decorative-icon aria check is import-aware, not name-matching** — for the same reason.
+   `Play`, `Check`, `Star`, `X` and `Circle` are all plausible component names in a video app.
+
+**A new test pattern for this repo: source scanning.** `src/test/sourceScan.ts` +
+`no-glyph-icons.test.ts` read the source tree and assert on its structure. This repo previously had
+**zero** filesystem-reading tests — honesty constraints are asserted as rendered DOM — so the
+deviation is recorded. It is justified because the rule is structural: a rendered-DOM assertion sees
+only the component under test, and what must be prevented is a glyph reappearing at any one of ~200
+sites. Two implementation constraints, both verified rather than assumed:
+- **`import.meta.glob(?raw)`, not `node:fs`.** `frontend/tsconfig.app.json` sets
+  `types: ["vite/client"]` with no `@types/node`, so a `node:fs` import fails `tsc -b` — which is
+  `npm run build`, a CI gate.
+- **The TypeScript AST, not a regex.** Comments are parsed as *trivia* and never become AST nodes.
+  `src/` contains ~2,600 box-drawing characters in comment banners plus `2×2` and prose arrows in
+  comments; every one is a false positive for raw-text scanning, and comment-stripping by regex
+  breaks on `https://` inside string literals. Confirmed in practice: the gate reported 0 false
+  positives across 117 files.
+
+**Verification.** Frontend **364 passed / 57 files** (354/55 at W5; +10 from the two new test files),
+`npx tsc -b` clean, `npm run lint` **0 errors** (3 pre-existing `exhaustive-deps` warnings in
+`Editor.tsx`, unchanged), `npm run build` clean. Eight tests were rewritten, one more than the seven
+the plan predicted: `Dashboard.test.tsx` queried `{ name: 'Open review →' }`, an accessible name
+broken by the arrow removal but invisible to the glyph gate (an arrow in a *test* string literal is
+not a violation). Most rewrites got simpler — `getByRole('button', { name: 'Keep' })` rather than
+`'👍 Keep'`. `TaskStepper` is the exception: its check is now `aria-hidden`, so the test queries a
+new `data-state="complete"` attribute, which documents the component's state model instead of
+asserting on an icon. Also deleted `frontend/public/icons.svg`, a social-icon sprite referenced from
+nowhere in `src/`, `e2e/`, `index.html`, or `static/`. **Date:** 2026-08-03
+
 ## 2026-08-03 — Issue tracker reset: `docs/issues.md` archived and rebuilt around Lane L25 (Editor & Craft)
 
 **What was decided.**

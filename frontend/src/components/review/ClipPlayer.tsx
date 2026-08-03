@@ -6,6 +6,8 @@ import { FitBadge } from '@/components/ui/fit-badge'
 import { fitTier } from '@/lib/fit'
 import { TrimFilmstrip } from '@/components/review/TrimFilmstrip'
 import type { ReviewClip } from '@/types'
+import { ArrowRight, Play, RotateCcw } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Issue 306 (redesign): the left review column — the 9:16 player, clip meta + fit
 // pill, the filmstrip trim, and "Next clip →". Trim state is owned by the parent
@@ -121,7 +123,7 @@ export function ClipPlayer({
                 onClick={triggerRender}
                 className="rounded-sm border border-strong bg-bg px-3 py-1.5 text-xs text-muted hover:bg-elevated hover:text-fg"
               >
-                ↻ Retry render
+                <RotateCcw className={ICON_SIZE.sm} aria-hidden="true" /> Retry render
               </button>
             </>
           ) : (
@@ -131,7 +133,7 @@ export function ClipPlayer({
                 onClick={triggerRender}
                 className="rounded-sm border border-strong bg-bg px-3 py-1.5 text-xs text-muted hover:bg-elevated hover:text-fg"
               >
-                ▶ Render this clip
+                <Play className={ICON_SIZE.sm} aria-hidden="true" /> Render this clip
               </button>
             </>
           )}
@@ -165,7 +167,7 @@ export function ClipPlayer({
       />
 
       <button onClick={onNext} className="mt-1 text-xs text-muted hover:text-fg">
-        Next clip →
+        Next clip <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
       </button>
     </div>
   )

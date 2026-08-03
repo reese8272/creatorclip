@@ -123,7 +123,10 @@ export function AnalysisQuery() {
           ) : (
             <div className="min-h-[48px] whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
               {stream.tokens || <span className="italic text-subtle">Starting…</span>}
-              {stream.status === 'streaming' && <span className="ml-px animate-pulse text-accent-text">▊</span>}
+              {stream.status === 'streaming' && <span
+                  aria-hidden="true"
+                  className="ml-px inline-block h-[1em] w-[2px] animate-pulse bg-accent-text align-[-0.15em]"
+                />}
             </div>
           )}
           {stream.status === 'done' && (

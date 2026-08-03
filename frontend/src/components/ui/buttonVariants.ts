@@ -22,6 +22,15 @@ export const buttonVariants = cva(
         secondary: 'border border-strong bg-surface text-fg shadow-inset hover:bg-elevated',
         confirm: 'bg-success text-bg shadow-sm shadow-inset hover:opacity-90',
         outline: 'border border-strong bg-transparent text-fg hover:border-accent hover:text-accent-text',
+        // `success` / `danger` are the SOFT semantic pair: a low-saturation
+        // surface with a semantic border and semantic text, where the icon
+        // carries the affordance and colour only reinforces it. Use these for
+        // paired choices (Keep / Drop) — a full-bleed saturated fill on both
+        // sides makes colour do the icon's job twice over (Issue 384).
+        // `confirm` stays full-bleed for single-action modal confirmations,
+        // where there is nothing to balance against.
+        success:
+          'border border-[color:var(--color-success-border)] bg-[color:var(--color-success-soft)] text-success hover:bg-success hover:text-bg',
         danger: 'border border-[color:var(--color-danger-border)] bg-[color:var(--color-danger-soft)] text-danger hover:bg-danger hover:text-bg',
         ghost: 'text-muted hover:text-fg hover:bg-elevated',
       },
