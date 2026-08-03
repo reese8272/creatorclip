@@ -98,11 +98,14 @@ function VideoRow({
                   : 'expired'
                 : 'pending'
             }
-            className="w-24"
+            // w-16, not w-24: the dashboard table shares a max-w-5xl row with a
+            // 296px sidebar, and a 96px thumb pushed the ACTIONS column past the
+            // container edge — the three stacked row actions were clipped.
+            className="w-16"
           />
           <div className="min-w-0">
             <div
-              className="max-w-[280px] truncate text-fg"
+              className="max-w-[220px] truncate text-fg"
               title={video.youtube_video_id ?? undefined}
             >
               {video.title || <Badge variant="muted">Untitled</Badge>}

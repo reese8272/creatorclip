@@ -38,7 +38,10 @@ export function PosterThumb({ src, alt, reason = 'none', className }: PosterThum
   return (
     <div
       className={cn(
-        'relative flex aspect-video shrink-0 items-center justify-center overflow-hidden rounded-sm border border-default bg-elevated',
+        // @container so the PLACEHOLDER can adapt to whatever size the call site
+        // picks. A 16:9 box at w-16 is only 36px tall — an icon plus two lines of
+        // label does not fit, and the label clipped mid-word.
+        '@container relative flex aspect-video shrink-0 items-center justify-center overflow-hidden rounded-sm border border-default bg-elevated',
         className,
       )}
     >
@@ -60,9 +63,17 @@ export function PosterThumb({ src, alt, reason = 'none', className }: PosterThum
           onError={() => setFailed(true)}
         />
       ) : (
-        <span className="flex flex-col items-center gap-1 px-1 text-center">
+        <span
+          className="flex flex-col items-center gap-1 px-1 text-center"
+          // The icon alone is the fallback at small sizes; the words are the
+          // detail, so they are what gives way. title= keeps the reason
+          // available on hover either way.
+          title={PLACEHOLDER_COPY[reason]}
+        >
           <Chip pose="papers" size={20} />
-          <span className="text-label leading-tight text-muted">{PLACEHOLDER_COPY[reason]}</span>
+          <span className="hidden text-label leading-tight text-muted @min-[7rem]:block">
+            {PLACEHOLDER_COPY[reason]}
+          </span>
         </span>
       )}
     </div>

@@ -91,12 +91,15 @@ class TestPosterFailureIsContained:
         idx = src.index("_extract_and_upload_poster")
         # The call sits inside a try whose handler assigns None and continues.
         preceding = src[:idx]
-        assert preceding.rstrip().endswith(
-            (
-                "poster_uri = await",
-                "poster_uri = await tasks._extract_and_upload_poster",
+        assert (
+            preceding.rstrip().endswith(
+                (
+                    "poster_uri = await",
+                    "poster_uri = await tasks._extract_and_upload_poster",
+                )
             )
-        ) or "try:" in preceding[-400:], "the poster call must be inside a try block"
+            or "try:" in preceding[-400:]
+        ), "the poster call must be inside a try block"
         following = src[idx:]
         assert "except Exception" in following
         assert "poster_uri = None" in following, (

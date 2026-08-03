@@ -55,9 +55,7 @@ class TestVideoPoster:
         video = _row(Video, creator.id, "s3://bucket/posters/c/v.jpg")
         _overrides(creator, video)
         try:
-            with patch(
-                "routers.videos.aread_bytes", AsyncMock(return_value=b"\xff\xd8jpeg")
-            ):
+            with patch("routers.videos.aread_bytes", AsyncMock(return_value=b"\xff\xd8jpeg")):
                 resp = TestClient(app).get(f"/videos/{video.id}/poster")
             assert resp.status_code == 200
             assert resp.headers["content-type"] == "image/jpeg"
