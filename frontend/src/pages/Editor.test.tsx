@@ -344,7 +344,7 @@ describe('Editor', () => {
 })
 
 // ── Issue 188 AC: Review no longer renders the moved panels ──────────────────
-// Verifying that TranscriptEditor / CaptionStylePanel / CleanPassPanel are
+// Verifying that the caption-style and clean-pass panels are
 // NOT rendered in the Review page is covered in Review.test.tsx.  The
 // structural test here is that Editor.tsx owns those tools when requested.
 describe('Editor — AC: honest framing', () => {

@@ -12,6 +12,13 @@ import { CaptionStylePanel } from '@/components/review/CaptionStylePanel'
 import { CleanPassPanel } from '@/components/review/CleanPassPanel'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { Chip } from '@/components/Chip'
+import {
+  cutFromRange,
+  cutWordIndices,
+  mergeAdjacent,
+  normalizeCut,
+  removeCutById,
+} from '@/lib/editorCuts'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
 import { useVideoPeaks } from '@/hooks/useVideoPeaks'
 import type { ClipTranscript, EditorCut, ReviewClip, TranscriptWord } from '@/types'
@@ -22,56 +29,27 @@ import { Card } from '@/components/ui/card'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const ADJACENT_MERGE_S = 0.05
 const WARNING_REMOVED_PCT = 40
 const storageKey = (clipId: string) => `clip:${clipId}:cuts`
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Read persisted cuts, repairing anything a previous version wrote.
+ *
+ * Every cut stored before Issue 390 lacks an `id`; `normalizeCut` backfills one
+ * and drops entries that cannot be a cut at all, so one NaN in the blob cannot
+ * brick the editor.
+ */
 function loadCuts(clipId: string): EditorCut[] {
   try {
     const raw = localStorage.getItem(storageKey(clipId))
     const parsed = raw ? JSON.parse(raw) : []
-    return Array.isArray(parsed) ? parsed : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(normalizeCut).filter((c): c is EditorCut => c !== null)
   } catch {
     return []
   }
-}
-
-function mergeAdjacent(cuts: EditorCut[]): EditorCut[] {
-  const sorted = cuts.slice().sort((a, b) => a.start_s - b.start_s)
-  if (!sorted.length) return sorted
-  const out = [sorted[0]]
-  for (let k = 1; k < sorted.length; k++) {
-    const last = out[out.length - 1]
-    const cur = sorted[k]
-    if (cur.start_s <= last.end_s + ADJACENT_MERGE_S) {
-      last.end_s = Math.max(last.end_s, cur.end_s)
-      last.indices = [last.indices[0], Math.max(last.indices[1], cur.indices[1])]
-    } else {
-      out.push(cur)
-    }
-  }
-  return out
-}
-
-/** Snap a cut time-range to the nearest enclosing word indices. */
-function timeRangeToIndices(
-  words: TranscriptWord[],
-  startS: number,
-  endS: number,
-): [number, number] | null {
-  let first = -1
-  let last = -1
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i]
-    if (w.start_s <= endS && w.end_s >= startS) {
-      if (first === -1) first = i
-      last = i
-    }
-  }
-  if (first === -1) return null
-  return [first, last]
 }
 
 // ── Transcript word hit-detection for playhead sync ──────────────────────────
@@ -151,7 +129,7 @@ export function ShortFormEditor({
   const { peaks } = useVideoPeaks(clip.video_id, hasPeaks)
   const sourceStartS = clip.setup_start_s ?? clip.start_s
 
-  // ── Cut state (mirrors TranscriptEditor, shares localStorage key) ────────
+  // ── Cut state ────────────────────────────────────────────────────────────
 
   const [cuts, setCuts] = useState<EditorCut[]>(() => loadCuts(clip.id))
   const [undo, setUndo] = useState<EditorCut[] | null>(null)
@@ -167,7 +145,9 @@ export function ShortFormEditor({
     setCuts(loadCuts(clip.id))
   }, [clip.id])
 
-  // Persist cuts to localStorage so TranscriptEditor in Review stays in sync.
+  // Persist cuts so they survive a reload. Issue 391 replaces this with a
+  // server-side edit document; until then localStorage IS the source of truth,
+  // which is the defect that issue exists to fix.
   useEffect(() => {
     try {
       localStorage.setItem(storageKey(clip.id), JSON.stringify(cuts))
@@ -181,19 +161,13 @@ export function ShortFormEditor({
   // ── Cut management ───────────────────────────────────────────────────────
 
   function addTimeCut(start_s: number, end_s: number) {
-    const idxRange = timeRangeToIndices(words, start_s, end_s)
-    const newCut: EditorCut = {
-      start_s,
-      end_s,
-      indices: idxRange ?? [0, 0],
-    }
     setUndo(cuts)
-    setCuts(mergeAdjacent([...cuts, newCut]))
+    setCuts(mergeAdjacent([...cuts, cutFromRange(words, start_s, end_s)]))
   }
 
-  function removeCut(idx: number) {
+  function removeCut(id: string) {
     setUndo(cuts)
-    setCuts(cuts.filter((_, k) => k !== idx))
+    setCuts(removeCutById(cuts, id))
   }
 
   function onTranscriptMouseUp() {
@@ -214,7 +188,7 @@ export function ShortFormEditor({
     const end_s = words[j]?.end_s ?? 0
     if (end_s <= start_s) return
     setUndo(cuts)
-    setCuts(mergeAdjacent([...cuts, { start_s, end_s, indices: [i, j] }]))
+    setCuts(mergeAdjacent([...cuts, cutFromRange(words, start_s, end_s)]))
   }
 
   async function apply() {
@@ -269,10 +243,7 @@ export function ShortFormEditor({
 
   // ── Cut computation helpers ──────────────────────────────────────────────
 
-  const cutIndices = new Set<number>()
-  cuts.forEach((c) => {
-    for (let i = c.indices[0]; i <= c.indices[1]; i++) cutIndices.add(i)
-  })
+  const cutIndices = cutWordIndices(cuts)
   const removedS = cuts.reduce((acc, c) => acc + (c.end_s - c.start_s), 0)
   const pct = clipDuration > 0 ? (100 * removedS) / clipDuration : 0
   const activeIdx = activeWordIndex(words, currentTime)
@@ -523,20 +494,22 @@ export function ShortFormEditor({
             >
               {cuts.map((c, idx) => (
                 <div
-                  key={idx}
+                  key={c.id}
                   className="flex items-center justify-between border-b border-default py-1 last:border-b-0"
                 >
                   <span className="text-subtle line-through">
-                    {words
-                      .slice(c.indices[0], c.indices[1] + 1)
-                      .map((w) => w.word)
-                      .join(' ')
-                      .slice(0, 60)}{' '}
+                    {c.indices
+                      ? words
+                          .slice(c.indices[0], c.indices[1] + 1)
+                          .map((w) => w.word)
+                          .join(' ')
+                          .slice(0, 60)
+                      : 'Selected range'}{' '}
                     <span className="font-mono">· {(c.end_s - c.start_s).toFixed(2)}s</span>
                   </span>
                   <button
-                    onClick={() => removeCut(idx)}
-                    aria-label="Remove cut"
+                    onClick={() => removeCut(c.id)}
+                    aria-label={`Remove cut ${idx + 1}`}
                     className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
                   >
                     <X className={ICON_SIZE.sm} aria-hidden="true" />

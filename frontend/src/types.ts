@@ -408,11 +408,19 @@ export interface ClipTranscript {
   words: TranscriptWord[]
 }
 
-// One queued cut in the transcript editor (clip-relative seconds + word span).
+// One queued cut in the editor (clip-relative seconds + word span).
 export interface EditorCut {
+  // Issue 390 — stable, client-generated. Cuts used to be addressed by array
+  // index, and `mergeAdjacent` re-sorts, so dragging one edge past a neighbour
+  // renumbered everything mid-gesture and the drag silently moved to a different
+  // cut. Also #391's command target and edit-document key. See lib/editorCuts.ts.
+  id: string
   start_s: number
   end_s: number
-  indices: [number, number]
+  // Optional since Issue 390: ABSENT means the range covers no transcript word.
+  // Previously this defaulted to `[0, 0]`, which struck through the first word of
+  // the transcript on every drag over a gap.
+  indices?: [number, number]
 }
 
 export interface DnaProfile {
