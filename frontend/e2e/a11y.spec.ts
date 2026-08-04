@@ -26,12 +26,11 @@ const ROUTES = [
   // — a scroll container with no keyboard-reachable content fails it. Short mode
   // alone would not have covered them.
   'editor?video_id=v1',
-  // NOT added: `settings`. It has PRE-EXISTING serious contrast violations from
-  // the "Soon" preview rows (commit 80a7474, 2026-06-23) — decorative disabled
-  // mocks wrapped in `pointer-events-none opacity-50`, which halves their
-  // effective contrast while leaving them in the accessibility tree. Logged in
-  // docs/OFF_COURSE_BUGS.md; adding the route before fixing them would block
-  // this batch on unrelated work.
+  // Added 2026-08-04 (Issue 411). The "Soon" preview mocks are aria-hidden now
+  // — decorative spans at half opacity have no business in the accessibility
+  // tree — which cleared the serious contrast violations that had kept this
+  // route out of the gate since 2026-08-03.
+  'settings',
 ]
 
 for (const path of ROUTES) {
