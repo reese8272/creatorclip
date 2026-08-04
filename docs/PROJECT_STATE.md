@@ -6,7 +6,9 @@ Updated after every issue closes.
 
 ## 2026-08-04 — Issue 391 PR B: the render reads the document. **BATCH B IS COMPLETE.**
 
-**Branch `feat/391-render-from-document`, 2 code commits.** The last piece of Lane L25 Batch B.
+**Merged as PR #73 (`7b8f281`) and deployed; `staging` synced.** The last piece of Lane L25 Batch B.
+CI came back **12 / 12 green** — the first fully-clean matrix of the lane, after Issue 406 cleared
+the `pip_audit` job.
 `POST /clips/{id}/cuts` now sends only `base_revision`; the server renders whatever its own document
 holds at that revision, or 409s. "What I exported" and "what I last saved" are the same thing by
 construction rather than by hoping two copies agreed.
@@ -117,8 +119,11 @@ with no warning.
 | `3043fe4` | `useEditDocument` + `saveScheduler` + `editDocCache` |
 | `68f1672` | Wired `ShortFormEditor`; undo/redo keys; `SaveStatus`; a structural gate |
 
-**Gates.** Backend **2572 passed** (2546 baseline). Frontend **592 passed / 83 files** (549/78).
-Playwright **76 passed** incl. axe on both editor routes. Coverage **83.28%**, *up* from 83.08;
+**Gates.** Backend **2572 passed** (last recorded baseline **2544**, at the #392 close — the 2546
+figure originally written here was an unrecorded interim; corrected 2026-08-04). Frontend
+**592 passed / 83 files** (549/78). Playwright **76 passed** incl. axe on both editor routes.
+Coverage **83.28%** (last recorded figure **83.2** at the Batch A close; the 83.08 comparison
+originally written here appears in no close-out — corrected 2026-08-04);
 clip_engine 92.61 (floor 91.0). ruff/mypy/bandit clean, `tsc -b` + `npm run build` clean, lint
 0 errors. `pip_audit` still fails 6 — **Issue 406**, pre-existing, unrelated.
 Integration/RLS tests need Docker, which this box lacks — **CI-verified only**.
@@ -367,6 +372,11 @@ cuts) and index-keyed cuts both go to **#390**; `restoreMocks` + the prototype-w
 lane branch (`wave/l25-batch-a`).** Batch B (#389 app shell, #390 Timeline v2) is now unblocked and
 inherits a real primitive layer instead of building on native elements.
 
+**Merge/deploy record (back-filled 2026-08-04 — the assessment found it missing from this SoT):**
+merged as **PR #69** (`40a53d3`, 2026-08-03) and deployed to `autoclip.studio`; prod DB moved to
+`0050_poster_frames` (evidenced by the PR #70 entry's "0050 → 0051" below). Until this back-fill the
+only record of an entire production deployment lived in `LEFT_OFF.md`, which is not a source of truth.
+
 | Issue | What landed |
 |---|---|
 | **384** | `lucide-react` behind one swappable seam (`components/ui/icon.tsx`); every emoji/geometric glyph and all ~33 CTA arrows purged. Keep/Drop lose their full-bleed saturation via a new soft `success` variant |
@@ -419,12 +429,23 @@ because it has pre-existing contrast failures from the 2026-06-23 "Soon" preview
    projects, `login-mobile`, `pricing-mobile`) moved. They cannot be generated locally — WSL2 font
    anti-aliasing differs and produces false positives — so this needs
    `gh workflow run ci.yml -f update_snapshots=true --ref wave/l25-batch-a`.
+   → ✅ **CLOSED at the Batch A close-out itself** — commit `4e0dcae` ("regenerate visual baselines
+   on ubuntu-latest for Batch A") landed them; this line was never flipped, which made PR #70's
+   later "passed unchanged, no regeneration needed" read as a contradiction. Reconciled by the
+   2026-08-04 assessment: both statements were true — #70 ran against the `4e0dcae` baselines.
 2. **#387's integration lane has not run.** The RLS-enforced cross-creator cases for the two poster
    endpoints need a real Postgres, and Docker is unavailable on this box. The mocked-session tests
    emulate the `get_owned` predicate; they are not proof that RLS holds.
+   → ✅ **CLOSED 2026-08-04 (close-out wave):** the deferred proof turned out to be UNWRITTEN, not
+   just un-run — `tests/test_isolation.py` had no poster rows. Cross-tenant + owner cases for both
+   poster routes are now in the matrix and execute in CI's integration lane on every PR.
 3. **The ffmpeg poster chain is asserted against mocked `_run`.** It needs one pass over a genuinely
    ugly real file (VFR screen recording, `.mkv` with a broken index, a source shorter than the seek
    offset) during the staging soak.
+   → ✅ **CLOSED 2026-08-04 (close-out wave):** executed locally against real ffmpeg 8.1.2 — VFR
+   10+30fps concat, an mkv truncated to 70%, a 1.5s source with lying 60s metadata (the designed
+   seek-0 retry fired and recovered), unknown-duration short source, and an audio-only file
+   (returned False without raising). 5/5 within contract.
 4. **Toolchain.** Homebrew npm 11.5.2 on node 24.4.0 could not install anything — it exited 1 with an
    empty error and left a half-extracted `node_modules`. Fixed with `brew reinstall node`, which moved
    node to 26.5.1; `frontend/.nvmrc` now pins **22** to match CI's three `node-version` jobs, because
@@ -462,7 +483,7 @@ client-side preview needs the edit document authoritative server-side. #404 requ
 #405 requires #396's override-track infrastructure.
 
 Headline evidence: no icon library in `frontend/package.json`; `components/ui/` is 5 files, so 8
-native `<select>` / 9 native checkboxes / 11 native `<video controls>` ship as-is; the editor
+native `<select>` / 9 native checkboxes / 11 native `<video>` players (8 with `controls`) ship as-is; the editor
 supports one operation (delete a time range) with one-level undo (`Editor.tsx:218`) and
 `localStorage` persistence (`:32`); `LongFormEditor.tsx:131-138` renders a fabricated waveform
 labelled "Source timeline"; `UPLOAD_MAX_MB = 500` rejects typical source footage on a path the ToS

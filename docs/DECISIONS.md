@@ -5,6 +5,62 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-04 — Batch A/B close-out wave (Issues 407–411): four decisions
+
+**1. Conflict roles are structural, and the copy names the situation (407).** `ConflictInfo` gains
+`kind: 'remote' | 'resumed'`; `serverDoc` is documented as ALWAYS the server's document. The
+resume-from-cache branch had crossed the roles — "Keep my edits" saved the server's copy and
+destroyed the unsaved work. The banner copy now distinguishes "edited somewhere else" (remote 409)
+from "unsaved edits from your last session on this device" (resumed cache), because the old copy was
+factually wrong for the resumed case (same revision = nothing was edited elsewhere).
+
+**2. `extra="forbid"` on the paid/render request models only (408).** `CutsIn`, `EditDocumentIn`,
+`CreateClipIn`, `RenderStyleIn`, `TrimRenderIn` — Pydantic v2 defaults to silently dropping unknown
+fields, which made "the legacy `segments` body is REJECTED" untrue. **Deliberately NOT applied
+repo-wide:** `PreferencesPatch` (routers/notifications.py) relies on absent-field tri-state
+semantics by documented design, and non-paid routes carry no render-a-different-thing risk. All
+five frontend call sites verified to post exact field sets before flipping.
+Source: https://pydantic.dev/docs/validation/latest/concepts/models/ (extra data).
+
+**3. The e2e mock's catch-all stays a benign 200 but is no longer silent (409).** Playwright
+prescribes no unmatched-request policy (https://playwright.dev/docs/mock), so ours is: unmodeled
+GETs are recorded per page and reported at teardown, and specs can assert on the `unmatchedGets`
+fixture. A hard global failure was measured and rejected for now: the first instrumented run showed
+`/api/notifications` and `/clips/c1/download` also falling through, and modeling them is not this
+wave's scope. The edit-document routes are modeled statefully (per-page compare-and-set revision)
+with an **empty revision-0 default** so no pixel baseline moves; specs opt into a stored document
+via the `editDocSeed` option.
+
+**4. Disabled-look via muted tokens, not opacity (411).** The off-course log's `aria-hidden`
+one-attribute theory was DISPROVEN by measurement: axe checks visible text for contrast regardless
+of `aria-hidden` (correct — low-vision sighted users still see it; WCAG 1.4.3). The Soon mocks keep
+`aria-hidden` (announcing dead controls is worse than nothing, per MDN's decorative-content
+guidance) but drop `opacity-50`; muted tokens + the Soon badge carry disabled-ness at AA contrast.
+Source: https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Reference/Attributes/aria-hidden.
+
+---
+
+## 2026-08-04 — Retroactive entries for 386, 388, 400b (back-filled by the assessment)
+
+The 2026-08-04 assessment found three documented divergences with no DECISIONS entry — recorded
+now so the log is complete; each decision itself dates to 2026-08-03.
+
+**Issue 386 — volume deliberately omitted from `VideoPlayer`.** Transport, scrub, speed and
+fullscreen shipped; volume did not (system/OS volume suffices for a review tool, and the control
+would have been the primitive's only two-axis widget). The frame-step tooltip states its ASSUMED
+fps rather than implying an accuracy the player does not have. `subscribeTime()` push-down into the
+timeline was deferred to #390, where it landed.
+
+**Issue 388 — a new `ui/disclosure.tsx` primitive over the existing `CollapsibleTool`.**
+`CollapsibleTool` is a review-surface organism (header row, tool framing); the score/readout needed
+a bare native-`<details>` disclosure with none of that. Also a new `Badge` `casing="sentence"`
+variant, because principles are prose, not labels — uppercasing "Curiosity gap" reads as shouting.
+
+**Issue 400b — ~400 legacy `text-xs`/`text-sm` sites deferred.** The composition pass migrated the
+two tool screens to the semantic scale and left the long tail in place, recorded in `docs/UI.md`;
+deleting the legacy scale wholesale would have churned every page for zero visual delta on the
+screens that matter. The debt is bounded and visible (grep `text-xs|text-sm`).
+
 ## 2026-08-04 — Issue 391 (PR B): the render reads the document, and `segments` is deleted
 
 **What was decided.** `POST /clips/{id}/cuts` takes `base_revision` and nothing else. The pre-391
