@@ -18,9 +18,11 @@ import {
   cutWordIndices,
   mergeAdjacent,
   normalizeCut,
+  MIN_CUT_S,
   removeCutById,
 } from '@/lib/editorCuts'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
+import { useEditorShortcuts } from '@/hooks/useEditorShortcuts'
 import { useVideoPeaks } from '@/hooks/useVideoPeaks'
 import type { ClipTranscript, EditorCut, ReviewClip, TranscriptWord } from '@/types'
 import { ArrowLeft, TriangleAlert, X } from '@/components/ui/icon'
@@ -149,6 +151,9 @@ export function ShortFormEditor({
   // Persisted per creator, not per clip: it is a working preference, and having
   // it reset every time you open a different clip would be its own annoyance.
   const [snapEnabled, setSnapEnabled] = useState(readSnapPreference)
+  const [selectedCutId, setSelectedCutId] = useState<string | null>(null)
+  // The in-point set by `I`, waiting for its `O`. Null means "no range open".
+  const [inPoint, setInPoint] = useState<number | null>(null)
 
   // Re-load cuts when the clip changes.
   useEffect(() => {
@@ -182,6 +187,57 @@ export function ShortFormEditor({
   function removeCut(id: string) {
     setUndo(cuts)
     setCuts(removeCutById(cuts, id))
+  }
+
+  function toggleSnap(next: boolean) {
+    setSnapEnabled(next)
+    try {
+      localStorage.setItem(SNAP_PREF_KEY, next ? 'on' : 'off')
+    } catch {
+      // A preference that cannot be persisted still works for this session;
+      // there is nothing to recover and nothing to report.
+    }
+  }
+
+  // Editing keys bind HERE because this component owns the cuts; zoom and
+  // scrubbing bind in TimelineRail, which owns the viewport. Both go through the
+  // one shortcut bus rather than each adding a document listener — two listeners
+  // racing is how a single keypress deletes two cuts.
+  //
+  // I/O is the cross-NLE convention (Kdenlive documents I and O for frame-
+  // accurate in/out): I marks the in-point, O closes the range into a cut.
+  useEditorShortcuts({
+    i: () => {
+      setInPoint(currentTime)
+      setStatus(`In point at ${currentTime.toFixed(2)}s — press O to close the range.`)
+      return true
+    },
+    o: () => {
+      if (inPoint === null) {
+        setStatus('Press I to set an in point first.')
+        return true
+      }
+      const lo = Math.min(inPoint, currentTime)
+      const hi = Math.max(inPoint, currentTime)
+      setInPoint(null)
+      if (hi - lo < MIN_CUT_S) {
+        setStatus('That range is too short to cut.')
+        return true
+      }
+      addTimeCut(lo, hi)
+      setStatus('')
+      return true
+    },
+    s: () => (toggleSnap(!snapEnabled), true),
+    Delete: () => deleteSelected(),
+    Backspace: () => deleteSelected(),
+  })
+
+  function deleteSelected(): boolean {
+    if (!selectedCutId) return false
+    removeCut(selectedCutId)
+    setSelectedCutId(null)
+    return true
   }
 
   /**
@@ -465,6 +521,8 @@ export function ShortFormEditor({
             onCutsChange={applyCutEdit}
             words={words}
             snapEnabled={snapEnabled}
+            selectedCutId={selectedCutId}
+            onSelectCut={setSelectedCutId}
             peaks={peaks}
             sourceStartS={sourceStartS}
           />
@@ -499,19 +557,7 @@ export function ShortFormEditor({
             {/* Content the creator must actually read: on the semantic scale and
                 on text-muted, not 10px text-subtle. */}
             <label className="ml-auto flex shrink-0 items-center gap-2 text-small text-muted">
-              <Switch
-                checked={snapEnabled}
-                onCheckedChange={(on) => {
-                  setSnapEnabled(on)
-                  try {
-                    localStorage.setItem(SNAP_PREF_KEY, on ? 'on' : 'off')
-                  } catch {
-                    // A preference that cannot be persisted still works for this
-                    // session; there is nothing to recover and nothing to report.
-                  }
-                }}
-                aria-label="Snap to words"
-              />
+              <Switch checked={snapEnabled} onCheckedChange={toggleSnap} aria-label="Snap to words" />
               Snap to words
             </label>
           </div>

@@ -36,6 +36,9 @@ interface TimelineProps {
   words?: readonly TranscriptWord[]
   /** Whether snapping is active. Owned by the caller so it can be persisted. */
   snapEnabled?: boolean
+  /** The cut the Delete key acts on. Owned by the caller. */
+  selectedCutId?: string | null
+  onSelectCut?: (id: string | null) => void
   /** Real audio peaks for the PARENT SOURCE, windowed to this clip (Issue 392). */
   peaks?: WaveformPeaks | null
   /** Clip start within the source — the window offset into `peaks`. */
@@ -64,6 +67,8 @@ export function Timeline({
   onCutsChange,
   words = [],
   snapEnabled = true,
+  selectedCutId = null,
+  onSelectCut,
   peaks = null,
   sourceStartS = 0,
   className,
@@ -147,8 +152,15 @@ export function Timeline({
       label="Clip timeline"
       onDrag={(d) => handleDrag(d, d.viewport)}
       onDragEnd={(d) => handleDragEnd(d, d.viewport)}
+      onScrub={onSeek}
       onClick={(hit, time) => {
-        if (hit.kind === 'empty') onSeek(time)
+        if (hit.kind === 'empty') {
+          onSelectCut?.(null)
+          onSeek(time)
+          return
+        }
+        // Clicking a cut selects it, which is what Delete then acts on.
+        onSelectCut?.(hit.kind === 'body' ? hit.cutId : hit.cutId)
       }}
     >
       {(viewport) => (
@@ -170,6 +182,7 @@ export function Timeline({
                 duration={duration}
                 viewport={viewport}
                 snappedTo={preview?.snappedTo}
+                selected={c.id === selectedCutId}
               />
             ))}
 
@@ -206,12 +219,14 @@ function CutRegion({
   duration,
   viewport,
   snappedTo,
+  selected,
 }: {
   cut: EditorCut
   ordinal: number
   duration: number
   viewport: TimelineViewport
   snappedTo?: number
+  selected?: boolean
 }) {
   const left = viewport.timeToX(cut.start_s)
   const right = viewport.timeToX(cut.end_s)
@@ -221,7 +236,10 @@ function CutRegion({
     <div role="group" aria-label={label}>
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 bg-danger opacity-25"
+        className={cn(
+          'pointer-events-none absolute inset-y-0 bg-danger',
+          selected ? 'opacity-40 ring-1 ring-inset ring-danger-border' : 'opacity-25',
+        )}
         style={{ left: `${left}px`, width: `${Math.max(1, right - left)}px` }}
       />
       {(['start', 'end'] as const).map((side) => {

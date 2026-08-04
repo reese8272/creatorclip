@@ -3,6 +3,7 @@ import { TimelineRuler } from '@/components/editor/TimelineRuler'
 import { Button } from '@/components/ui/button'
 import { Maximize, ZoomIn, ZoomOut } from '@/components/ui/icon'
 import { ICON_SIZE } from '@/components/ui/iconSizes'
+import { useEditorShortcuts } from '@/hooks/useEditorShortcuts'
 import { useTimelineViewport, type TimelineViewport } from '@/hooks/useTimelineViewport'
 import { formatTick } from '@/lib/timelineZoom'
 import { hitTest, type TimelineHit } from '@/lib/timelineInteraction'
@@ -43,6 +44,8 @@ export interface TimelineRailProps {
   onDragEnd?: (drag: RailDrag) => void
   /** A press that never became a drag. */
   onClick?: (hit: TimelineHit, time: number) => void
+  /** Keyboard scrubbing. Arrow keys move the playhead through this. */
+  onScrub?: (time: number) => void
   className?: string
 }
 
@@ -81,6 +84,7 @@ export function TimelineRail({
   onDrag,
   onDragEnd,
   onClick,
+  onScrub,
   className,
 }: TimelineRailProps) {
   const railRef = useRef<HTMLDivElement>(null)
@@ -151,6 +155,31 @@ export function TimelineRail({
       onClick?.(drag.hit, drag.fromTime)
     }
   }
+
+  // Zoom and scrubbing bind here because this component owns the viewport they
+  // act on. Editing keys (I/O, Delete) bind in the editor, which owns the cuts.
+  //
+  // A bare arrow steps ONE PIXEL at the current zoom — that is what makes a
+  // fine step actually fine: at fit it is a coarse nudge, and zoomed in it is
+  // frame-accurate, without the user choosing a unit. Shift keeps the player's
+  // familiar 5s jump.
+  const scrubBy = (deltaPx: number, shift: boolean) => {
+    if (!onScrub) return false
+    const step = shift ? 5 : 1 / Math.max(viewport.pxPerSecond, 0.0001)
+    onScrub(Math.min(duration, Math.max(0, currentTime + Math.sign(deltaPx) * step)))
+    return true
+  }
+
+  useEditorShortcuts({
+    '=': () => (zoomIn(), true),
+    '+': () => (zoomIn(), true),
+    '-': () => (zoomOut(), true),
+    '0': () => (zoomToFit(), true),
+    ArrowLeft: (e) => scrubBy(-1, e.shiftKey),
+    ArrowRight: (e) => scrubBy(1, e.shiftKey),
+    'shift+ArrowLeft': (e) => scrubBy(-1, e.shiftKey),
+    'shift+ArrowRight': (e) => scrubBy(1, e.shiftKey),
+  })
 
   const railStyle = { height: laneHeight, cursor }
 
