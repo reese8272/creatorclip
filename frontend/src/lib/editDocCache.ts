@@ -1,4 +1,4 @@
-import { normalizeCut } from './editorCuts'
+import { normalizeCut, toDocumentCuts } from './editorCuts'
 import type { EditDocument, EditDocumentCut } from '@/types'
 
 // localStorage's demotion (Issue 391).
@@ -48,11 +48,11 @@ export function readLegacyCuts(clipId: string): EditDocumentCut[] | null {
   try {
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return null
-    const cuts = parsed
-      .map(normalizeCut)
-      .filter((c): c is NonNullable<ReturnType<typeof normalizeCut>> => c !== null)
-      // `indices` is derived and deliberately not persisted server-side.
-      .map(({ id, start_s, end_s }) => ({ id, start_s, end_s }))
+    const cuts = toDocumentCuts(
+      parsed
+        .map(normalizeCut)
+        .filter((c): c is NonNullable<ReturnType<typeof normalizeCut>> => c !== null),
+    )
     return cuts.length ? cuts : null
   } catch {
     return null

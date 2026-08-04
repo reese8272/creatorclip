@@ -180,7 +180,13 @@ export function Editor() {
             </Button>
           </div>
         ) : (
+          // `key` is load-bearing, not a hint (Issue 391). Switching clips must
+          // REMOUNT the editor so its undo history and edit document start
+          // clean. The previous code reset cut state in an effect instead, and
+          // the single undo slot was never cleared — so pressing undo on clip B
+          // could restore clip A's cuts onto it.
           <ShortFormEditor
+            key={clip.id}
             className="min-h-0 flex-1"
             clip={clip}
             videoId={videoId}
