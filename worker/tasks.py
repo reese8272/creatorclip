@@ -33,6 +33,7 @@ from models import (
     ChatMessage,
     ChatRole,
     Clip,
+    ClipEditDocument,
     ClipFeedback,
     ClipFormat,
     ClipOutcome,
@@ -4329,6 +4330,15 @@ async def _collect_creator_export(session: Any, creator: Creator) -> dict:
             )
             if clip_ids
             else []
+        ),
+        # The creator's own editorial decisions (Issue 391) — cut lists they
+        # authored, so they are squarely in scope for portability. Scoped by
+        # creator_id directly rather than through clip_ids: the column is
+        # denormalised onto the row for exactly this kind of direct scoping,
+        # and it means an orphaned document could never escape the filter.
+        "clip_edit_documents": await _all(
+            select(ClipEditDocument).where(ClipEditDocument.creator_id == cid),
+            ClipEditDocument.id,
         ),
         "chat_conversations": convos,
         "chat_messages": (
