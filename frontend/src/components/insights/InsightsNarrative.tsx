@@ -20,6 +20,7 @@ import { api } from '@/lib/api'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { Panel } from '@/components/insights/InsightsPanel'
+import { Disclosure } from '@/components/ui/disclosure'
 import type { Analytics, InsightsResponse } from '@/types'
 import { TrendingDown, TrendingUp } from '@/components/ui/icon'
 import { ICON_SIZE } from '@/components/ui/iconSizes'
@@ -214,61 +215,71 @@ export function InsightsFraming({ data }: InsightsFramingProps) {
       title="What this is showing — and why it matters"
       sub="Your channel, grounded in your own data"
     >
-      <div className="space-y-4 text-sm leading-relaxed text-muted">
-        <p>
-          <span className="font-medium text-fg">Channel snapshot</span> shows how many
-          videos AutoClip has ingested and processed from your channel. Higher ingested
-          counts mean your DNA profile is based on more of your own content — which makes
-          clip scoring more accurate.
-        </p>
-
-        {hasDna ? (
+      {/* One visible line, details behind a Disclosure (Issue 412): the page
+          used to open on ~350 words of explainer before any data, which is
+          the reading order of a manual, not a report. The honesty footnote
+          stays visible — it is load-bearing, not detail. */}
+      <p className="text-sm leading-relaxed text-muted">
+        Everything below is computed from your own YouTube Analytics and ranked against
+        your channel's DNA — never a generic virality score.
+      </p>
+      <Disclosure summary="What each panel means" className="mt-3">
+        <div className="space-y-4 text-sm leading-relaxed text-muted">
           <p>
-            <span className="font-medium text-fg">Your DNA</span> (v{dna.version},{' '}
-            {dna.status}) is the model of your channel style. It was learned from{' '}
-            {topCount > 0 ? `your top ${topCount} performer${topCount !== 1 ? 's' : ''}` : 'your top videos'}
-            {bottomCount > 0
-              ? ` and contrasted with ${bottomCount} underperformer${bottomCount !== 1 ? 's' : ''}`
-              : ''}
-            . Every clip score is ranked against this DNA — not against a generic
-            virality benchmark.
+            <span className="font-medium text-fg">Channel snapshot</span> shows how many
+            videos AutoClip has ingested and processed from your channel. Higher ingested
+            counts mean your DNA profile is based on more of your own content — which makes
+            clip scoring more accurate.
           </p>
-        ) : (
+
+          {hasDna ? (
+            <p>
+              <span className="font-medium text-fg">Your DNA</span> (v{dna.version},{' '}
+              {dna.status}) is the model of your channel style. It was learned from{' '}
+              {topCount > 0 ? `your top ${topCount} performer${topCount !== 1 ? 's' : ''}` : 'your top videos'}
+              {bottomCount > 0
+                ? ` and contrasted with ${bottomCount} underperformer${bottomCount !== 1 ? 's' : ''}`
+                : ''}
+              . Every clip score is ranked against this DNA — not against a generic
+              virality benchmark.
+            </p>
+          ) : (
+            <p>
+              <span className="font-medium text-fg">Your DNA</span> hasn't been built yet.
+              Once you sync your channel and run DNA build, this page will show which videos
+              drove your style and why — grounded in your actual analytics, not generic advice.
+            </p>
+          )}
+
+          {topCount > 0 && (
+            <p>
+              <span className="font-medium text-fg">Top performers</span> below are the
+              videos that outperformed your channel average on retention, engagement, and
+              reach — the three signals AutoClip uses to score clips. Each row shows a
+              one-line "why" derived from your own metrics.
+            </p>
+          )}
+
+          {bottomCount > 0 && (
+            <p>
+              <span className="font-medium text-fg">Underperformers</span> are the contrast
+              set — useful for understanding which content patterns didn't resonate with your
+              audience. AutoClip uses both lists to sharpen clip selection.
+            </p>
+          )}
+
           <p>
-            <span className="font-medium text-fg">Your DNA</span> hasn't been built yet.
-            Once you sync your channel and run DNA build, this page will show which videos
-            drove your style and why — grounded in your actual analytics, not generic advice.
+            <span className="font-medium text-fg">What changed this week</span> compares
+            your last 7 days to your 28-day average. It tells you whether your channel
+            velocity is accelerating or cooling down — not what went viral.
           </p>
-        )}
+        </div>
+      </Disclosure>
 
-        {topCount > 0 && (
-          <p>
-            <span className="font-medium text-fg">Top performers</span> below are the
-            videos that outperformed your channel average on retention, engagement, and
-            reach — the three signals AutoClip uses to score clips. Each row shows a
-            one-line "why" derived from your own metrics.
-          </p>
-        )}
-
-        {bottomCount > 0 && (
-          <p>
-            <span className="font-medium text-fg">Underperformers</span> are the contrast
-            set — useful for understanding which content patterns didn't resonate with your
-            audience. AutoClip uses both lists to sharpen clip selection.
-          </p>
-        )}
-
-        <p>
-          <span className="font-medium text-fg">What changed this week</span> compares
-          your last 7 days to your 28-day average. It tells you whether your channel
-          velocity is accelerating or cooling down — not what went viral.
-        </p>
-
-        <p className="text-xs text-subtle">
-          All figures are estimates derived from your YouTube Analytics data. They do not
-          predict future performance or promise any outcome.
-        </p>
-      </div>
+      <p className="mt-3 text-small text-subtle">
+        All figures are estimates derived from your YouTube Analytics data. They do not
+        predict future performance or promise any outcome.
+      </p>
     </Panel>
   )
 }

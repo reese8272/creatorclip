@@ -20,11 +20,27 @@ import { ArrowRight, SettingsIcon } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // Sidebar Library stat row.
-function StatRow({ label, value, top }: { label: string; value: string; top?: boolean }) {
+function StatRow({
+  label,
+  value,
+  top,
+  emptyHint,
+}: {
+  label: string
+  value: string
+  top?: boolean
+  /** Shown instead of a bare em-dash: what fills this stat, and where (Issue 412). */
+  emptyHint?: string
+}) {
+  const empty = value === '\u2014'
   return (
-    <div className={`flex justify-between py-2 text-small ${top ? 'border-t border-default' : ''}`}>
-      <span className="text-muted">{label}</span>
-      <span className="font-mono font-semibold text-fg">{value}</span>
+    <div className={`flex justify-between gap-3 py-2 text-small ${top ? 'border-t border-default' : ''}`}>
+      <span className="shrink-0 text-muted">{label}</span>
+      {empty && emptyHint ? (
+        <span className="text-right text-subtle">{emptyHint}</span>
+      ) : (
+        <span className="font-mono font-semibold text-fg">{value}</span>
+      )}
     </div>
   )
 }
@@ -145,8 +161,8 @@ export function Profile() {
               <div className="flex flex-col">
                 <StatRow label="Videos" value={String(videos.length)} />
                 <StatRow label="Clips rendered" value={String(clipsRendered)} top />
-                <StatRow label="Shorts published" value="—" top />
-                <StatRow label="Clip ratings" value="—" top />
+                <StatRow label="Shorts published" value="—" top emptyHint="none yet — publish from Review" />
+                <StatRow label="Clip ratings" value="—" top emptyHint="none yet — keep/drop clips in Review" />
               </div>
             </div>
             <AnalyticsPanel variant="sidebar" />

@@ -205,7 +205,7 @@ export function Walkthrough() {
         </div>
 
         <div className="rounded-lg border border-default bg-surface px-8 py-10 shadow-md inset-shadow-highlight">
-          <div className="mb-3 font-mono text-xs uppercase tracking-wide text-subtle">
+          <div className="mb-3 text-xs uppercase tracking-wide text-subtle">
             {panel.step}
           </div>
           <h1 className="mb-4 text-h1 text-fg">{panel.title}</h1>

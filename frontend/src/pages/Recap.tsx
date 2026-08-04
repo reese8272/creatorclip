@@ -39,7 +39,7 @@ function SegmentRow({ segment, index }: { segment: SummarySegment; index: number
         </span>
         <FitBadge tier={fitTier(segment.score)} />
         {segment.principle && (
-          <span className="font-mono text-xs text-subtle">{segment.principle}</span>
+          <span className="text-xs text-subtle">{segment.principle}</span>
         )}
       </div>
       {segment.rationale && <p className="text-xs text-muted">{segment.rationale}</p>}

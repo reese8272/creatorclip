@@ -7,7 +7,7 @@ import { StageStepper } from '@/components/dashboard/StageStepper'
 import { SOURCE_NEEDED_HELP, STATUS_VARIANT } from '@/components/dashboard/videoStatus'
 import { useStageStream } from '@/hooks/useStageStream'
 import type { AnalysisMode, IngestStatus, Video } from '@/types'
-import { videoMetaLine } from '@/lib/videoMeta'
+import { untitledLabel, videoMetaLine } from '@/lib/videoMeta'
 import { PosterThumb } from '@/components/media/PosterThumb'
 
 export interface ClipInfo {
@@ -108,7 +108,7 @@ function VideoRow({
               className="max-w-[220px] truncate text-fg"
               title={video.youtube_video_id ?? undefined}
             >
-              {video.title || <Badge variant="muted">Untitled</Badge>}
+              {video.title || <span className="italic text-muted">{untitledLabel(video)}</span>}
             </div>
             <div className="text-small text-muted">{videoMetaLine(video)}</div>
           </div>

@@ -35,3 +35,16 @@ export function videoMetaLine(video: Pick<Video, 'kind' | 'duration_s' | 'create
     .filter(Boolean)
     .join(' · ')
 }
+
+/**
+ * Label for a video with no title (Issue 412): "Untitled · Jun 12". Derived
+ * from the upload date because that is how a creator tells two untitled
+ * uploads apart; the old uppercase UNTITLED badge read as debug output on the
+ * primary library surface. There is no filename field to derive from —
+ * the backend never stores one.
+ */
+export function untitledLabel(video: Pick<Video, 'created_at'>): string {
+  const d = new Date(video.created_at)
+  if (Number.isNaN(d.getTime())) return 'Untitled'
+  return `Untitled · ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+}

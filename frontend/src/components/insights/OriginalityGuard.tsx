@@ -60,7 +60,7 @@ export function OriginalityGuard({
       <Panel id="originality-guard" title="Originality guard">
         <p className="text-sm text-fg">
           Nothing flagged across your last{' '}
-          <span className="font-mono font-semibold text-accent-text">{advisory.window}</span>{' '}
+          <span className="font-semibold text-accent-text">{advisory.window}</span>{' '}
           clips.
         </p>
         <p className="mt-2 text-xs text-subtle">
@@ -74,8 +74,8 @@ export function OriginalityGuard({
   return (
     <Panel id="originality-guard" title="Originality guard">
       <p className="text-sm text-fg">
-        <span className="font-mono font-semibold text-accent-text">{advisory.cluster_size}</span>{' '}
-        of your last <span className="font-mono">{advisory.window}</span> clips are near-identical
+        <span className="font-semibold text-accent-text">{advisory.cluster_size}</span>{' '}
+        of your last <span className="font-semibold">{advisory.window}</span> clips are near-identical
         in spoken content.
         {advisory.common_structural_features.length > 0 && (
           <>

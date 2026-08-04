@@ -52,7 +52,7 @@ export function HookAnalyzer({ videoId }: { videoId: string }) {
       {report && (
         <div className="flex flex-col gap-4">
           <span
-            className={`inline-flex w-fit items-center gap-2 rounded-md border border-default bg-bg px-3 py-2 font-mono text-xs ${
+            className={`inline-flex w-fit items-center gap-2 rounded-md border border-default bg-bg px-3 py-2 text-xs ${
               report.retention_drop_at_s != null ? 'text-danger' : 'text-success'
             }`}
           >
@@ -66,7 +66,7 @@ export function HookAnalyzer({ videoId }: { videoId: string }) {
               <div className="mb-1 text-xs uppercase tracking-[0.06em] text-muted">
                 Transcript at drop
               </div>
-              <div className="rounded-r-md border-l-[3px] border-accent bg-bg px-3 py-2 font-mono text-xs text-subtle">
+              <div className="rounded-r-md border-l-[3px] border-accent bg-bg px-3 py-2 text-xs text-subtle">
                 {report.transcript_at_drop}
               </div>
             </div>

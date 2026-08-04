@@ -256,7 +256,7 @@ function ExplainClipCard({ clipId }: { clipId: string }) {
         <>
           <p className="mb-2 leading-relaxed text-fg">{mutation.data.explanation}</p>
           <p className="mb-1 text-subtle">
-            Principle: <span className="font-mono text-accent-text">{mutation.data.cited_principle}</span>
+            Principle: <span className="text-accent-text">{mutation.data.cited_principle}</span>
           </p>
           <p className="text-subtle italic">{mutation.data.disclaimer}</p>
         </>
