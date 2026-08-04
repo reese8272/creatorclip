@@ -392,3 +392,238 @@ def test_put_rejects_a_negative_base_revision(client):
         app.dependency_overrides.clear()
 
     assert resp.status_code == 422
+
+
+# ── The render path reads the document (Issue 391, PR B) ─────────────────────
+#
+# POST /clips/{id}/cuts is PAID, flag-gated and budget-checked, and it feeds a
+# Celery task whose idempotency probe silently drops an edit if a cleaned
+# artifact already exists. These tests pin the parts that must not move.
+
+
+def _render_clip(creator_id, duration_s=CLIP_DURATION_S):
+    from models import Clip, RenderStatus
+
+    clip = MagicMock(spec=Clip)
+    clip.id = uuid.uuid4()
+    clip.creator_id = creator_id
+    clip.video_id = uuid.uuid4()
+    clip.setup_start_s = 0.0
+    clip.start_s = 0.0
+    clip.end_s = duration_s
+    clip.render_status = RenderStatus.done
+    clip.render_uri = "clips/x.mp4"
+    clip.cleaned_render_uri = None
+    return clip
+
+
+def _post_cuts(creator, clip, body, *, scalar_results=None):
+    """POST /cuts with the Celery enqueue and balance check stubbed out."""
+    from unittest.mock import patch
+
+    from main import app
+
+    _install(creator, clip, scalar_results=scalar_results)
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.edit_clip") as mock_task,
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        mock_task.delay.return_value = MagicMock(id="task-edit-1")
+        try:
+            resp = client_ref["client"].post(f"/clips/{clip.id}/cuts", json=body)
+        finally:
+            app.dependency_overrides.clear()
+    return resp, mock_task
+
+
+client_ref: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def _capture_client(client):
+    client_ref["client"] = client
+    yield
+
+
+def test_render_uses_the_document_not_the_posted_segments(client):
+    """The whole point of PR B: what gets rendered is what the server holds."""
+    creator = _mock_creator()
+    clip = _render_clip(creator.id)
+    doc = {"version": 1, "cuts": [_cut("a", 2.0, 4.0)], "last_applied_at": None}
+
+    resp, mock_task = _post_cuts(
+        creator, clip, {"base_revision": 3}, scalar_results=[_mock_row(3, doc)]
+    )
+
+    assert resp.status_code == 202, resp.text
+    # The Celery payload is built from the DOCUMENT.
+    args = mock_task.delay.call_args[0]
+    assert args[1] == [[2.0, 4.0]]
+
+
+def test_render_409s_when_the_document_moved_on(client):
+    """A creator who kept editing in another tab after pressing Export must not
+    spend a paid render slot on the older list."""
+    creator = _mock_creator()
+    clip = _render_clip(creator.id)
+    doc = {"version": 1, "cuts": [_cut("newer", 1.0, 2.0)], "last_applied_at": None}
+
+    resp, mock_task = _post_cuts(
+        creator, clip, {"base_revision": 3}, scalar_results=[_mock_row(9, doc)]
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "stale_revision"
+    assert resp.json()["detail"]["revision"] == 9
+    mock_task.delay.assert_not_called()
+
+
+def test_render_still_applies_the_full_caps_to_the_document(client):
+    """The render boundary keeps BOTH caps even though save does not."""
+    creator = _mock_creator()
+    clip = _render_clip(creator.id)
+    doc = {"version": 1, "cuts": [_cut("a", 0.0, 54.0)], "last_applied_at": None}
+
+    resp, mock_task = _post_cuts(
+        creator, clip, {"base_revision": 1}, scalar_results=[_mock_row(1, doc)]
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"]["code"] == "removed_too_much"
+    mock_task.delay.assert_not_called()
+
+
+def test_render_keeps_the_pending_clean_or_edit_409(client):
+    """SEV1 regression pin. Losing this guard lets the worker's idempotency probe
+    silently drop the creator's edit."""
+    creator = _mock_creator()
+    clip = _render_clip(creator.id)
+    clip.cleaned_render_uri = "clips/x_edit.mp4"
+
+    resp, mock_task = _post_cuts(creator, clip, {"base_revision": 0})
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "pending_clean_or_edit"
+    mock_task.delay.assert_not_called()
+
+
+def test_render_post_keeps_its_full_dependency_list():
+    """SEV1 regression pin, read off the SOURCE rather than FastAPI internals.
+
+    The document endpoints deliberately carry none of these — that asymmetry is
+    the design ("saving is always allowed; exporting is gated"), so it is exactly
+    the kind of thing a later refactor could "harmonise" away. Pin both halves.
+    """
+    import ast
+    import copy
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parents[1] / "routers" / "clips.py"
+    tree = ast.parse(src.read_text())
+
+    def _code(node):
+        """Decorators + body, with the DOCSTRING stripped.
+
+        Without this the assertions match the prose that explains why a guard is
+        absent — `put_edit_document`'s docstring names `pending_clean_or_edit`
+        precisely to say it does not have one.
+        """
+        stripped = copy.deepcopy(node)
+        if (
+            stripped.body
+            and isinstance(stripped.body[0], ast.Expr)
+            and isinstance(stripped.body[0].value, ast.Constant)
+            and isinstance(stripped.body[0].value.value, str)
+        ):
+            stripped.body = stripped.body[1:]
+        return ast.unparse(stripped)
+
+    handlers = {
+        node.name: _code(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
+    }
+
+    # ast.unparse normalises string quoting, so match on the bare tokens.
+    submit = handlers["submit_cuts"]
+    for needed in (
+        "require_flag",
+        "render_intake",
+        "require_budget",
+        "check_positive_balance",
+        "20/hour",
+        "RENDER_DAILY_LIMIT",
+        "pending_clean_or_edit",
+    ):
+        assert needed in submit, f"submit_cuts lost {needed!r} — it is a PAID, gated route"
+
+    for name in ("get_edit_document", "put_edit_document"):
+        doc_handler = handlers[name]
+        assert "require_flag" not in doc_handler, f"{name} must not be kill-switched"
+        assert "require_budget" not in doc_handler, f"{name} must not be budget-gated"
+        assert "check_positive_balance" not in doc_handler, (
+            f"{name} must not check the balance — a creator at zero must still "
+            "be able to see and save their work"
+        )
+    assert "pending_clean_or_edit" not in handlers["put_edit_document"], (
+        "the pending-render 409 is a render-queue invariant, not an editing one; "
+        "blocking saves while a render is pending is the failure Issue 391 removes"
+    )
+
+
+def test_render_rejects_an_empty_body(client):
+    """Neither base_revision nor segments — a 422, not a 500."""
+    creator = _mock_creator()
+    clip = _render_clip(creator.id)
+    resp, mock_task = _post_cuts(creator, clip, {})
+    assert resp.status_code == 422, resp.text
+    mock_task.delay.assert_not_called()
+
+
+def test_clean_confirm_clears_the_document_and_returns_the_new_revision(client):
+    """Confirm bakes the edit into render_uri, so the document must be emptied or
+    the next export cuts the same spans out of an already-shortened render."""
+
+    from main import app
+
+    creator = _mock_creator()
+    clip = _render_clip(creator.id)
+    clip.cleaned_render_uri = "clips/x_edit.mp4"
+
+    captured = _install(creator, clip, execute_after_owned=[_result_rows((4,))])
+    try:
+        resp = client.post(f"/clips/{clip.id}/clean/confirm")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "swapped"
+    assert resp.json()["edit_revision"] == 4
+
+    # The second statement is the document clear, and it must be an UPDATE.
+    assert "UPDATE clip_edit_documents" in str(captured[1]).replace("\n", " ")
+
+
+def test_clean_discard_does_not_touch_the_document(client):
+    """The creator rejected that render; their cuts still describe an edit that
+    has NOT been applied. Clearing here would delete work they never applied."""
+    from unittest.mock import patch
+
+    from main import app
+
+    creator = _mock_creator()
+    clip = _render_clip(creator.id)
+    clip.cleaned_render_uri = "clips/x_edit.mp4"
+
+    captured = _install(creator, clip)
+    try:
+        with patch("worker.storage.adelete_file", AsyncMock()):
+            resp = client.post(f"/clips/{clip.id}/clean/discard")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "discarded"
+    statements = " ".join(str(s).replace("\n", " ") for s in captured)
+    assert "clip_edit_documents" not in statements, "discard must leave the edit document alone"

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -826,6 +826,10 @@ class CleanConfirmOut(BaseModel):
     render_uri: str | None
     cleaned_render_uri: str | None  # always None after a successful swap
     status: str  # "swapped" | "noop"
+    # Issue 391 — the revision the edit document was left at after being cleared,
+    # so the client can adopt it rather than discovering the bump as a 409 on its
+    # next autosave. None when the clip has no document (nothing to clear).
+    edit_revision: int | None = None
 
 
 class CleanDiscardOut(BaseModel):
@@ -982,7 +986,13 @@ async def clean_confirm(
     ``cleaned_render_uri``. The original mp4 falls under the existing R2
     lifecycle prefix (no new cleanup code needed). Idempotent: if the swap
     has already happened (``cleaned_render_uri`` is null) the endpoint
-    returns 200 with ``status="noop"`` so router-retry is safe (Issue 134)."""
+    returns 200 with ``status="noop"`` so router-retry is safe (Issue 134).
+
+    Issue 391 — the swap BAKES the edit into ``render_uri``, so the edit
+    document is cleared in the same transaction. Leaving it populated would make
+    the next export cut the same spans a second time, out of an already-shortened
+    render. ``/clean/discard`` deliberately does not do this.
+    """
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     if not clip.cleaned_render_uri:
         return {
@@ -993,12 +1003,16 @@ async def clean_confirm(
         }
     clip.render_uri = clip.cleaned_render_uri
     clip.cleaned_render_uri = None
+    # Same transaction as the swap: a crash between the two must not leave a
+    # render whose cuts are applied AND a document that still describes them.
+    edit_revision = await _clear_edit_document(session, clip_id)
     await session.commit()
     return {
         "clip_id": str(clip_id),
         "render_uri": clip.render_uri,
         "cleaned_render_uri": None,
         "status": "swapped",
+        "edit_revision": edit_revision,
     }
 
 
@@ -1066,9 +1080,20 @@ class CutSegmentIn(BaseModel):
 
 
 class CutsIn(BaseModel):
-    """Request body for POST /clips/{id}/cuts."""
+    """Request body for POST /clips/{id}/cuts.
 
-    segments: list[CutSegmentIn]
+    Issue 391 — the render now reads the SERVER-SIDE edit document rather than
+    trusting a cut list posted alongside the request. The client sends the
+    revision it last saw; the server renders whatever that revision holds, and
+    409s if it has moved on. That closes the window where a creator's most
+    recent autosave and the list they exported could disagree.
+
+    ``segments`` is the pre-391 shape, kept only for the length of this issue so
+    the server can ship before the client. It is deleted in the next commit.
+    """
+
+    base_revision: int | None = Field(default=None, ge=0)
+    segments: list[CutSegmentIn] | None = None
 
 
 class CutsQueuedOut(TaskQueuedOut):
@@ -1154,6 +1179,12 @@ async def submit_cuts(
     # Issue-135 audit fix — mirror /clean: refuse if a pending cleaned/edited
     # artifact already exists, else the worker idempotency probe at
     # tasks.py:1006 silently drops this edit.
+    #
+    # THIS GUARD STAYS ON THE RENDER POST AND NOWHERE ELSE (Issue 391). It is a
+    # render-queue invariant, not an editing one: the document PUT deliberately
+    # does NOT carry it, because blocking saves while a cleaned render is pending
+    # is the "creator's work destroyed" class this issue exists to remove.
+    # Saving is always allowed; exporting is gated.
     if clip.cleaned_render_uri:
         raise HTTPException(
             status_code=409,
@@ -1164,11 +1195,10 @@ async def submit_cuts(
         )
     clip_duration_s = _clip_duration_s(clip)
 
+    segments = await _cut_segments_for_render(session, clip_id, body)
+
     try:
-        validate_user_cuts(
-            [(s.start_s, s.end_s) for s in body.segments],
-            clip_duration_s=clip_duration_s,
-        )
+        validate_user_cuts(segments, clip_duration_s=clip_duration_s)
     except CutValidationError as exc:
         raise HTTPException(
             status_code=422, detail={"code": exc.code, "message": str(exc)}
@@ -1176,7 +1206,7 @@ async def submit_cuts(
 
     from worker.tasks import edit_clip as edit_task
 
-    payload = [[s.start_s, s.end_s] for s in body.segments]
+    payload = [[start_s, end_s] for start_s, end_s in segments]
     task, stream_url = await enqueue_stream_task(
         edit_task,
         str(clip_id),
@@ -1383,6 +1413,79 @@ def _clip_duration_s(clip: Clip) -> float:
     """
     origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
     return clip.end_s - origin_s
+
+
+async def _cut_segments_for_render(
+    session: AsyncSession, clip_id: uuid.UUID, body: "CutsIn"
+) -> list[tuple[float, float]]:
+    """Resolve the cut list a render should use (Issue 391).
+
+    When the client supplies ``base_revision`` the SERVER's document is the
+    source of truth: whatever that revision holds is what gets rendered. A
+    mismatch is a 409 rather than a silent render of the wrong list — the
+    creator may have kept editing in another tab after pressing Export, and
+    rendering the older list would spend a paid render slot on work they have
+    already replaced.
+
+    The ``segments`` branch is the pre-391 shape and exists only so the server
+    can ship before the client. It is deleted in the next commit.
+    """
+    if body.base_revision is None:
+        if body.segments is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "empty", "message": "at least one cut segment is required"},
+            )
+        return [(s.start_s, s.end_s) for s in body.segments]
+
+    row = await session.scalar(select(ClipEditDocument).where(ClipEditDocument.clip_id == clip_id))
+    current_revision = row.revision if row else 0
+    if current_revision != body.base_revision:
+        from clip_engine.edits import empty_document
+
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "stale_revision",
+                "message": "Your edit changed somewhere else. Reload before exporting.",
+                "revision": current_revision,
+                "doc": row.doc if row else empty_document(),
+            },
+        )
+
+    cuts = (row.doc or {}).get("cuts", []) if row else []
+    return [(float(c["start_s"]), float(c["end_s"])) for c in cuts]
+
+
+async def _clear_edit_document(session: AsyncSession, clip_id: uuid.UUID) -> int | None:
+    """Empty the clip's edit document, returning the new revision (Issue 391).
+
+    Called by ``/clean/confirm``, which BAKES the edit into ``render_uri``: the
+    cuts have been applied, so leaving them in the document would make the next
+    export cut the same spans a second time out of an already-shortened render.
+
+    ``/clean/discard`` deliberately does NOT call this — the creator rejected
+    that render, and their cuts still describe an edit that has not been applied.
+
+    Unconditional rather than compare-and-set: the server is the actor here, and
+    there is no client revision to check it against. The bump is what tells the
+    client its cached revision is stale; the confirm response carries the new one
+    so the client can adopt it instead of discovering it via a 409.
+    """
+    from clip_engine.edits import empty_document
+
+    result = await session.execute(
+        update(ClipEditDocument)
+        .where(ClipEditDocument.clip_id == clip_id)
+        .values(
+            doc=empty_document(),
+            revision=ClipEditDocument.revision + 1,
+            updated_at=datetime.now(UTC),
+        )
+        .returning(ClipEditDocument.revision)
+    )
+    row = result.first()
+    return row[0] if row else None
 
 
 class EditDocumentOut(BaseModel):
