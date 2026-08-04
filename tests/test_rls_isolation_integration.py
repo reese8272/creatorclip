@@ -29,11 +29,13 @@ from config import settings
 from models import (
     AudienceActivity,
     Clip,
+    ClipEditDocument,
     ClipFeedback,
     ClipFormat,
     Creator,
     CreatorDna,
     CreatorInsight,
+    CreatorStyleNotes,
     Demographics,
     DnaEmbedding,
     DnaEmbeddingKind,
@@ -50,7 +52,9 @@ from models import (
     RenderStatus,
     Usage,
     Video,
+    VideoFeedback,
     VideoKind,
+    VideoSentiment,
     YoutubeToken,
 )
 
@@ -191,6 +195,34 @@ async def _seed_all_tenant_rows(session: AsyncSession, creator_id: uuid.UUID) ->
             content="x",
         )
     )
+    # The two tables whose policies 0048/0049 wrote with the pre-0045 bare cast,
+    # repaired in 0052. They are seeded HERE, not only listed in _TENANT_TABLES,
+    # because the clean-deny proof is vacuous on an empty table.
+    session.add(
+        VideoFeedback(
+            creator_id=creator_id,
+            video_id=video.id,
+            sentiment=VideoSentiment.positive,
+            feedback_tags=["x"],
+        )
+    )
+    session.add(
+        CreatorStyleNotes(
+            creator_id=creator_id,
+            notes_text="x",
+            source_count=1,
+            last_input_at=now,
+        )
+    )
+    # Issue 391 — the server-authoritative edit document.
+    session.add(
+        ClipEditDocument(
+            clip_id=clip.id,
+            creator_id=creator_id,
+            doc={"version": 1, "cuts": [], "last_applied_at": None},
+            revision=1,
+        )
+    )
     await session.commit()
 
 
@@ -199,8 +231,11 @@ async def _cleanup(session: AsyncSession, creator_ids: list[uuid.UUID]) -> None:
     FK constraints (clips before videos, etc.). MinutePack and Usage don't
     cascade from creator delete in the model; clear explicitly."""
     for table_model in (
+        ClipEditDocument,
         ClipFeedback,
         Clip,
+        VideoFeedback,
+        CreatorStyleNotes,
         DnaEmbedding,
         CreatorDna,
         AudienceActivity,
@@ -221,12 +256,20 @@ async def _cleanup(session: AsyncSession, creator_ids: list[uuid.UUID]) -> None:
 # migration 0010's _TENANT_TABLES; improvement_briefs + creator_insights were the
 # two stragglers that 0010 missed (added their RLS policy in migration 0038 after the
 # Issue 340b sweep found them unprotected — see docs/OFF_COURSE_BUGS.md 2026-06-30).
+# video_feedback (0048), creator_style_notes (0049) and clip_edit_documents (0052)
+# were added by Issue 391: the first two are the tables whose policies used the
+# pre-0045 bare `::uuid` cast, and the reason that went unnoticed is that the
+# clean-deny test below used to hardcode ("clips", "signals") instead of iterating
+# this tuple. Every name here MUST also be seeded in _seed_all_tenant_rows —
+# an unseeded table makes the clean-deny assertion pass vacuously.
 _TENANT_TABLES = (
     "audience_activity",
+    "clip_edit_documents",
     "clip_feedback",
     "clips",
     "creator_dna",
     "creator_insights",
+    "creator_style_notes",
     "demographics",
     "dna_embeddings",
     "improvement_briefs",
@@ -234,6 +277,7 @@ _TENANT_TABLES = (
     "minute_packs",
     "preference_models",
     "usage",
+    "video_feedback",
     "videos",
     "youtube_tokens",
 )
@@ -662,9 +706,22 @@ async def test_reused_connection_guc_less_query_denies_cleanly(admin_engine, db_
     Post-0045 the ``NULLIF(..., '')::uuid`` form degrades '' to NULL and the
     policy denies cleanly: zero rows, no exception — the same deny-by-default
     behaviour as a fresh connection with the GUC truly unset.
+
+    Issue 391 — this test used to iterate a hardcoded ``("clips", "signals")``
+    rather than the tenant-table tuples. That is precisely why the ``0048`` /
+    ``0049`` regression survived: both migrations were written after ``0045``
+    but copied the pre-``0045`` template, and no test looked at their tables.
+    It now sweeps EVERY policied table, direct and child, so a future migration
+    that copies the wrong template fails here instead of in production.
     """
+    from sqlalchemy.exc import DBAPIError
+
     seeded = await _seed_creator_with_children(db_session, label="reuse")
     try:
+        # The child seeder covers the FK-chained tables; this covers the
+        # direct-column ones, so every table in the sweep below has a row and
+        # the clean-deny assertion cannot pass vacuously.
+        await _seed_all_tenant_rows(db_session, seeded["creator_id"])
         # ONE raw connection held across both transactions — the pooled-reuse shape.
         async with admin_engine.connect() as conn:
             # ── txn1: a "previous request" sets the GUC and reads tenant data ──
@@ -686,10 +743,21 @@ async def test_reused_connection_guc_less_query_denies_cleanly(admin_engine, db_
                 "if this returns NULL, the reused-connection quirk this test pins has changed"
             )
             await conn.execute(text("SET LOCAL ROLE creatorclip_app"))
-            # Direct-column policy (clips) and parent-subquery policy (signals):
-            # both must deny CLEANLY — zero rows, no uuid-cast exception.
-            for table in ("clips", "signals"):
-                rows = (await conn.execute(text(f"SELECT * FROM {table}"))).all()
+            # Both policy shapes — direct-column and parent-subquery — across
+            # every policied table. A table still on the bare `::uuid` cast
+            # raises SQLSTATE 22P02 here rather than returning zero rows, so
+            # this loop catches the wrong template two ways: an exception, or a
+            # leak. Failure names the table, which is the actionable part.
+            for table in _TENANT_TABLES + tuple(t for t, _ in _CHILD_TABLES):
+                try:
+                    rows = (await conn.execute(text(f"SELECT * FROM {table}"))).all()
+                except DBAPIError as exc:  # pragma: no cover - the regression path
+                    pytest.fail(
+                        f"clean deny RAISED on {table} instead of returning zero rows: "
+                        f"{exc}. The tenant_isolation policy is almost certainly using "
+                        "the pre-0045 bare `current_setting(...)::uuid` cast; it must be "
+                        "NULLIF(current_setting('app.creator_id', true), '')::uuid."
+                    )
                 assert rows == [], (
                     f"clean deny failed on {table}: {len(rows)} rows visible with the "
                     "empty-string GUC placeholder"
