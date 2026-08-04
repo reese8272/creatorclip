@@ -11,11 +11,23 @@ export function ChannelSnapshot({ totals }: { totals: ChannelTotals }) {
   return (
     <Panel title="Channel snapshot" sub="Last refresh from your YouTube analytics">
       <div className={gridCls}>
-        <Cell label="Videos analysed" value={fmt(totals.videos_analyzed)} />
+        <Cell
+          label="Videos analysed"
+          value={fmt(totals.videos_analyzed)}
+          hint="from your channel's analytics"
+        />
         <Cell label="Long-form" value={fmt(totals.longs)} />
         <Cell label="Shorts" value={fmt(totals.shorts)} />
-        <Cell label="Ingested" value={fmt(totals.ingested_done)} />
-        <Cell label="Minutes processed" value={fmt(totals.total_minutes_processed)} />
+        <Cell
+          label="Ingested"
+          value={fmt(totals.ingested_done)}
+          hint="uploaded here for clipping"
+        />
+        <Cell
+          label="Minutes processed"
+          value={fmt(totals.total_minutes_processed)}
+          hint="of uploaded footage"
+        />
       </div>
     </Panel>
   )

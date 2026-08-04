@@ -41,11 +41,15 @@ export function Panel({
 
 // Mono data cell used in the channel-totals and DNA grids. Recessed (bg-bg) so
 // the stat reads as inset into the panel surface above it.
-export function Cell({ label, value }: { label: string; value: ReactNode }) {
+export function Cell({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
     <div className="rounded-md border border-default bg-bg px-4 py-3">
       <div className="text-label uppercase tracking-[0.08em] text-muted">{label}</div>
       <div className="mt-1 font-mono text-lg font-semibold text-fg">{value}</div>
+      {/* One line naming the denominator. "Videos analysed 23" beside
+          "Ingested 2" read as a contradiction until each said what it counts
+          (Issue 412). */}
+      {hint && <div className="mt-1 text-small text-subtle">{hint}</div>}
     </div>
   )
 }
