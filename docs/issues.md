@@ -1354,6 +1354,72 @@ each brief in `docs/issues-archive-2026-08-03.md`, consistent with `docs/PROJECT
 
 ---
 
+# Hygiene — outside the L25 lane
+
+### Issue 406: Clear the 6 `pip-audit` advisories in aiohttp and cryptography
+- [ ] **Status:** open · **Batch:** — (hygiene) · **Size:** S · **Agent:** `python-senior-engineer`
+
+**What we're doing.** Bumping `aiohttp` 3.14.1 → **3.14.3** and `cryptography` 48.0.1 → **50.0.0**
+to clear all six advisories the `pip_audit` gate has been failing on since the Batch A baseline, and
+returning that gate to green **without** adding anything to `[tool.pip-audit].ignore-vulns`.
+
+**Why — the analysis.** The gate has been red across the whole of L25 Batch B. It is genuinely
+pre-existing — `git diff main -- requirements*.txt '*.py'` on `wave/l25-batch-b` is empty, so no
+editor work caused it — and it was correctly logged rather than papered over. But a permanently red
+security gate is a gate nobody reads, and `cryptography` is the library behind the Fernet token path
+(`crypto.py`), which makes "we'll get to it" the wrong posture even when the specific advisories miss us.
+
+**The six, triaged against actual usage.** Exposure is genuinely low; the *fix* is cheap. Both are
+true, and the second is the reason to just do it.
+
+| Advisory | Pkg | Fix | Real exposure here |
+|---|---|---|---|
+| CVE-2026-69243 (GHSA-mfx4-hv73-q22v) — request smuggling via WebSocket upgrade | aiohttp | 3.14.2 | **None.** Server-side component only; we never run an aiohttp server. |
+| CVE-2026-59881 (GHSA-mq44-7p77-q5h7) — client decompresses RSV1 frames without negotiated `permessage-deflate` | aiohttp | 3.14.2 | **None.** WebSocket path only. `ingestion/transcribe.py:130-150` uses Deepgram **prerecorded** (REST); the live/streaming client is never constructed. |
+| CVE-2026-69244 (GHSA-cq5v-8q36-5273) — OOB heap read in the C response parser while formatting a malformed-response error | aiohttp | 3.14.3 | **Low but real.** Needs a hostile/faulty response from Deepgram or Voyage. |
+| CVE-2026-69248 (GHSA-m2h6-j472-rp4c) — name-constraint escape: constrained CA + wildcard leaf SAN | cryptography | 49.0.0 | **None.** X.509 path validation; we import `Fernet`/`MultiFernet` only. |
+| CVE-2026-69249 (GHSA-jwv3-5hgf-82ww) — exponential blowup on chains with duplicate self-signed certs | cryptography | 49.0.0 | **None.** Same — X.509 verifier unused. |
+| CVE-2026-69247 (GHSA-g6cj-pr64-35w5) — PKCS#7 decryption oracle (distinguishable `encryptedKey` failures) | cryptography | 50.0.0 | **None.** `pkcs7_decrypt_*` unused. |
+
+The seventh advisory pip-audit reports — pytest `PYSEC-2026-1845` / `GHSA-6w46-j5rx-g56g`, the
+predictable `/tmp/pytest-of-{user}` path — is **already accepted-risk** in
+`pyproject.toml [tool.pip-audit].ignore-vulns` with a written justification (dev/CI only; the fix is
+pytest 9, which `pytest-asyncio<0.25` caps). That entry is why the gate reads **6** and not 7.
+**Leave it alone** — it is not part of this issue.
+
+**Why this is a small change.** Neither bump is constrained by anything:
+- `aiohttp` is **transitive only** — no `import aiohttp` anywhere in the tree. Consumers are
+  `deepgram-sdk` (`aiohttp>=3.9.1`) and `voyageai` (unpinned). 3.14.3 is a patch release inside both ranges.
+- `cryptography` shows `Required-by:` **(nothing)** — it is a direct dependency with no downstream
+  consumers in the venv, so the 48 → 50 major bump has exactly one caller to satisfy: `crypto.py`'s
+  Fernet/MultiFernet usage, which the `crypto` module's **100.0% coverage floor** already pins.
+
+**Evidence in this repo.**
+- `requirements.txt:40` — `cryptography==48.0.1` · `requirements.txt:49` — `aiohttp==3.14.1`.
+- `crypto.py:3` — `from cryptography.fernet import Fernet, InvalidToken, MultiFernet` (the whole
+  surface we use); `config.py:6` likewise.
+- `ingestion/transcribe.py:130-150` — `_deepgram_prerecorded_options()`; prerecorded REST, no live socket.
+- `pyproject.toml [tool.pip-audit].ignore-vulns` — the pytest and pip entries, each with a rationale.
+- `docs/OFF_COURSE_BUGS.md` — logged 2026-08-03 during Batch B; **this issue is that log entry promoted.**
+
+**Industry standard checked.** OSV/GHSA advisory data via `pip-audit` (2026-08-04 run against the
+installed environment; fix versions above are OSV's `fix_versions`). The house rule is the one
+already written into `pyproject.toml`: an `ignore-vulns` entry requires a stated reason *and* a
+re-evaluation trigger, and is reserved for advisories with no fix in our compatible range. Both of
+these have a fix in range, so neither qualifies — bump, don't ignore.
+
+**Acceptance**
+- [ ] `aiohttp==3.14.3` and `cryptography==50.0.0` pinned with `==` in `requirements.txt`
+- [ ] `pip-audit` reports **0** vulnerabilities beyond the existing justified `ignore-vulns` entries
+- [ ] **Nothing new added to `ignore-vulns`** — if a bump proves impossible, the issue reports back
+      rather than silently converting to an exception
+- [ ] `run_layer0.py` `pip_audit` gate green; baseline updated to reflect 0, not 6
+- [ ] Full pytest run green, `crypto` module coverage floor still 100.0
+- [ ] Deepgram + Voyage paths exercised (unit lane) after the aiohttp bump
+- [ ] `docs/OFF_COURSE_BUGS.md` entry marked resolved, pointing at this issue
+
+---
+
 ## Source index
 
 Collected from the 2026-08-03 research pass. Cited inline above; listed here so a future pass can
@@ -1427,4 +1493,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **406**.
+- Next free issue number: **407**.
