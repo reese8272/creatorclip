@@ -110,13 +110,32 @@ export interface UseEditDocumentResult {
   commit: (produce: DocumentProducer) => void
   undo: () => void
   redo: () => void
-  /** Force a save now (Apply/Export, tab hidden, unmount). */
-  flush: () => void
+  /**
+   * Force a save now and WAIT for it to land (Apply/Export, tab hidden, unmount).
+   *
+   * Awaited by export: posting `base_revision` while the matching PUT is still
+   * in flight would render the previous document.
+   */
+  flush: () => Promise<void>
   /** Retry after a terminal error, at the creator's request. */
   retry: () => void
   /** Conflict resolution — explicit, never automatic. */
   keepMine: () => void
   takeTheirs: () => void
+  /**
+   * The revision this client last saw, read at call time. Passed as
+   * `base_revision` when exporting so the server renders exactly the document
+   * it holds, or 409s.
+   */
+  getRevision: () => number
+  /**
+   * Adopt a document the SERVER just wrote, discarding local history.
+   *
+   * Used after `/clean/confirm`, which bakes the edit into the render and
+   * clears the document server-side. Without adopting the returned revision the
+   * client's next autosave would 409 against a bump it caused itself.
+   */
+  adoptServerDocument: (doc: EditDocument, revision: number) => void
 }
 
 export function useEditDocument(clipId: string): UseEditDocumentResult {
@@ -166,6 +185,7 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
   const attemptRef = useRef(0)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const clipIdRef = useRef(clipId)
+  const inFlightPromiseRef = useRef<Promise<void>>(Promise.resolve())
 
   // Latest-value refs are written in an effect, never during render — a render
   // can be discarded, and a ref written during one would survive it.
@@ -255,6 +275,13 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
     }
     inFlightRef.current = true
     setStateOverride('saving')
+    // Published so `flush()` can AWAIT this save rather than merely starting it.
+    // Export depends on that: posting base_revision while the matching PUT is
+    // still in flight would render the previous document.
+    let markSettled: () => void = () => {}
+    inFlightPromiseRef.current = new Promise<void>((resolve) => {
+      markSettled = resolve
+    })
 
     const id = clipIdRef.current
     try {
@@ -274,8 +301,12 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
       inFlightRef.current = false
       if (pendingAfterFlightRef.current) {
         pendingAfterFlightRef.current = false
+        // Re-fire BEFORE settling, so a `flush()` awaiting this save sees the
+        // follow-up already in flight and keeps draining instead of returning
+        // between the two.
         void saveRef.current()
       }
+      markSettled()
     }
   }
 
@@ -313,7 +344,26 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
   }, [])
 
   const schedule = useCallback(() => schedulerRef.current?.schedule(), [])
-  const flush = useCallback(() => schedulerRef.current?.flush(), [])
+
+  /**
+   * Fire any pending save and WAIT for it to land.
+   *
+   * Awaiting is the point. Export posts `base_revision`, so returning while the
+   * matching PUT is still in flight would have the server render the PREVIOUS
+   * document — the creator's last edits silently missing from a paid render.
+   *
+   * Drains rather than awaiting once: a save can re-fire itself via
+   * `pendingAfterFlight`. Bounded so a pathological retry loop cannot hang the
+   * export button; falling out early is safe because the server then 409s on the
+   * stale revision instead of rendering the wrong list.
+   */
+  const flush = useCallback(async () => {
+    schedulerRef.current?.flush()
+    for (let i = 0; i < 8; i++) {
+      if (!inFlightRef.current && !pendingAfterFlightRef.current) return
+      await inFlightPromiseRef.current
+    }
+  }, [])
 
   // A legacy import is unsaved work by definition — get it to the server.
   useEffect(() => {
@@ -374,16 +424,22 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
     schedule()
   }, [schedule])
 
-  const takeTheirs = useCallback(() => {
-    const c = conflictRef.current
-    if (!c) return
-    revisionRef.current = c.serverRevision
-    setEditedHistory(initHistory(c.serverDoc))
-    writeCache(clipIdRef.current, c.serverDoc, { dirty: false, revision: c.serverRevision })
+  const adoptServerDocument = useCallback((serverDoc: EditDocument, serverRevision: number) => {
+    revisionRef.current = serverRevision
+    setEditedHistory(initHistory(serverDoc))
+    writeCache(clipIdRef.current, serverDoc, { dirty: false, revision: serverRevision })
     setConflictOverride(null)
+    setSaveError(null)
     attemptRef.current = 0
     setStateOverride('idle')
   }, [])
+
+  // Resolving a conflict in the server's favour IS adopting the server's
+  // document — same operation, different trigger.
+  const takeTheirs = useCallback(() => {
+    const c = conflictRef.current
+    if (c) adoptServerDocument(c.serverDoc, c.serverRevision)
+  }, [adoptServerDocument])
 
   return {
     doc,
@@ -400,5 +456,11 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
     retry,
     keepMine,
     takeTheirs,
+    // A GETTER, not a value. The revision advances on every successful save
+    // without re-rendering (it lives in a ref), so returning a snapshot would
+    // hand `apply()` a stale base and 409 every export after the first save.
+    // Callers are event handlers, which read it at call time.
+    getRevision: () => revisionRef.current,
+    adoptServerDocument,
   }
 }

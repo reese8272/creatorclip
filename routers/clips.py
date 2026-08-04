@@ -1072,28 +1072,22 @@ class ClipTranscriptOut(BaseModel):
     words: list[TranscriptWord]
 
 
-class CutSegmentIn(BaseModel):
-    """One user-selected cut range, clip-relative seconds."""
-
-    start_s: float
-    end_s: float
-
-
 class CutsIn(BaseModel):
     """Request body for POST /clips/{id}/cuts.
 
-    Issue 391 — the render now reads the SERVER-SIDE edit document rather than
-    trusting a cut list posted alongside the request. The client sends the
+    Issue 391 — the render reads the SERVER-SIDE edit document rather than
+    trusting a cut list posted alongside the request. The client sends only the
     revision it last saw; the server renders whatever that revision holds, and
-    409s if it has moved on. That closes the window where a creator's most
-    recent autosave and the list they exported could disagree.
+    409s if it has moved on. That makes "what I exported" and "what I last
+    saved" the same thing by construction, rather than by hoping two copies
+    agreed.
 
-    ``segments`` is the pre-391 shape, kept only for the length of this issue so
-    the server can ship before the client. It is deleted in the next commit.
+    The pre-391 ``segments`` field is gone. It was carried for exactly one
+    commit so the server could ship before the client, and is deleted here —
+    leaving it would keep a second, unvalidated way to drive a paid render.
     """
 
-    base_revision: int | None = Field(default=None, ge=0)
-    segments: list[CutSegmentIn] | None = None
+    base_revision: int = Field(ge=0)
 
 
 class CutsQueuedOut(TaskQueuedOut):
@@ -1195,7 +1189,7 @@ async def submit_cuts(
         )
     clip_duration_s = _clip_duration_s(clip)
 
-    segments = await _cut_segments_for_render(session, clip_id, body)
+    segments = await _cut_segments_for_render(session, clip_id, body.base_revision)
 
     try:
         validate_user_cuts(segments, clip_duration_s=clip_duration_s)
@@ -1416,31 +1410,19 @@ def _clip_duration_s(clip: Clip) -> float:
 
 
 async def _cut_segments_for_render(
-    session: AsyncSession, clip_id: uuid.UUID, body: "CutsIn"
+    session: AsyncSession, clip_id: uuid.UUID, base_revision: int
 ) -> list[tuple[float, float]]:
     """Resolve the cut list a render should use (Issue 391).
 
-    When the client supplies ``base_revision`` the SERVER's document is the
-    source of truth: whatever that revision holds is what gets rendered. A
-    mismatch is a 409 rather than a silent render of the wrong list — the
-    creator may have kept editing in another tab after pressing Export, and
-    rendering the older list would spend a paid render slot on work they have
-    already replaced.
-
-    The ``segments`` branch is the pre-391 shape and exists only so the server
-    can ship before the client. It is deleted in the next commit.
+    The SERVER's document is the source of truth: whatever ``base_revision``
+    holds is what gets rendered. A mismatch is a 409 rather than a silent render
+    of the wrong list — the creator may have kept editing in another tab after
+    pressing Export, and rendering the older list would spend a paid render slot
+    on work they have already replaced.
     """
-    if body.base_revision is None:
-        if body.segments is None:
-            raise HTTPException(
-                status_code=422,
-                detail={"code": "empty", "message": "at least one cut segment is required"},
-            )
-        return [(s.start_s, s.end_s) for s in body.segments]
-
     row = await session.scalar(select(ClipEditDocument).where(ClipEditDocument.clip_id == clip_id))
     current_revision = row.revision if row else 0
-    if current_revision != body.base_revision:
+    if current_revision != base_revision:
         from clip_engine.edits import empty_document
 
         raise HTTPException(

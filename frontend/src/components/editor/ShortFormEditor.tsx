@@ -27,7 +27,13 @@ import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
 import { useEditDocument } from '@/hooks/useEditDocument'
 import { useEditorShortcuts } from '@/hooks/useEditorShortcuts'
 import { useVideoPeaks } from '@/hooks/useVideoPeaks'
-import type { ClipTranscript, EditorCut, ReviewClip, TranscriptWord } from '@/types'
+import type {
+  ClipTranscript,
+  EditDocument,
+  EditorCut,
+  ReviewClip,
+  TranscriptWord,
+} from '@/types'
 import { ArrowLeft, TriangleAlert, X } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 import { VideoPlayer, type VideoPlayerHandle } from '@/components/ui/video-player'
@@ -37,6 +43,9 @@ import { Card } from '@/components/ui/card'
 
 const WARNING_REMOVED_PCT = 40
 const SNAP_PREF_KEY = 'editor:snap'
+
+/** What the edit document looks like once `/clean/confirm` has emptied it. */
+const EMPTY_EDIT_DOCUMENT: EditDocument = { version: 1, cuts: [], last_applied_at: null }
 
 /** Snapping is on by default — it is what makes cuts land on word edges. */
 function readSnapPreference(): boolean {
@@ -147,6 +156,8 @@ export function ShortFormEditor({
     retry,
     keepMine,
     takeTheirs,
+    getRevision,
+    adoptServerDocument,
   } = useEditDocument(clip.id)
 
   const [applying, setApplying] = useState(false)
@@ -273,31 +284,48 @@ export function ShortFormEditor({
       setStatus('No cuts to apply.')
       return
     }
-    // Export is a flush point: the render must not be enqueued from a document
-    // the server has not seen yet.
-    flush()
     setStatus('Submitting cuts…')
+    // AWAITED, not fire-and-forget. The server renders whatever `base_revision`
+    // points at, so returning while the matching PUT is still in flight would
+    // spend a paid render on the document as it was BEFORE the last edits.
+    await flush()
     try {
+      // The cut list is no longer sent. The server reads its own document at
+      // this revision, which is what makes "what I exported" and "what I last
+      // saved" the same thing by construction rather than by hoping the two
+      // agreed. A mismatch comes back as 409 stale_revision.
       await api(`/clips/${clip.id}/cuts`, {
         method: 'POST',
-        body: { segments: cuts.map((c) => ({ start_s: c.start_s, end_s: c.end_s })) },
+        body: { base_revision: getRevision() },
       })
       setApplying(true)
       setStatus('Editing your clip — come back in ~20s.')
     } catch (e) {
-      const detail = (e as { message?: string }).message
-      setStatus(detail || 'Submit failed — try again.')
+      const err = e as { code?: string; message?: string }
+      setStatus(
+        err.code === 'stale_revision'
+          ? 'Your edit changed somewhere else. Reload the page, then export again.'
+          : err.message || 'Submit failed — try again.',
+      )
     }
   }
 
   async function confirmFinal() {
     try {
-      await api(`/clips/${clip.id}/clean/confirm`, { method: 'POST' })
-      // Confirming BAKES the edit into the render, so the document must be
-      // cleared or the next export would cut the same spans a second time.
-      // (`clean/discard` deliberately does NOT clear it — the creator rejected
-      // the render, and their cuts still describe an unapplied edit.)
-      setCuts([])
+      const resp = await api<{ edit_revision: number | null }>(
+        `/clips/${clip.id}/clean/confirm`,
+        { method: 'POST' },
+      )
+      // Confirming BAKES the edit into the render, so the SERVER clears the
+      // document — leaving it would make the next export cut the same spans a
+      // second time out of an already-shortened render. We adopt the revision it
+      // reports rather than clearing locally, because the server's bump would
+      // otherwise 409 our next autosave against a change we caused ourselves.
+      // (`clean/discard` deliberately does NOT clear — the creator rejected that
+      // render, and their cuts still describe an unapplied edit.)
+      if (resp.edit_revision !== null) {
+        adoptServerDocument(EMPTY_EDIT_DOCUMENT, resp.edit_revision)
+      }
       setApplying(false)
       setStatus('Edited version is now the main render.')
       queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })

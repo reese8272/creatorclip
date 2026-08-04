@@ -572,11 +572,22 @@ def test_render_post_keeps_its_full_dependency_list():
     )
 
 
-def test_render_rejects_an_empty_body(client):
-    """Neither base_revision nor segments — a 422, not a 500."""
+def test_render_requires_a_base_revision(client):
+    """`base_revision` is mandatory — the pre-391 `segments` body is gone, and a
+    request that omits it must 422 rather than render an unspecified list."""
     creator = _mock_creator()
     clip = _render_clip(creator.id)
     resp, mock_task = _post_cuts(creator, clip, {})
+    assert resp.status_code == 422, resp.text
+    mock_task.delay.assert_not_called()
+
+
+def test_render_no_longer_accepts_a_posted_cut_list(client):
+    """The legacy shape is REJECTED, not ignored. Leaving it working would keep a
+    second, unvalidated way to drive a paid render."""
+    creator = _mock_creator()
+    clip = _render_clip(creator.id)
+    resp, mock_task = _post_cuts(creator, clip, {"segments": [{"start_s": 2.0, "end_s": 3.0}]})
     assert resp.status_code == 422, resp.text
     mock_task.delay.assert_not_called()
 

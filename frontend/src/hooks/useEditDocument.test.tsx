@@ -275,3 +275,74 @@ describe('useEditDocument', () => {
     expect(putsWhileInFlight).toBe(1)
   })
 })
+
+describe('export handshake (PR B)', () => {
+  it('flush WAITS for the in-flight save, not just starts it', async () => {
+    // Export posts base_revision, so returning while the PUT is still in flight
+    // would have the server render the PREVIOUS document.
+    let releasePut: (() => void) | null = null
+    let putSettled = false
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'GET') {
+        return { ok: true, status: 200, json: async () => okGet(3).body } as Response
+      }
+      await new Promise<void>((r) => {
+        releasePut = r
+      })
+      putSettled = true
+      return { ok: true, status: 200, json: async () => okPut(4).body } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useEditDocument(CLIP), { wrapper })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    act(() => result.current.commit(addCut('a')))
+
+    let flushResolved = false
+    await act(async () => {
+      void result.current.flush().then(() => {
+        flushResolved = true
+      })
+      await Promise.resolve()
+    })
+
+    // The PUT is in flight; flush must NOT have resolved yet.
+    expect(putSettled).toBe(false)
+    expect(flushResolved).toBe(false)
+
+    await act(async () => {
+      releasePut?.()
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    await waitFor(() => expect(flushResolved).toBe(true))
+    expect(putSettled).toBe(true)
+  })
+
+  it('getRevision reports the LATEST revision, not the seeded one', async () => {
+    // A snapshot taken from the query would stay at 3 forever and 409 every
+    // export after the first save.
+    const { result } = await renderReady({ get: () => okGet(3), put: () => okPut(4) })
+    expect(result.current.getRevision()).toBe(3)
+
+    act(() => result.current.commit(addCut('a')))
+    await act(async () => void vi.advanceTimersByTime(SAVE_DEBOUNCE_MS))
+    await waitFor(() => expect(result.current.saveState).toBe('saved'))
+
+    expect(result.current.getRevision()).toBe(4)
+  })
+
+  it('adoptServerDocument takes the server revision without a conflict', async () => {
+    // What /clean/confirm does: the server cleared the document and bumped the
+    // revision, so the client adopts it rather than 409ing against its own bump.
+    const { result } = await renderReady({ get: () => okGet(3), put: () => okPut(4) })
+    act(() => result.current.commit(addCut('a')))
+
+    act(() => result.current.adoptServerDocument(emptyDoc, 9))
+
+    expect(result.current.doc.cuts).toEqual([])
+    expect(result.current.getRevision()).toBe(9)
+    expect(result.current.conflict).toBeNull()
+    expect(result.current.saveState).toBe('idle')
+  })
+})
