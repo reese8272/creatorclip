@@ -23,12 +23,13 @@
 // clipping the meta row below the fold.
 
 /**
- * Editor viewer width. X = 30.5rem ≈ 439px covers nav + header strip + timeline
- * dock + status bar + main/card padding + the compact meta row. Measured at
- * 1440×900: the viewer row is 584px and the card adds 117px around the video,
- * so the player gets 467px of height — 257px wide, up from a frozen 180px.
+ * Editor viewer width. X = 31.5rem ≈ 453px covers nav + header strip + timeline
+ * dock + status bar + main/card padding + the compact meta row. Re-measured at
+ * 1440×900 after Issue 390 gave the dock a zoom toolbar and a real ruler, which
+ * cost the region grid ~13px; the e2e "card must fit its row" guard caught the
+ * overflow rather than it shipping as a clipped meta row.
  */
-export const EDITOR_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_30.5rem)*0.5625))]'
+export const EDITOR_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_31.5rem)*0.5625))]'
 
 /**
  * Review player width. X = 29.5rem — no timeline dock, but ClipPlayer wraps the

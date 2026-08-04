@@ -184,7 +184,23 @@ export function useTimelineViewport({
     clientXToTime: (clientX: number) => {
       const el = ref.current
       if (!el) return 0
-      return xToTime(clientX - el.getBoundingClientRect().left, v)
+      // Measure LIVE, like applyZoom and scrollByPx do — not from the state
+      // width. Before any ResizeObserver has fired the state width is still 0,
+      // which collapses `fit` to MIN_PX_PER_SECOND and maps every pointer x to
+      // the end of the clip. A consumer that stubs its rect after mount (as the
+      // editor tests do) lands in exactly that case.
+      const rect = el.getBoundingClientRect()
+      const livePps = pxPerSecondState ?? fitPxPerSecond(rect.width, duration)
+      return xToTime(clientX - rect.left, {
+        duration,
+        pxPerSecond: livePps,
+        viewportWidth: rect.width,
+        scrollLeft: clampScrollLeft(scrollLeft, {
+          duration,
+          pxPerSecond: livePps,
+          viewportWidth: rect.width,
+        }),
+      })
     },
   }
 }

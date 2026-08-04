@@ -1,13 +1,18 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
+import { TimelineRail, type RailDrag } from '@/components/editor/TimelineRail'
 import { Waveform } from '@/components/editor/Waveform'
-import type { WaveformPeaks } from '@/lib/peaks'
+import type { TimelineViewport } from '@/hooks/useTimelineViewport'
+import { adjustCutEdge, MIN_CUT_S } from '@/lib/editorCuts'
+import {
+  buildSnapCandidates,
+  snapTime,
+  wordAtBoundary,
+  wordBoundaries,
+} from '@/lib/timelineInteraction'
+import { formatTick } from '@/lib/timelineZoom'
 import { cn } from '@/lib/utils'
-
-// The visual height of the waveform canvas in px (CSS pixels).
-const WAVE_HEIGHT = 80
-
-// Minimum selectable cut duration (prevents accidental zero-length clicks).
-const MIN_CUT_S = 0.1
+import type { WaveformPeaks } from '@/lib/peaks'
+import type { EditorCut, TranscriptWord } from '@/types'
 
 export interface Cut {
   start_s: number
@@ -17,36 +22,38 @@ export interface Cut {
 interface TimelineProps {
   /** Total duration of the clip in seconds. */
   duration: number
-  /** Current playhead position in seconds (driven by the <video> timeupdate). */
+  /** Current playhead position in seconds. */
   currentTime: number
-  /** Queued word-editor cuts to overlay on the timeline as dimmed regions. */
-  cuts: Cut[]
-  /** Emitted when the user clicks or drags on the waveform to seek. */
+  /** Queued cuts, drawn as regions with draggable edges. */
+  cuts: readonly EditorCut[]
+  /** Emitted when the user clicks the rail to seek. */
   onSeek: (time: number) => void
-  /** Emitted when a new time-range selection is completed on the waveform. */
+  /** Emitted when a new time-range selection is completed. */
   onSelection: (cut: Cut) => void
-  /** Real audio peaks for the PARENT SOURCE, or null → an honest flat track.
-   *  Issue 392: one artifact per video, windowed here to the clip's span. */
+  /** Emitted when an existing cut's edge is dragged to a new time. */
+  onCutsChange?: (cuts: EditorCut[]) => void
+  /** Transcript words — the snap targets that make cuts land on word edges. */
+  words?: readonly TranscriptWord[]
+  /** Whether snapping is active. Owned by the caller so it can be persisted. */
+  snapEnabled?: boolean
+  /** Real audio peaks for the PARENT SOURCE, windowed to this clip (Issue 392). */
   peaks?: WaveformPeaks | null
-  /** Clip start within the source, in seconds — the window offset into `peaks`. */
+  /** Clip start within the source — the window offset into `peaks`. */
   sourceStartS?: number
   className?: string
 }
 
 /**
- * Timeline — waveform + synced playhead + trim-selection component.
+ * Timeline — the short-form clip editing surface.
  *
- * Design notes (Issue 188, waveform reworked in 392):
- *  - Industry standard (Descript / Opus / Riverside) is a waveform bar with a
- *    moving playhead and drag-to-select for cuts. HTML5 Canvas + timeupdate is
- *    the idiomatic zero-dependency implementation for this scale.
- *  - ONE waveform path: real server-computed peaks for the parent source,
- *    windowed to this clip's span. There is deliberately no synthetic fallback —
- *    when peaks are absent `Waveform` draws a flat line (Issue 392).
- *  - The playhead is a CSS-positioned div driven by currentTime / duration, re-
- *    rendered only when the ratio changes — no continuous Canvas redraws.
- *  - Drag-to-select emits a Cut on mouseup; it does not mutate the cuts array
- *    (caller owns state). A click without drag seeks instead of selecting.
+ * The zoom, scroll, pointer and ruler machinery lives in `TimelineRail`, which
+ * the long-form source timeline shares. This owns only what is specific to a
+ * clip: windowing the source waveform to the clip's span, snapping to transcript
+ * word boundaries, and rendering cut regions with draggable edges.
+ *
+ * Positions are PIXELS from the viewport, not percentages of the duration.
+ * Percentages cannot express a scrolled, zoomed view — they only ever describe
+ * the whole clip.
  */
 export function Timeline({
   duration,
@@ -54,152 +61,216 @@ export function Timeline({
   cuts,
   onSeek,
   onSelection,
+  onCutsChange,
+  words = [],
+  snapEnabled = true,
   peaks = null,
   sourceStartS = 0,
   className,
 }: TimelineProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [dragStart, setDragStart] = useState<number | null>(null)
-  const [dragEnd, setDragEnd] = useState<number | null>(null)
+  // Live gesture preview. Cuts are only merged on completion, so a neighbour
+  // cannot be absorbed — and the dragged id retired — mid-drag.
+  const [preview, setPreview] = useState<{
+    range?: { from: number; to: number }
+    cuts?: EditorCut[]
+    snappedTo?: number
+    snappedWord?: string | null
+  } | null>(null)
 
-  // Ratio: 0..1 fraction into the clip.
-  const playRatio = duration > 0 ? Math.min(currentTime / duration, 1) : 0
+  const shownCuts = preview?.cuts ?? cuts
 
-  // Convert a mouse event's X coordinate to a clip-relative time in seconds.
-  function xToTime(clientX: number): number {
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect || rect.width === 0 || duration <= 0) return 0
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    return ratio * duration
+  function candidatesFor(excludeCutId?: string) {
+    return buildSnapCandidates({
+      wordBoundaries: wordBoundaries(words),
+      cuts,
+      playhead: currentTime,
+      duration,
+      excludeCutId,
+    })
   }
 
-  // Mouse interaction — seek on click, select on drag.
-  function onMouseDown(e: React.MouseEvent) {
-    if (e.button !== 0) return
-    setDragStart(xToTime(e.clientX))
-    setDragEnd(null)
-  }
-
-  function onMouseMove(e: React.MouseEvent) {
-    if (dragStart === null) return
-    setDragEnd(xToTime(e.clientX))
-  }
-
-  function onMouseUp(e: React.MouseEvent) {
-    if (dragStart === null) return
-    const t = xToTime(e.clientX)
-    const lo = Math.min(dragStart, t)
-    const hi = Math.max(dragStart, t)
-
-    if (hi - lo < MIN_CUT_S) {
-      // Treat as a seek click, not a selection.
-      onSeek(dragStart)
-    } else {
-      onSelection({ start_s: lo, end_s: hi })
+  function applySnap(time: number, viewport: TimelineViewport, excludeCutId?: string) {
+    const result = snapTime(time, candidatesFor(excludeCutId), {
+      pxPerSecond: viewport.pxPerSecond,
+      enabled: snapEnabled,
+    })
+    return {
+      time: result.time,
+      snappedTo: result.snapped ? result.candidate : undefined,
+      snappedWord: result.snapped ? wordAtBoundary(words, result.time) : null,
     }
-    setDragStart(null)
-    setDragEnd(null)
   }
 
-  function onMouseLeave() {
-    if (dragStart !== null && dragEnd !== null) {
-      const lo = Math.min(dragStart, dragEnd)
-      const hi = Math.max(dragStart, dragEnd)
-      if (hi - lo >= MIN_CUT_S) onSelection({ start_s: lo, end_s: hi })
+  function handleDrag(drag: RailDrag, viewport: TimelineViewport) {
+    if (drag.hit.kind === 'edge') {
+      const { cutId, side } = drag.hit
+      const snap = applySnap(drag.toTime, viewport, cutId)
+      setPreview({
+        cuts: adjustCutEdge(cuts, cutId, side, snap.time, duration),
+        snappedTo: snap.snappedTo,
+        snappedWord: snap.snappedWord,
+      })
+      return
     }
-    setDragStart(null)
-    setDragEnd(null)
+    if (drag.hit.kind === 'empty') {
+      const snap = applySnap(drag.toTime, viewport)
+      setPreview({
+        range: { from: drag.fromTime, to: snap.time },
+        snappedTo: snap.snappedTo,
+        snappedWord: snap.snappedWord,
+      })
+    }
   }
 
-  // Compute selection overlay geometry (% of container width).
-  const selectionStyle =
-    dragStart !== null && dragEnd !== null && duration > 0
-      ? {
-          left: `${(Math.min(dragStart, dragEnd) / duration) * 100}%`,
-          width: `${(Math.abs(dragEnd - dragStart) / duration) * 100}%`,
-        }
-      : null
+  function handleDragEnd(drag: RailDrag, viewport: TimelineViewport) {
+    setPreview(null)
+    if (drag.hit.kind === 'edge') {
+      const { cutId, side } = drag.hit
+      const snap = applySnap(drag.toTime, viewport, cutId)
+      onCutsChange?.(adjustCutEdge(cuts, cutId, side, snap.time, duration))
+      return
+    }
+    if (drag.hit.kind !== 'empty') return
+    const snapStart = applySnap(drag.fromTime, viewport)
+    const snapEnd = applySnap(drag.toTime, viewport)
+    const lo = Math.min(snapStart.time, snapEnd.time)
+    const hi = Math.max(snapStart.time, snapEnd.time)
+    if (hi - lo >= MIN_CUT_S) onSelection({ start_s: lo, end_s: hi })
+  }
 
   return (
-    <div
-      ref={containerRef}
-      className={cn('relative w-full select-none overflow-hidden rounded-md border border-default bg-surface', className)}
-      style={{ height: WAVE_HEIGHT + 24 }}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onMouseLeave={onMouseLeave}
-      role="slider"
-      aria-label="Timeline scrubber"
-      aria-valuemin={0}
-      aria-valuemax={duration}
-      aria-valuenow={currentTime}
+    <TimelineRail
+      className={className}
+      duration={duration}
+      currentTime={currentTime}
+      cuts={cuts}
+      label="Clip timeline"
+      onDrag={(d) => handleDrag(d, d.viewport)}
+      onDragEnd={(d) => handleDragEnd(d, d.viewport)}
+      onClick={(hit, time) => {
+        if (hit.kind === 'empty') onSeek(time)
+      }}
     >
-      {/* The creator's ACTUAL audio, windowed from the source's peaks. No
-          synthetic fallback exists: absent peaks render a flat line (Issue 392). */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-[80px] text-accent">
-        <Waveform
-          peaks={peaks}
-          startS={sourceStartS}
-          endS={sourceStartS + duration}
-          ariaLabel={peaks ? 'Clip audio waveform' : 'Waveform unavailable'}
-        />
-      </div>
+      {(viewport) => (
+          <>
+            <div className="pointer-events-none absolute inset-0 text-accent">
+              <Waveform
+                peaks={peaks}
+                startS={sourceStartS}
+                endS={sourceStartS + duration}
+                ariaLabel={peaks ? 'Clip audio waveform' : 'Waveform unavailable'}
+              />
+            </div>
 
-      {/* Cut regions: dimmed overlays for each queued cut. */}
-      {duration > 0 &&
-        cuts.map((c, i) => (
-          <div
-            key={i}
-            aria-label={`Cut ${i + 1}: ${c.start_s.toFixed(2)}s–${c.end_s.toFixed(2)}s`}
-            className="absolute top-0 h-[80px] bg-danger opacity-25"
-            style={{
-              left: `${(c.start_s / duration) * 100}%`,
-              width: `${((c.end_s - c.start_s) / duration) * 100}%`,
-              pointerEvents: 'none',
-            }}
-          />
-        ))}
+            {shownCuts.map((c, i) => (
+              <CutRegion
+                key={c.id}
+                cut={c}
+                ordinal={i + 1}
+                duration={duration}
+                viewport={viewport}
+                snappedTo={preview?.snappedTo}
+              />
+            ))}
 
-      {/* Active drag selection overlay. */}
-      {selectionStyle && (
-        <div
-          className="absolute top-0 h-[80px] bg-accent opacity-30"
-          style={{ ...selectionStyle, pointerEvents: 'none' }}
-        />
+            {preview?.range && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 bg-accent opacity-30"
+                style={{
+                  left: `${viewport.timeToX(Math.min(preview.range.from, preview.range.to))}px`,
+                  width: `${Math.abs(
+                    viewport.timeToX(preview.range.to) - viewport.timeToX(preview.range.from),
+                  )}px`,
+                }}
+              />
+            )}
+
+            {preview?.snappedTo !== undefined && (
+              <SnapIndicator
+                time={preview.snappedTo}
+                word={preview.snappedWord}
+                viewport={viewport}
+              />
+            )}
+          </>
       )}
+    </TimelineRail>
+  )
+}
 
-      {/* Playhead line + time label. */}
+/** One cut, with a focusable thumb on each edge (W3C APG multi-thumb). */
+function CutRegion({
+  cut,
+  ordinal,
+  duration,
+  viewport,
+  snappedTo,
+}: {
+  cut: EditorCut
+  ordinal: number
+  duration: number
+  viewport: TimelineViewport
+  snappedTo?: number
+}) {
+  const left = viewport.timeToX(cut.start_s)
+  const right = viewport.timeToX(cut.end_s)
+  const label = `Cut ${ordinal}: ${cut.start_s.toFixed(2)}s–${cut.end_s.toFixed(2)}s`
+
+  return (
+    <div role="group" aria-label={label}>
       <div
         aria-hidden="true"
-        className="absolute top-0 h-[80px] w-px bg-accent"
-        style={{ left: `${playRatio * 100}%`, pointerEvents: 'none' }}
+        className="pointer-events-none absolute inset-y-0 bg-danger opacity-25"
+        style={{ left: `${left}px`, width: `${Math.max(1, right - left)}px` }}
       />
-
-      {/* Time ruler: start / mid / end labels. */}
-      <div className="absolute bottom-0 left-0 right-0 flex justify-between px-2 py-1 font-mono text-label text-muted" style={{ pointerEvents: 'none' }}>
-        <span>0:00</span>
-        {duration > 0 && <span>{fmtTime(duration / 2)}</span>}
-        <span>{fmtTime(duration)}</span>
-      </div>
-
-      {/* Cursor time tooltip during drag. */}
-      {dragStart !== null && dragEnd !== null && (
-        <div
-          className="pointer-events-none absolute top-1 rounded-sm bg-elevated px-1.5 py-0.5 font-mono text-label text-fg shadow-sm"
-          style={{ left: `${(Math.min(dragStart, dragEnd) / Math.max(duration, 1)) * 100}%` }}
-        >
-          {fmtTime(Math.min(dragStart, dragEnd))} → {fmtTime(Math.max(dragStart, dragEnd))}
-        </div>
-      )}
+      {(['start', 'end'] as const).map((side) => {
+        const time = side === 'start' ? cut.start_s : cut.end_s
+        return (
+          <div
+            key={side}
+            role="slider"
+            tabIndex={0}
+            aria-label={`Cut ${ordinal} ${side}`}
+            aria-valuemin={0}
+            aria-valuemax={duration}
+            aria-valuenow={time}
+            aria-valuetext={formatTick(time, 0.5)}
+            data-cut-edge={`${cut.id}:${side}`}
+            data-snapped={snappedTo !== undefined && Math.abs(snappedTo - time) < 1e-6 ? '' : undefined}
+            className={cn(
+              'absolute inset-y-0 w-[3px] cursor-ew-resize bg-danger',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-border',
+              'data-snapped:bg-accent',
+            )}
+            style={{ left: `${(side === 'start' ? left : right) - 1}px` }}
+          />
+        )
+      })}
     </div>
   )
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function fmtTime(s: number): string {
-  const m = Math.floor(s / 60)
-  const sec = Math.floor(s % 60)
-  return `${m}:${sec.toString().padStart(2, '0')}`
+/** The line a dragged boundary will land on, plus the word it belongs to. */
+function SnapIndicator({
+  time,
+  word,
+  viewport,
+}: {
+  time: number
+  word?: string | null
+  viewport: TimelineViewport
+}) {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-y-0 z-10 w-px bg-accent"
+      style={{ left: `${viewport.timeToX(time)}px` }}
+    >
+      <span className="absolute -top-0.5 left-1 whitespace-nowrap rounded-sm bg-elevated px-1 font-mono text-label text-accent-text shadow-sm">
+        {formatTick(time, 0.5)}
+        {word ? ` · ${word}` : ''}
+      </span>
+    </div>
+  )
 }

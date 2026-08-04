@@ -414,7 +414,11 @@ const TRANSCRIPT: ClipTranscript = {
 // bursts separated by pauses — so the audit screenshots exercise the real render
 // path, not just the "no peaks" fallback (which v2/v3 still cover).
 const PEAKS_V1 = (() => {
-  const length = 640
+  // Must span the WHOLE source (v1 is 1320s), not an arbitrary slice: the
+  // short-form timeline windows these peaks to its clip's span, so a short
+  // fixture leaves every clip past the end of the data reading as silence.
+  // 1320s at 16 kHz / 512 samples-per-pixel = 41,250 pairs.
+  const length = Math.round((1320 * 16000) / 512)
   const data: number[] = []
   for (let i = 0; i < length; i++) {
     // Phrases of ~40 pairs with ~15-pair gaps, amplitude varying inside each.

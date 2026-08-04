@@ -12,6 +12,7 @@ import { CaptionStylePanel } from '@/components/review/CaptionStylePanel'
 import { CleanPassPanel } from '@/components/review/CleanPassPanel'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { Chip } from '@/components/Chip'
+import { Switch } from '@/components/ui/switch'
 import {
   cutFromRange,
   cutWordIndices,
@@ -31,6 +32,16 @@ import { Card } from '@/components/ui/card'
 
 const WARNING_REMOVED_PCT = 40
 const storageKey = (clipId: string) => `clip:${clipId}:cuts`
+const SNAP_PREF_KEY = 'editor:snap'
+
+/** Snapping is on by default — it is what makes cuts land on word edges. */
+function readSnapPreference(): boolean {
+  try {
+    return localStorage.getItem(SNAP_PREF_KEY) !== 'off'
+  } catch {
+    return true
+  }
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -135,6 +146,9 @@ export function ShortFormEditor({
   const [undo, setUndo] = useState<EditorCut[] | null>(null)
   const [applying, setApplying] = useState(false)
   const [status, setStatus] = useState('')
+  // Persisted per creator, not per clip: it is a working preference, and having
+  // it reset every time you open a different clip would be its own annoyance.
+  const [snapEnabled, setSnapEnabled] = useState(readSnapPreference)
 
   // Re-load cuts when the clip changes.
   useEffect(() => {
@@ -168,6 +182,16 @@ export function ShortFormEditor({
   function removeCut(id: string) {
     setUndo(cuts)
     setCuts(removeCutById(cuts, id))
+  }
+
+  /**
+   * Commit an edge drag. Merging happens HERE, once, rather than during the
+   * gesture — absorbing a neighbour mid-drag would retire the id the pointer is
+   * holding, and the drag would silently jump to a different cut.
+   */
+  function applyCutEdit(next: EditorCut[]) {
+    setUndo(cuts)
+    setCuts(mergeAdjacent(next))
   }
 
   function onTranscriptMouseUp() {
@@ -438,6 +462,9 @@ export function ShortFormEditor({
             cuts={cuts}
             onSeek={handleSeek}
             onSelection={({ start_s, end_s }) => addTimeCut(start_s, end_s)}
+            onCutsChange={applyCutEdit}
+            words={words}
+            snapEnabled={snapEnabled}
             peaks={peaks}
             sourceStartS={sourceStartS}
           />
@@ -471,7 +498,22 @@ export function ShortFormEditor({
             </Button>
             {/* Content the creator must actually read: on the semantic scale and
                 on text-muted, not 10px text-subtle. */}
-            <span className="text-small text-muted">Click to seek · Drag to mark a cut region</span>
+            <label className="ml-auto flex shrink-0 items-center gap-2 text-small text-muted">
+              <Switch
+                checked={snapEnabled}
+                onCheckedChange={(on) => {
+                  setSnapEnabled(on)
+                  try {
+                    localStorage.setItem(SNAP_PREF_KEY, on ? 'on' : 'off')
+                  } catch {
+                    // A preference that cannot be persisted still works for this
+                    // session; there is nothing to recover and nothing to report.
+                  }
+                }}
+                aria-label="Snap to words"
+              />
+              Snap to words
+            </label>
           </div>
         </div>
 
