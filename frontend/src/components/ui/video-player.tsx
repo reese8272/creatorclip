@@ -2,6 +2,7 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'r
 import type { Ref } from 'react'
 
 import { cn } from '@/lib/utils'
+import { isModalOpen, isTypingTarget } from '@/lib/keyboard'
 import { Play, RectangleHorizontal, RotateCcw } from '@/components/ui/icon'
 import { ICON_SIZE } from '@/components/ui/iconSizes'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -78,15 +79,6 @@ function formatTime(s: number): string {
   const m = Math.floor(s / 60)
   const sec = Math.floor(s % 60)
   return `${m}:${String(sec).padStart(2, '0')}`
-}
-
-/** True when a keystroke belongs to whatever the user is typing in, not to us. */
-function isTypingTarget(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null
-  if (!el || typeof el.closest !== 'function') return false
-  if (el.isContentEditable) return true
-  if (/^(input|textarea|select|button)$/i.test(el.tagName)) return true
-  return el.closest('[contenteditable="true"], [role="textbox"], [role="dialog"]') !== null
 }
 
 export function VideoPlayer({
@@ -293,8 +285,15 @@ export function VideoPlayer({
   useEffect(() => {
     if (!transport) return
     const onKeyDown = (e: KeyboardEvent) => {
+      // Yield to anything that already claimed this key (Issue 390). Two things
+      // depend on it: the timeline's shortcut bus runs in the CAPTURE phase and
+      // marks what it handled, so its keys never double-fire here; and the
+      // ScrubBar's own ±1s arrows call preventDefault, which previously did NOT
+      // stop this listener — so an arrow key on a focused ScrubBar seeked TWICE,
+      // ±1s from the bar and another ±5s from here.
+      if (e.defaultPrevented) return
       if (isTypingTarget(e.target)) return
-      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return
+      if (isModalOpen()) return
       if (handleKey(e)) e.preventDefault()
     }
     document.addEventListener('keydown', onKeyDown)
@@ -340,6 +339,10 @@ export function VideoPlayer({
       aria-label={label}
       tabIndex={0}
       onKeyDown={(e) => {
+        // Same bail as the document listener: yield to anything nearer the
+        // target that already claimed this key — notably the ScrubBar's ±1s
+        // arrows, which would otherwise be followed by another ±5s from here.
+        if (e.defaultPrevented) return
         if (isTypingTarget(e.target)) return
         if (handleKey(e)) e.preventDefault()
       }}
@@ -410,7 +413,6 @@ export function VideoPlayer({
           currentTime={displayTime}
           duration={duration}
           onSeek={seek}
-          onKeyDownCapture={(e) => e.stopPropagation()}
         />
 
         <span className="shrink-0 font-mono text-mono text-muted tabular-nums" aria-hidden="true">
@@ -467,13 +469,12 @@ interface ScrubBarProps {
   currentTime: number
   duration: number
   onSeek: (t: number) => void
-  onKeyDownCapture?: (e: React.KeyboardEvent) => void
 }
 
 // Hand-rolled rather than the Radix Slider from #385: scrubbing needs pointer
 // capture across the whole track, pause-on-drag, and (in #390) a buffered-ranges
 // underlay — all of which fight a controlled-value model.
-function ScrubBar({ currentTime, duration, onSeek, onKeyDownCapture }: ScrubBarProps) {
+function ScrubBar({ currentTime, duration, onSeek }: ScrubBarProps) {
   const trackRef = useRef<HTMLDivElement>(null)
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0
 
@@ -493,7 +494,11 @@ function ScrubBar({ currentTime, duration, onSeek, onKeyDownCapture }: ScrubBarP
       aria-valuenow={Math.round(currentTime)}
       aria-valuetext={`${formatTime(currentTime)} of ${formatTime(duration)}`}
       tabIndex={0}
-      onKeyDownCapture={onKeyDownCapture}
+      // preventDefault is the ONLY signal needed to stop the outer layers
+      // double-seeking; both of them bail on `defaultPrevented`. This used to be
+      // paired with an onKeyDownCapture that called stopPropagation, which — in
+      // the capture phase — also prevented THIS handler from ever running, so
+      // the scrub bar's arrow keys did nothing at all (Issue 390).
       onKeyDown={(e) => {
         if (e.key === 'ArrowLeft') onSeek(currentTime - 1)
         else if (e.key === 'ArrowRight') onSeek(currentTime + 1)

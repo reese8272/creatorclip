@@ -64,7 +64,10 @@ export function FullTranscriptPanel({
               className="h-9 w-full rounded-sm border border-strong bg-bg px-3 text-small text-fg placeholder:text-subtle focus:border-accent focus:outline-none"
             />
           </div>
-          <div className="max-h-80 overflow-y-auto">
+          {/* Issue 389: inside the tool shell this panel already sits in a
+              scrolling region, so a second capped scroller would double-scroll.
+              The cap stays below lg, where the page itself scrolls. */}
+          <div className="max-h-80 overflow-y-auto lg:max-h-none lg:overflow-y-visible">
             {visible.length === 0 ? (
               <p className="px-4 py-4 text-small text-subtle">No matches for “{query}”.</p>
             ) : (

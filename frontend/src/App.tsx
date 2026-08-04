@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate, Outlet, RouterProvider, useRouteError } from 'react-router-dom'
 import { AuthGate } from '@/components/AuthGate'
 import { AppChrome } from '@/components/AppChrome'
+import { ToolChrome } from '@/components/ToolChrome'
 import { useActivityTelemetry } from '@/hooks/useActivityTelemetry'
 import { Dashboard } from '@/pages/Dashboard'
 import { Insights } from '@/pages/Insights'
@@ -56,11 +57,12 @@ function RootError() {
 }
 
 // React Router v7 Data Mode. The SPA mounts under /app (Vite base + FastAPI
-// fallback); `basename` keeps client routes relative to that prefix. Four layout
-// contexts (Issue 85b, extended 376a): protected+chrome (the app), protected+bare
-// (focused first-run flows), public+chrome (pricing — anon sees prices), public+bare
-// (the pre-auth sign-in, and the marketing landing) — all nested under RootLayout.
-// Add child routes here as more pages port.
+// fallback); `basename` keeps client routes relative to that prefix. Five layout
+// contexts (Issue 85b, extended 376a and 389): protected+chrome (the app),
+// protected+tool-shell (the full-height Editor/Review workspace), protected+bare
+// (focused first-run flows), public+chrome (pricing — anon sees prices),
+// public+bare (the pre-auth sign-in, and the marketing landing) — all nested
+// under RootLayout. Add child routes here as more pages port.
 //
 // `landing` has NO AuthGate (Issue 376a — a public marketing page). FastAPI's
 // `/` (main.py:index) serves a server-rendered static/landing.html directly
@@ -83,12 +85,22 @@ const router = createBrowserRouter(
                 { path: 'dashboard', element: <Dashboard /> },
                 { path: 'insights', element: <Insights /> },
                 { path: 'analysis', element: <Analysis /> },
-                { path: 'review', element: <Review /> },
                 { path: 'profile', element: <Profile /> },
                 { path: 'settings', element: <Settings /> },
                 { path: 'chat', element: <Chat /> },
                 { path: 'video/:videoId', element: <VideoClipsMap /> },
                 { path: 'video/:videoId/recap', element: <Recap /> },
+              ],
+            },
+            // The tool routes (Issue 389): a full-height application shell with
+            // independently-scrolling panels and no marketing footer, instead of
+            // a centred scrolling document. Split out of the AppChrome block
+            // above rather than flagged inside it, so "no footer here" is a fact
+            // of the route tree rather than a conditional in a shared component.
+            {
+              element: <ToolChrome />,
+              children: [
+                { path: 'review', element: <Review /> },
                 { path: 'editor', element: <Editor /> },
               ],
             },

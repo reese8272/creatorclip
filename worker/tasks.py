@@ -934,6 +934,18 @@ def backfill_video_posters() -> None:
     run_async(_backfill_video_posters_async())
 
 
+@celery.task(name="worker.tasks.backfill_video_peaks")
+def backfill_video_peaks() -> None:
+    """Celery Beat task: give existing videos a waveform envelope (Issue 392).
+
+    Newest-first, small batches. Self-terminating, and bounded by more than the
+    drain: peaks come from the extracted WAV, which is purged at
+    SOURCE_MEDIA_RETENTION_HOURS, so videos older than that window are
+    permanently out of reach and simply stop matching.
+    """
+    run_async(_backfill_video_peaks_async())
+
+
 @celery.task(name="worker.tasks.purge_stale_youtube_analytics")
 def purge_stale_youtube_analytics() -> None:
     """Wave-4 Fix 3 (Issue 75b) — Celery Beat task.
@@ -1596,6 +1608,10 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
             await session.commit()
 
         duration_s: float | None = None
+        # Bound up front so neither artifact can become unbound at the write-back
+        # below if a future edit moves its extraction behind a branch.
+        peaks_uri: str | None = None
+        poster_uri: str | None = None
         async with alocal_path(source_uri) as src:
             from youtube.ingest import probe_duration_s
 
@@ -1616,6 +1632,26 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                 await asyncio.to_thread(extract_audio_wav, src, wav_path)
                 await aemit(video_id, "step", label="upload_audio", stage="ingest")
                 audio_uri = await aupload_file(wav_path, f"audio/{video_id}.wav")
+
+                # Waveform peaks (Issue 392) — computed HERE, inside the `finally`
+                # that deletes the WAV, because this is the only point where the
+                # decoded audio exists locally. Doing it later would mean either a
+                # second R2 download or (after the 72h audio purge) nothing to read
+                # at all.
+                #
+                # NEVER FAILS INGEST, for the same reason as the poster below:
+                # ingest_video is a RefundOnFailureTask with max_retries=3, so a
+                # propagating error would retry the whole ingest three times and
+                # then REFUND minutes for a transcription that succeeded. A missing
+                # waveform is a flat track in the UI; a spurious refund is money.
+                try:
+                    await aemit(video_id, "step", label="extract_peaks", stage="ingest")
+                    peaks_uri = await _compute_and_upload_peaks(
+                        wav_path, f"peaks/{creator_id}/{video_id}.json"
+                    )
+                except Exception as exc:  # noqa: BLE001 — see the note above
+                    logger.warning("peaks extraction failed for video %s: %s", video_id, exc)
+                    peaks_uri = None
             finally:
                 wav_path.unlink(missing_ok=True)
 
@@ -1649,6 +1685,10 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                 video.audio_uri = audio_uri
                 if poster_uri:
                     video.poster_uri = poster_uri
+                # Guarded like poster_uri: a failed re-run must never NULL out a
+                # waveform an earlier run already produced.
+                if peaks_uri:
+                    video.peaks_uri = peaks_uri
                 if duration_s and not video.duration_s:
                     video.duration_s = duration_s
                 if duration_s:
@@ -2003,6 +2043,36 @@ async def _extract_and_upload_poster(
         return await aupload_file(poster_path, key)
     finally:
         poster_path.unlink(missing_ok=True)
+
+
+async def _compute_and_upload_peaks(wav_path: Path, key: str) -> str | None:
+    """Compute a waveform envelope from ``wav_path`` and upload it to ``key``.
+
+    Returns the stored URI, or None if peaks could not be produced. Callers treat
+    None as "draw a labelled flat track" — a waveform is a navigation aid, never
+    a reason to fail the work that produced the media (Issue 392).
+
+    Takes the WAV rather than the video: the audio has already been demuxed to a
+    16 kHz mono PCM file at this point, so scanning it costs one numpy pass over
+    a few MB instead of decoding a several-hundred-MB source a second time.
+    """
+    import tempfile
+
+    from ingestion.peaks import compute_peaks, write_peaks_json
+    from worker.storage import aupload_file
+
+    peaks = await asyncio.to_thread(compute_peaks, wav_path)
+    if peaks is None:
+        return None
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        peaks_path = Path(tmp.name)
+    try:
+        if not await asyncio.to_thread(write_peaks_json, peaks, peaks_path):
+            return None
+        return await aupload_file(peaks_path, key)
+    finally:
+        peaks_path.unlink(missing_ok=True)
 
 
 async def _encode_and_upload_clip(
@@ -3271,6 +3341,91 @@ async def _backfill_video_posters_async() -> None:
                 await write.commit()
 
     logger.info("poster backfill: processed %d video(s)", done)
+
+
+# Same egress throttle and failure-marker doctrine as the poster backfill above.
+# The WAV is far smaller than the source video, so the batch can be larger.
+_PEAKS_BACKFILL_BATCH = 40
+_PEAKS_FAIL_TTL_S = 7 * 24 * 3600
+
+
+async def _backfill_video_peaks_async() -> None:
+    """Fill in waveform peaks for videos ingested before Issue 392.
+
+    IMPORTANT — this sweep has a HARD CEILING that the poster sweep does not.
+    Peaks are derived from `audio_uri`, and `purge_stale_source_media` deletes
+    the WAV (and NULLs the column) at SOURCE_MEDIA_RETENTION_HOURS. So a video
+    whose audio has already been purged can never get peaks: it simply never
+    matches the query below, keeps `peaks_uri` NULL forever, and the UI draws a
+    labelled flat track. That is a deliberate, documented limitation rather than
+    a bug to chase — see docs/COMPLIANCE.md.
+    """
+    from sqlalchemy import and_, select
+
+    from worker.storage import alocal_path
+
+    redis = _worker_redis()
+
+    # AdminSessionLocal: a genuine cross-tenant sweep, same posture (and same
+    # justification) as purge_stale_source_media.
+    async with db.AdminSessionLocal() as session:
+        if not await _try_advisory_lock(session, "backfill_video_peaks"):
+            logger.info("advisory lock held — skipping backfill_video_peaks")
+            return
+        try:
+            result = await session.execute(
+                select(Video.id, Video.creator_id, Video.audio_uri)
+                .where(
+                    and_(
+                        Video.peaks_uri.is_(None),
+                        Video.audio_uri.is_not(None),
+                    )
+                )
+                # Newest first: if the drain is interrupted, the rows a creator is
+                # most likely to be looking at are done first.
+                .order_by(Video.created_at.desc())
+                .limit(_PEAKS_BACKFILL_BATCH * 2)
+            )
+            candidates = result.all()
+        finally:
+            await _rollback_then_unlock(session, "backfill_video_peaks")
+
+    if not candidates:
+        return
+
+    done = 0
+    for video_id, creator_id, audio_uri in candidates:
+        if done >= _PEAKS_BACKFILL_BATCH:
+            break
+        marker = f"peaks_backfill_failed:{video_id}"
+        skip = False
+        # The marker is an egress optimisation, never a correctness gate: if
+        # Redis is unreachable the row is simply retried next pass.
+        with contextlib.suppress(Exception):
+            skip = bool(await redis.get(marker))
+        if skip:
+            continue
+        try:
+            async with alocal_path(audio_uri) as wav:
+                peaks_uri = await _compute_and_upload_peaks(
+                    wav, f"peaks/{creator_id}/{video_id}.json"
+                )
+        except Exception as exc:  # noqa: BLE001 — one bad source must not end the batch
+            logger.warning("peaks backfill failed for video %s: %s", video_id, exc)
+            peaks_uri = None
+
+        done += 1
+        if not peaks_uri:
+            with contextlib.suppress(Exception):
+                await redis.set(marker, "1", ex=_PEAKS_FAIL_TTL_S)
+            continue
+        async with db.tenant_session(str(creator_id)) as write:
+            video = await write.get(Video, video_id)
+            if video and video.peaks_uri is None:
+                video.peaks_uri = peaks_uri
+                await write.commit()
+
+    logger.info("peaks backfill: processed %d video(s)", done)
 
 
 async def _purge_stale_source_media_async() -> None:

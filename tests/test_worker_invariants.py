@@ -179,6 +179,10 @@ _ADMIN_SESSION_ALLOWLIST = frozenset(
         # every WRITE reopens db.tenant_session(creator_id), so the update path
         # is still RLS-enforced.
         "_backfill_video_posters_async",
+        # Issue 392 — identical posture to the poster sweep above: a cross-tenant
+        # Beat READ to find videos still missing a waveform, with every WRITE
+        # reopening db.tenant_session(creator_id).
+        "_backfill_video_peaks_async",
         # Spans RLS-exempt notification tables (preferences / deliveries carry
         # no tenant policy); per-creator isolation via explicit predicates.
         "_send_notification_async",

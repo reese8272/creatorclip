@@ -1,124 +1,37 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { fitTier } from '@/lib/fit'
-import { DisclaimerBand } from '@/components/DisclaimerBand'
-import { Timeline } from '@/components/editor/Timeline'
-import { FitBadge } from '@/components/ui/fit-badge'
+import { ToolMain, ToolShell } from '@/components/layout/ToolShell'
 import { Button } from '@/components/ui/button'
-import { CaptionStylePanel } from '@/components/review/CaptionStylePanel'
-import { CleanPassPanel } from '@/components/review/CleanPassPanel'
-import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { Chip } from '@/components/Chip'
 import { LongFormEditor } from '@/components/editor/LongFormEditor'
+import { ShortFormEditor } from '@/components/editor/ShortFormEditor'
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
-import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
-import type {
-  ClipTranscript,
-  EditorCut,
-  ReviewClip,
-  ReviewClipListResponse,
-  TranscriptWord,
-  VideoListResponse,
-} from '@/types'
-import { ArrowLeft, RectangleHorizontal, RectangleVertical, TriangleAlert, X } from '@/components/ui/icon'
-import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
-import { VideoPlayer, type VideoPlayerHandle } from '@/components/ui/video-player'
-import { Card } from '@/components/ui/card'
-
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const ADJACENT_MERGE_S = 0.05
-const WARNING_REMOVED_PCT = 40
-const storageKey = (clipId: string) => `clip:${clipId}:cuts`
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function loadCuts(clipId: string): EditorCut[] {
-  try {
-    const raw = localStorage.getItem(storageKey(clipId))
-    const parsed = raw ? JSON.parse(raw) : []
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function mergeAdjacent(cuts: EditorCut[]): EditorCut[] {
-  const sorted = cuts.slice().sort((a, b) => a.start_s - b.start_s)
-  if (!sorted.length) return sorted
-  const out = [sorted[0]]
-  for (let k = 1; k < sorted.length; k++) {
-    const last = out[out.length - 1]
-    const cur = sorted[k]
-    if (cur.start_s <= last.end_s + ADJACENT_MERGE_S) {
-      last.end_s = Math.max(last.end_s, cur.end_s)
-      last.indices = [last.indices[0], Math.max(last.indices[1], cur.indices[1])]
-    } else {
-      out.push(cur)
-    }
-  }
-  return out
-}
-
-/** Snap a cut time-range to the nearest enclosing word indices. */
-function timeRangeToIndices(
-  words: TranscriptWord[],
-  startS: number,
-  endS: number,
-): [number, number] | null {
-  let first = -1
-  let last = -1
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i]
-    if (w.start_s <= endS && w.end_s >= startS) {
-      if (first === -1) first = i
-      last = i
-    }
-  }
-  if (first === -1) return null
-  return [first, last]
-}
-
-// ── Transcript word hit-detection for playhead sync ──────────────────────────
-
-function activeWordIndex(words: TranscriptWord[], currentTime: number): number {
-  for (let i = 0; i < words.length; i++) {
-    if (currentTime >= words[i].start_s && currentTime <= words[i].end_s) return i
-  }
-  return -1
-}
+import type { ReviewClip, ReviewClipListResponse, VideoListResponse } from '@/types'
+import { RectangleHorizontal, RectangleVertical } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 
 // ── Editor page ──────────────────────────────────────────────────────────────
 
 /**
- * Editor — Issue 188.
+ * Editor route — Issue 188, restructured by Issue 389.
  *
- * Full-timeline single-clip edit surface:
- *  - Top: preview player (9:16 or chosen aspect)
- *  - Center: Timeline (waveform + playhead + cut overlays)
- *  - Below timeline: synced transcript (active word highlighted; drag-select → cut)
- *  - Right rail: Caption style + Clean pass tools (relocated from Review)
- *  - Footer: Apply cuts → existing submit_cuts / validate_user_cuts path
+ * This is route plumbing plus the short/long mode toggle. The two workspaces are
+ * components: ShortFormEditor (single-clip refine) and LongFormEditor (full source
+ * timeline). Both render inside ToolShell, which owns the <main> landmark and the
+ * docked honesty statement.
  *
- * This page is opened via the "Refine →" button added to Review.tsx for the
- * current clip. It does NOT replace Review; it deepens the edit for a clip the
- * creator has already decided to keep.
- *
- * Waveform rendering: client-side WebAudio decode (fetch the clip media, decode
- * via AudioContext.decodeAudioData, down-mix to mono Float32Array). This works
- * without any backend waveform asset, satisfying the AC without a staged ffmpeg
- * environment. The backend ffmpeg showwavespic path is deferred (render-env).
+ * Opened via Review's "Refine →" button for the current clip, or straight from the
+ * nav with no clip, in which case long-form source mode opens (Issue 307).
  */
 export function Editor() {
   const [params, setParams] = useSearchParams()
   const videoId = params.get('video_id')
   const clipId = params.get('clip_id')
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   // Issue 307: short-form clip editor vs long-form source editor. Default to the
   // mode implied by the URL — a clip_id means "refine this clip" (short).
   const [editorMode, setEditorMode] = useState<'short' | 'long'>(clipId ? 'short' : 'long')
@@ -150,215 +63,18 @@ export function Editor() {
   })
   const videoRow = (videosQuery.data?.videos ?? []).find((v) => v.id === videoId)
 
-  // ── Transcript ───────────────────────────────────────────────────────────
-
-  const { data: transcriptData, isPending: txPending, isError: txError } = useQuery({
-    queryKey: ['transcript', clip?.id ?? ''],
-    queryFn: () => api<ClipTranscript>(`/clips/${clip!.id}/transcript`),
-    enabled: !!clip,
-  })
-
-  const words: TranscriptWord[] = transcriptData?.words ?? []
-  const clipDuration = transcriptData?.clip_duration_s ?? (clip ? clip.end_s - clip.start_s : 0)
-
-  // ── Playhead state ───────────────────────────────────────────────────────
-
-  const playerRef = useRef<VideoPlayerHandle>(null)
-  // Page-level time state is retained deliberately: it is what the transcript
-  // highlight and Timeline read today, and it is behaviourally identical to the
-  // old onTimeUpdate wiring. Pushing the subscription down into those components
-  // is #390's job — doing it here would collide with its prop rewrite.
-  const [currentTime, setCurrentTime] = useState(0)
-
-
-  function handleSeek(t: number) {
-    playerRef.current?.seek(t)
-    setCurrentTime(t)
-  }
-
-  // ── Waveform (client-side WebAudio decode) ───────────────────────────────
-
-  const [waveformData, setWaveformData] = useState<Float32Array | null>(null)
-
-  const decodeWaveform = useCallback(async (mediaSrc: string) => {
-    try {
-      const resp = await fetch(mediaSrc, { credentials: 'include' })
-      if (!resp.ok) return
-      const buf = await resp.arrayBuffer()
-      // AudioContext is only available in browser; vitest jsdom stubs it.
-      const AudioCtx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-      if (!AudioCtx) return
-      const audioCtx = new AudioCtx()
-      const decoded = await audioCtx.decodeAudioData(buf)
-      // Down-mix all channels to mono by averaging.
-      const length = decoded.length
-      const mono = new Float32Array(length)
-      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
-        const channel = decoded.getChannelData(ch)
-        for (let i = 0; i < length; i++) mono[i] += channel[i]
-      }
-      for (let i = 0; i < length; i++) mono[i] /= decoded.numberOfChannels
-      setWaveformData(mono)
-      await audioCtx.close()
-    } catch {
-      // Waveform decode failure is non-fatal — placeholder is shown instead.
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!clip) return
-    const src = `/clips/${clip.id}/download?disposition=inline`
-    // Intentional: kick off the async waveform decode (which sets loading state)
-    // when the selected clip changes — a genuine external-sync effect, not derivable
-    // during render. Proper refactor tracked in OFF_COURSE_BUGS (lint sweep).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    decodeWaveform(src)
-  }, [clip, decodeWaveform])
-
-  // ── Cut state (mirrors TranscriptEditor, shares localStorage key) ────────
-
-  const [cuts, setCuts] = useState<EditorCut[]>(() => (clip ? loadCuts(clip.id) : []))
-  const [undo, setUndo] = useState<EditorCut[] | null>(null)
-  const [applying, setApplying] = useState(false)
-  const [status, setStatus] = useState('')
-
-  // Re-load cuts when the clip changes.
-  useEffect(() => {
-    // Intentional: reset local cut state to the newly-selected clip's persisted
-    // cuts. The canonical alternative is a `key` on this subtree (parent-owned);
-    // tracked for the lint sweep in OFF_COURSE_BUGS.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (clip) setCuts(loadCuts(clip.id))
-  }, [clip?.id])
-
-  // Persist cuts to localStorage so TranscriptEditor in Review stays in sync.
-  useEffect(() => {
-    if (!clip) return
-    try {
-      localStorage.setItem(storageKey(clip.id), JSON.stringify(cuts))
-    } catch {
-      /* quota — recoverable */
-    }
-  }, [cuts, clip?.id])
-
-  const cleanedUri = useCleanedUriPoll(clip?.video_id ?? '', clip?.id ?? '', applying)
-
-  // ── Cut management ───────────────────────────────────────────────────────
-
-  function addTimeCut(start_s: number, end_s: number) {
-    const idxRange = timeRangeToIndices(words, start_s, end_s)
-    const newCut: EditorCut = {
-      start_s,
-      end_s,
-      indices: idxRange ?? [0, 0],
-    }
-    setUndo(cuts)
-    setCuts(mergeAdjacent([...cuts, newCut]))
-  }
-
-  function removeCut(idx: number) {
-    setUndo(cuts)
-    setCuts(cuts.filter((_, k) => k !== idx))
-  }
-
-  function onTranscriptMouseUp() {
-    const sel = window.getSelection()
-    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
-    const range = sel.getRangeAt(0)
-    const startEl = ancestorWord(range.startContainer)
-    let endEl = ancestorWord(range.endContainer)
-    if (!endEl && range.endContainer.previousSibling) {
-      endEl = ancestorWord(range.endContainer.previousSibling)
-    }
-    if (!startEl || !endEl) return
-    let i = Number(startEl.dataset.index)
-    let j = Number(endEl.dataset.index)
-    if (i > j) [i, j] = [j, i]
-    window.getSelection()?.removeAllRanges()
-    const start_s = words[i]?.start_s ?? 0
-    const end_s = words[j]?.end_s ?? 0
-    if (end_s <= start_s) return
-    setUndo(cuts)
-    setCuts(
-      mergeAdjacent([...cuts, { start_s, end_s, indices: [i, j] }]),
-    )
-  }
-
-  async function apply() {
-    if (!clip || !cuts.length) {
-      setStatus('No cuts to apply.')
-      return
-    }
-    setStatus('Submitting cuts…')
-    try {
-      await api(`/clips/${clip.id}/cuts`, {
-        method: 'POST',
-        body: { segments: cuts.map((c) => ({ start_s: c.start_s, end_s: c.end_s })) },
-      })
-      setApplying(true)
-      setStatus('Editing your clip — come back in ~20s.')
-    } catch (e) {
-      const detail = (e as { message?: string }).message
-      setStatus(detail || 'Submit failed — try again.')
-    }
-  }
-
-  async function confirmFinal() {
-    if (!clip) return
-    try {
-      await api(`/clips/${clip.id}/clean/confirm`, { method: 'POST' })
-      try {
-        localStorage.removeItem(storageKey(clip.id))
-      } catch {
-        /* ignore */
-      }
-      setCuts([])
-      setApplying(false)
-      setStatus('Edited version is now the main render.')
-      queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })
-    } catch {
-      setStatus('Swap failed — try again.')
-    }
-  }
-
-  // Issue 364: discard must clear cleaned_render_uri server-side, or the next
-  // clean/edit 409s with pending_clean_or_edit until a version the creator
-  // explicitly rejected is confirmed instead.
-  async function discardFinal() {
-    if (!clip) return
-    try {
-      await api(`/clips/${clip.id}/clean/discard`, { method: 'POST' })
-      setApplying(false)
-      setStatus('Keeping original render.')
-      queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })
-    } catch {
-      setStatus('Discard failed — try again.')
-    }
-  }
-
-  // ── Cut computation helpers ──────────────────────────────────────────────
-
-  const cutIndices = new Set<number>()
-  cuts.forEach((c) => {
-    for (let i = c.indices[0]; i <= c.indices[1]; i++) cutIndices.add(i)
-  })
-  const removedS = cuts.reduce((acc, c) => acc + (c.end_s - c.start_s), 0)
-  const pct = clipDuration > 0 ? (100 * removedS) / clipDuration : 0
-  const activeIdx = activeWordIndex(words, currentTime)
-
   // ── Guard states ────────────────────────────────────────────────────────
 
+  // Every branch renders inside ToolShell, so the honesty statement and the legal
+  // links are structurally impossible to omit — including the loading and error
+  // states, which each carried their own copy of the band before Issue 389.
   function message(text: string) {
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
+      <ToolShell>
+        <ToolMain>
           <p className="text-center text-sm text-muted">{text}</p>
-        </main>
-      </>
+        </ToolMain>
+      </ToolShell>
     )
   }
 
@@ -367,13 +83,9 @@ export function Editor() {
   // no clip, we open long-form source mode (Issue 307).
   if (!videoId) {
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
+      <ToolShell>
         <VideoPickerLanding tool="editor" />
-      </>
+      </ToolShell>
     )
   }
   if (clipsPending) return message('Loading…')
@@ -381,26 +93,22 @@ export function Editor() {
   // clips exist would be told there are none (Recap retry idiom, Issue 361 sweep).
   if (clipsError) {
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
+      <ToolShell>
+        <ToolMain>
           <QueryErrorState
             title="Couldn’t load clips for this video."
             onRetry={() => void refetchClips()}
           />
-        </main>
-      </>
+        </ToolMain>
+      </ToolShell>
     )
   }
 
-  const mediaSrc = clip ? `/clips/${clip.id}/download?disposition=inline` : ''
-
   // Open a long-form candidate as a short-form clip: point the URL at it + switch.
-  function openClipInShortEditor(id: string) {
-    setParams({ video_id: videoId!, clip_id: id })
+  // A const arrow, not a function declaration: declarations hoist above the
+  // `if (!videoId) return` guard, so TypeScript cannot narrow videoId inside one.
+  const openClipInShortEditor = (id: string) => {
+    setParams({ video_id: videoId, clip_id: id })
     setEditorMode('short')
   }
 
@@ -412,18 +120,19 @@ export function Editor() {
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <>
-      <DisclaimerBand>
-        AutoClip predicts fit with your style and audience — it does not promise virality. All scores
-        are estimates grounded in your own channel data.
-      </DisclaimerBand>
-
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+    // scroll={false}: <main> clips and the workspace regions own their own
+    // scrolling, so the timeline can never leave the viewport while you edit
+    // against it (Issue 389). <main> is itself the flex column, which gives the
+    // workspace a definite height to divide up.
+    <ToolShell scroll={false} className="flex flex-col gap-3 px-4 py-3 lg:px-6">
+      <>
         {/* Header + mode toggle (Issue 307) */}
-        <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+        <div className="flex shrink-0 flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="font-display text-h1 text-fg">Editor</h1>
-            <p className="mt-1 text-small text-muted">
+            {/* text-h2, and the sub-line only at xl: the header is chrome above
+                the work, so it gives up ~30px of vertical budget to the panels. */}
+            <h1 className="font-display text-h2 text-fg">Editor</h1>
+            <p className="mt-1 hidden text-small text-muted xl:block">
               Refine a single clip, or work the full source timeline.
             </p>
           </div>
@@ -453,13 +162,14 @@ export function Editor() {
 
         {editorMode === 'long' ? (
           <LongFormEditor
+            className="min-h-0 flex-1"
             clips={clips}
             videoId={videoId}
             video={videoRow}
             onOpenClip={openClipInShortEditor}
           />
         ) : !clip ? (
-          <div className="flex flex-col items-center gap-3 py-16 text-center">
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-center">
             <Chip pose="confused" size={64} />
             <p className="max-w-md text-body text-muted">
               No clip selected. Switch to <strong className="text-fg">Long-form source</strong> to
@@ -470,245 +180,14 @@ export function Editor() {
             </Button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[1fr_320px]">
-            {/* ── Left: player + timeline + transcript ── */}
-            <div className="flex flex-col gap-4">
-          {/* The viewer — player + timeline as ONE primary panel (L2). They are a
-              single instrument; as two bare divs under uppercase micro-labels
-              neither could dominate, which is the composition half of "blocky". */}
-          <Card level="primary" className="flex flex-col gap-4 p-4">
-          <div className="flex items-start gap-4">
-            {clip.render_uri ? (
-              <VideoPlayer
-                ref={playerRef}
-                // Keyed on the artifact, not just the clip: a confirmed clean
-                // swap changes render_uri but not the download src, so without
-                // a key change the element would keep playing the old media.
-                mediaKey={clip.render_uri ?? undefined}
-                src={mediaSrc}
-                label="Clip preview"
-                // compact: at 180px wide a full transport bar is unusable, and
-                // scrubbing here belongs to the Timeline below, not the player.
-                density="compact"
-                transport
-                onTimeChange={setCurrentTime}
-                className="w-[180px] shrink-0 shadow-accent-glow"
-              />
-            ) : (
-              <div className="flex aspect-[9/16] w-[180px] shrink-0 items-center justify-center rounded-xl border border-default bg-black text-xs text-subtle">
-                Not yet rendered
-              </div>
-            )}
-
-            {/* Clip meta + fit badge */}
-            <div className="flex flex-col gap-3 pt-2">
-              <div className="text-center font-mono text-mono text-muted">
-                Clip #{clip.rank ?? '—'} ·{' '}
-                {(clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1)}s
-              </div>
-              <FitBadge tier={fitTier(clip.score)} />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => navigate(`/review?video_id=${videoId}`)}
-              >
-                <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back to Review
-              </Button>
-            </div>
-          </div>
-
-          {/* Chip guidance callout (short-form) */}
-          {clip.reasoning && (
-            <div className="flex items-start gap-3 rounded-md border border-default bg-surface px-4 py-3 inset-shadow-highlight">
-              <Chip pose="think" size={30} className="mt-0.5 flex-shrink-0" />
-              <p className="text-small leading-relaxed text-muted">{clip.reasoning}</p>
-            </div>
-          )}
-
-          {/* Timeline */}
-          <div>
-            <h2 className="mb-2 text-label font-medium uppercase tracking-[0.06em] text-muted">
-              Timeline
-            </h2>
-            <Timeline
-              duration={clipDuration}
-              currentTime={currentTime}
-              cuts={cuts}
-              onSeek={handleSeek}
-              onSelection={({ start_s, end_s }) => addTimeCut(start_s, end_s)}
-              waveformData={waveformData}
-            />
-            {/* Content the creator must actually read: on the semantic scale and
-                on text-muted, not 10px text-subtle. */}
-            <p className="mt-1 text-small text-muted">Click to seek · Drag to mark a cut region</p>
-          </div>
-          </Card>
-
-          {/* Transcript synced to playhead */}
-          <div>
-            <h2 className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.06em] text-muted">
-              <Chip pose="papers" size={22} />
-              Transcript
-            </h2>
-            {txError && (
-              <p className="text-xs text-danger">
-                Couldn’t load the transcript — cuts by word selection are unavailable until it
-                loads. Try reopening the clip in a moment.
-              </p>
-            )}
-            {words.length === 0 && !txPending && !txError && (
-              <p className="text-xs text-subtle">No transcript available for this clip.</p>
-            )}
-            {words.length > 0 && (
-              <div
-                role="textbox"
-                aria-multiline="true"
-                aria-readonly="true"
-                aria-label="Clip transcript — drag to select words for removal"
-                onMouseUp={onTranscriptMouseUp}
-                // bg-bg inside a panel is an L0 WELL — a scroll region reads as recessed on
-                // dark by dropping a rung, not by adding a shadow.
-                className="max-h-[200px] select-text overflow-y-auto rounded-md border border-default bg-bg px-3 py-2 text-body leading-[1.9]"
-              >
-                {words.map((w, i) => (
-                  <Fragment key={i}>
-                    {i > 0 && ' '}
-                    <span
-                      data-index={i}
-                      className={cn(
-                        'ed-word cursor-text rounded-sm px-px transition-colors',
-                        cutIndices.has(i) && 'text-subtle line-through opacity-45',
-                        i === activeIdx && !cutIndices.has(i) && 'bg-accent-soft text-accent-text',
-                      )}
-                    >
-                      {w.word}
-                    </span>
-                  </Fragment>
-                ))}
-              </div>
-            )}
-
-            {/* Cut queue */}
-            <div className="mt-2 text-small text-muted">
-              {cuts.length} cut(s) · {removedS.toFixed(2)}s removed ({pct.toFixed(0)}%)
-            </div>
-            {pct >= WARNING_REMOVED_PCT && (
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-danger">
-                <TriangleAlert className={`${ICON_SIZE.xs} shrink-0`} aria-hidden="true" />
-                This removes {pct.toFixed(0)}% of your clip.
-              </div>
-            )}
-
-            {cuts.length > 0 && (
-              <div className="mt-2 max-h-[120px] overflow-y-auto rounded-sm border border-default bg-bg p-2 text-xs">
-                {cuts.map((c, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between border-b border-default py-1 last:border-b-0"
-                  >
-                    <span className="text-subtle line-through">
-                      {words
-                        .slice(c.indices[0], c.indices[1] + 1)
-                        .map((w) => w.word)
-                        .join(' ')
-                        .slice(0, 60)}{' '}
-                      <span className="font-mono">· {(c.end_s - c.start_s).toFixed(2)}s</span>
-                    </span>
-                    <button
-                      onClick={() => removeCut(idx)}
-                      aria-label="Remove cut"
-                      className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-sm border border-strong text-muted hover:border-danger hover:text-danger"
-                    >
-                      <X className={ICON_SIZE.sm} aria-hidden="true" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Cut actions */}
-            <div className="mt-2 flex flex-wrap gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={!undo}
-                onClick={() => {
-                  if (undo) {
-                    setCuts(undo)
-                    setUndo(null)
-                  }
-                }}
-              >
-                Undo
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  setUndo(cuts)
-                  setCuts([])
-                  setStatus('Cleared all pending cuts.')
-                }}
-              >
-                Clear all
-              </Button>
-              <Button size="sm" onClick={apply} disabled={applying}>
-                {applying ? 'Applying…' : 'Apply cuts'}
-              </Button>
-            </div>
-
-            {/* cleanedUri is the readiness signal only; playback goes through
-                the authed download endpoint (the raw URI is s3:// in prod R2). */}
-            {cleanedUri && (
-              <div className="mt-3">
-                <VideoPlayer
-                  src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
-                  label="Edited clip preview"
-                  density="compact"
-                  className="w-full"
-                />
-                <div className="mt-2 flex gap-2">
-                  <Button size="sm" onClick={confirmFinal}>
-                    Use edited version
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={discardFinal}>
-                    Keep original
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {status && <div className="mt-2 text-xs text-subtle">{status}</div>}
-          </div>
-        </div>
-
-        {/* ── Right rail: caption + clean tools (relocated from Review) ── */}
-        <div className="flex flex-col gap-4">
-          <h2 className="text-xs font-medium uppercase tracking-[0.06em] text-muted">
-            Render options
-          </h2>
-          <CollapsibleTool title="Caption style" defaultOpen>
-            <CaptionStylePanel clip={clip} />
-          </CollapsibleTool>
-          <CollapsibleTool title="Clean filler + silence">
-            <CleanPassPanel clip={clip} />
-          </CollapsibleTool>
-            </div>
-          </div>
+          <ShortFormEditor
+            className="min-h-0 flex-1"
+            clip={clip}
+            videoId={videoId}
+            hasPeaks={videoRow?.has_peaks ?? false}
+          />
         )}
-      </main>
-    </>
+      </>
+    </ToolShell>
   )
-}
-
-// ── DOM helpers ──────────────────────────────────────────────────────────────
-
-function ancestorWord(node: Node | null): HTMLElement | null {
-  let n: Node | null = node
-  while (n && n !== document.body) {
-    if (n.nodeType === 1 && (n as HTMLElement).classList?.contains('ed-word'))
-      return n as HTMLElement
-    n = n.parentNode
-  }
-  return null
 }

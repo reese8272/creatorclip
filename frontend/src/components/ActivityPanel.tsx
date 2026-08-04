@@ -249,7 +249,12 @@ export function ActivityPanel() {
       aria-label="Active tasks"
       style={{
         position: 'fixed',
-        bottom: '1.5rem',
+        // Issue 389: the tool routes dock a status bar (and, from #390, a timeline
+        // rail) at the bottom of a non-scrolling shell, so a fixed panel at a raw
+        // 1.5rem parks permanently over the end of the clip. ToolChrome sets
+        // --app-bottom-inset; every other route leaves it undefined and falls back
+        // to the original offset.
+        bottom: 'calc(1.5rem + var(--app-bottom-inset, 0px))',
         right: '1.5rem',
         zIndex: 50,
         width: 'min(22rem, 90vw)',

@@ -98,10 +98,16 @@ def test_ingest_async_retains_source_video():
     purged by ``purge_stale_source_media``. With no overwrite there is no orphan, so
     Fix D's prior-URI cleanup is intentionally gone.
     """
-    src = (pathlib.Path(__file__).parent.parent / "worker" / "tasks.py").read_text()
-    idx = src.find("async def _ingest_async(")
-    assert idx >= 0, "worker/tasks.py must define _ingest_async"
-    body = src[idx : idx + 6000]
+    # The whole function, not a fixed character window. Issue 392 added the peaks
+    # block to this function and pushed `video.audio_uri = audio_uri` past the old
+    # 6000-char slice, failing this test for a reason that had nothing to do with
+    # the contract it guards. A window that shifts when unrelated code is added
+    # tests the file's byte layout, not its behaviour.
+    import inspect
+
+    from worker import tasks
+
+    body = inspect.getsource(tasks._ingest_async)
     assert "video.audio_uri = audio_uri" in body, (
         "_ingest_async must store the extracted audio on audio_uri (migration 0039)."
     )

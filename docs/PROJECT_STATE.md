@@ -4,6 +4,169 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-03 (L25 W2) — Issue 390 DONE: the editor is an editor
+
+**Both timelines were rebuilt on one shared engine.** They can now be zoomed, scrolled, scrubbed by
+touch or keyboard, and their cuts trimmed by dragging an edge with visible, toggleable snapping.
+Before this, the timeline mapped the whole clip to the container width with no zoom, listened only to
+mouse events, and made cuts immutable once created.
+
+| Commit | What landed |
+|---|---|
+| `a506dc0` | `lib/timelineZoom.ts` — pixels-per-second maths, pointer-anchored, 24 tests |
+| `d58775d` `e798e63` | `useTimelineViewport` — measurement, zoom, the non-passive wheel listener |
+| `c2ec642` | One `isTypingTarget`; `defaultPrevented` bail; **the dead scrub-bar arrows fixed** |
+| `71dee2f` | The shortcut bus — capture-phase, module singleton, 12 tests |
+| `7e056f3` | Adaptive DOM ruler + zoom icons; its own gate made AST-based |
+| `dda3366` | Stable cut ids + non-mutating `mergeAdjacent`; `TranscriptEditor` deleted |
+| `7138e9c` | Hit-testing + pixel-threshold snapping, 19 tests |
+| `115e556` | **`TimelineRail`** — pointer events, zoom, the real ARIA model |
+| `a09d8d0` | The long-form master timeline on the same rail |
+| `5223541` | Editing keys — I/O, Delete, zoom, zoom-aware fine step |
+
+**Gates.** Frontend **549 passed / 78 files** (441 after 392, **+108**). `tsc -b` clean, lint 0 errors
+(1 pre-existing warning). Playwright green incl. axe on both editor routes and the tool-shell
+regression suite. Backend untouched — verified structurally: `git diff 73c3223..HEAD` over
+`clip_engine worker routers models.py alembic ingestion tests` is **empty**, which is what makes the
+clip-quality eval green by construction (53 passed).
+
+**The idea the whole issue rests on: the pixel is the unit.** Every threshold — the 8px snap radius,
+the 6px edge grab, the keyboard's one-pixel fine step — is stored in pixels and converted to seconds
+at the point of use. An 8px snap radius is ~10 seconds of tolerance on a 22-minute source at fit and
+~4 milliseconds at 64×. Stored as a duration, either figure is unusable at one end.
+
+**Scope extended, with the user's agreement:** the engine is shared by BOTH timelines. The brief says
+"rebuild `Timeline.tsx`", but the analysis under it argues from the 22-minute long-form source — a
+separate hand-rolled bar with the same defect. Rebuilding only the short-form clip timeline would
+have left the exact surface the issue points at unusable.
+
+**Four defects found while building, none of them in the brief** (all in `OFF_COURSE_BUGS.md`):
+- The container's `role="slider"` was **suppressing the waveform and every cut label in production** —
+  MDN: a slider forces all descendants to `presentation`.
+- **The scrub bar's arrow keys had never worked.** An `onKeyDownCapture` calling `stopPropagation` in
+  the capture phase also prevents the element's own bubble handler. Found because a test written from
+  the WRONG hypothesis (I expected a double-seek) failed reporting no movement at all.
+- `mergeAdjacent` mutated caller-owned objects, so single-level undo was already wrong for merged cuts.
+- `clientXToTime` derived zoom from stale state width, mapping every pointer x to the end of the clip.
+
+Also fixed a structural gate rather than working around it: `no-synthetic-waveform` scanned raw text
+and flagged `TimelineRuler`'s comment explaining why it is deliberately not a canvas. Now AST-based,
+and strictly stronger.
+
+**Batch B is 3 of 4.** #391 (server-side edit document + undo/redo) is planned in detail and is
+deliberately its own PR — it carries a migration, an RLS-isolated table, and a rewrite of how edits
+are stored, and deserves its own review and deploy.
+
+---
+
+## 2026-08-03 (L25 W2) — Issue 392 DONE: the fabricated waveform is gone
+
+**The batch's only live honesty-constraint violation is fixed.** The long-form "Source timeline" drew
+48 bars at `20 + ((i * 37) % 60)%` — a deterministic arithmetic pattern with no relationship to the
+audio — under a label telling the creator it was their source. It now draws their actual audio, and
+when there is none it draws a flat line and says so in words.
+
+| Layer | What landed |
+|---|---|
+| `ingestion/peaks.py` | BBC `audiowaveform` JSON from the 16 kHz WAV; 512 samples/pixel = 31.25 pairs/s, `MAX_PAIRS` cap; never raises |
+| Migration `0051` | `videos.peaks_uri` (one column on `videos`, none on `clips`) |
+| `worker/tasks.py` | Computed inside the existing WAV block at ingest; hourly `backfill_video_peaks` with advisory lock + Redis failure marker |
+| `routers/videos.py` | `GET /videos/{id}/peaks` byte proxy + `has_peaks` boolean on the list |
+| Frontend | `lib/peaks.ts`, `Waveform.tsx`, `useVideoPeaks`; both timelines on one artifact |
+| Gate | `no-synthetic-waveform.test.ts` — verified it fires |
+
+**Gates.** Backend **2544 passed** / 64 skipped (2516 at Batch A close). Frontend **441 passed / 71
+files** (430 after #389). `tsc -b` clean, lint 0 errors. Playwright **76 passed**; the three pixel
+baselines still pass. ruff · mypy · bandit clean.
+
+**Key decisions** (full reasoning in `docs/DECISIONS.md`):
+- **BBC's format, not BBC's binary.** `audiowaveform` is not in the Debian repos, so shipping it means
+  a third-party `.deb` at image-build time for bytes numpy already produces. numpy and ffmpeg were
+  already dependencies; this issue added none.
+- **Resolution is set by zoom, not by looks.** BBC data cannot be zoomed in past the resolution it was
+  built at, and #390 zooms a ~40 s clip at 27.5 px/s — so 31.25 pairs/s is a floor, not a preference.
+- **One artifact on `Video`.** The clip timeline reads it windowed by `setup_start_s`; a per-clip copy
+  would store the same samples N times and hand #390 two render paths.
+- **Approved scope extension:** the short-form editor moved onto it too, deleting a WebAudio decode
+  that fetched the entire rendered mp4 and built an ~8 MB `Float32Array` per clip switch.
+
+**Accepted limitation, documented not worked around.** Peaks come from `audio_uri`, purged at 72h, so
+a video whose audio is already gone can never get peaks. Retaining audio longer would weaken a
+retention promise to improve a navigation aid.
+
+**Two pre-existing brittle tests fixed** — both asserted on file layout rather than behaviour, and
+both broke on unrelated edits: `test_issue_110` sliced a fixed 6000-character window of
+`_ingest_async` (now `inspect.getsource`), and `test_static` read the Accessibility link out of
+`Footer.tsx`, which #389 had emptied via the `LegalLinks` extraction.
+
+**Verification worth remembering.** The extractor was validated against real ffmpeg audio, not only
+synthetic arrays — which caught a false alarm: ffmpeg's `sine` source runs at 0.125 full scale
+(−18 dBFS), so a "suspiciously quiet" reading was correct rather than a normalisation bug.
+
+**Next:** Issue **390** — Timeline v2, which now has its final waveform contract and a fireable
+`ResizeObserver` fake to test zoom math against.
+
+---
+
+## 2026-08-03 (L25 W2) — Batch B opens: Issue 389 DONE (the tool routes become an application)
+
+**Editor and Review stopped being scrolling documents.** They now render under a new `ToolChrome`
+route layout: `100dvh` at `lg`, no page scroll, no marketing footer, independently-scrolling panels,
+and the honesty statement docked in a persistent status bar. Below `lg` the shell disengages entirely
+and the page stacks and scrolls exactly as before.
+
+| Commit | What landed |
+|---|---|
+| `150ddfe` | `LegalLinks` extracted from `Footer` — one href list, two consumers |
+| `191537d` | `ToolChrome` + `ToolShell` + `ToolStatusBar`, built but unwired (zero visual change) |
+| `ae80961` | Route split; every Editor/Review branch wrapped; **ten** inline `DisclaimerBand` sites deleted; `<main>` → `<div>` in the two shared sub-components |
+| `d3975f3` | `ShortFormEditor` extracted — `Editor.tsx` 700 → 181 lines |
+| `ca90933` | Editor three-region workspace + full-width timeline dock |
+| `c59dc37` | Review three-region workspace; three stacked bands → one toolbar strip |
+| `6e3bcb4` | Long-form panels; source player height-bounded |
+| `0c43752` | Fireable `ResizeObserver` fake + `e2e/tool-shell.spec.ts` |
+
+**Gates.** Frontend **430 passed / 69 files** (409/64 at Batch A, **+21**), `tsc -b` clean, lint 0
+errors (1 pre-existing warning — two `exhaustive-deps` warnings disappeared with the extraction).
+Playwright **58 + 16 = 74 passed** across desktop + mobile; axe **10 routes** (long-form editor mode
+added). The three pixel baselines still pass, which is the evidence `index.css` was never touched.
+Backend untouched.
+
+**The load-bearing constraint, worth remembering.** `Editor.test.tsx` and `Review.test.tsx` render
+the pages **standalone**, with no layout element, and assert the disclaimer — and an acceptance
+criterion required them to stay green. That single fact is why the status bar lives in `ToolShell`
+(a component the page renders) and not in `ToolChrome` (the route layout). Hoisting it looks like a
+tidy-up and would break them; there is a `WHY` comment pinning it. All four affected page/component
+test files pass **unedited**.
+
+**Two plan assumptions were wrong, and measuring caught both.**
+1. Stacking the clip meta under the player was supposed to remove the dead region. It does — but it
+   also makes the player *smaller*, because in a height-constrained column at 9:16 every pixel spent
+   beside the media comes out of the player's height. Meta became one compact row; the engine's case
+   for the clip moved to the transcript column.
+2. **This project's root font-size is ~14.39px, not 16px.** The player-sizing constants were derived
+   at 16px/rem, came out ~10% short, and the viewer card silently overflowed its row with the meta
+   clipped below the fold. All three constants are now measured in Chromium at 1440×900.
+
+**Defects the shell exposed and this issue fixed:** the long-form source player was `aspect-video
+w-full` → 605px tall, pushing the master timeline to the viewport edge (top y=831 → 536); the Editor
+transcript was a latent axe `scrollable-region-focusable` failure (SERIOUS) that only passed because
+the fixture is two words long; and `fullPage: true` audit screenshots silently degraded to viewport
+captures under the shell (a second `-expanded` artifact now recovers the content — editor-long
+900 → 1060px).
+
+**Batch B order changed to 389 → 392 → 390 → 391** (user decision). #392 is the batch's only live
+honesty-constraint violation, is pure backend, and hands #390 the final waveform contract before #390
+designs its renderer. Four findings are logged in `docs/OFF_COURSE_BUGS.md` and assigned: the
+`mergeAdjacent` shallow-copy mutation (which already makes today's single-level undo wrong for merged
+cuts) and index-keyed cuts both go to **#390**; `restoreMocks` + the prototype-wide rect spy also
+**#390**; the keyboard shortcut bus **#390**; cut-state de-duplication **#391**.
+
+**Next:** Issue 392 — real audio peaks (`Video.peaks_uri`, JSON at ~10 peaks/s, following the Issue
+387 poster template beat-for-beat).
+
+---
+
 ## 2026-08-03 (L25 W1) — Batch A COMPLETE: Issues 384, 385, 386, 387, 388, 400 all DONE
 
 **The whole of Lane L25 Batch A — "visual credibility: stop reading as a prototype" — shipped in one

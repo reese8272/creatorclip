@@ -109,6 +109,7 @@ STORAGE_GAUGE_PREFIXES: tuple[str, ...] = (
     "clips/",
     "summaries/",
     "posters/",  # Issue 387 — poster frames, ~50 KB each.
+    "peaks/",  # Issue 392 — waveform envelopes, ~90 KB gzipped for a 22-min source.
 )
 
 

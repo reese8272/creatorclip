@@ -5,6 +5,217 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-03 — Issue 390: Timeline v2 — the pixel is the unit
+
+**What was decided.** Both timelines are rebuilt on one shared `TimelineRail`: pointer events with
+capture, a pixels-per-second zoom model, an adaptive ruler, draggable cut edges, visible snapping,
+and a single keyboard bus.
+
+**Both timelines, not just `Timeline.tsx`.** The brief says "rebuild `components/editor/Timeline.tsx`",
+but the analysis directly beneath it points at the 22-minute LONG-FORM source where "one pixel is
+roughly a second, which makes precise work impossible" — a separate hand-rolled bar with the same
+mouse-only defect. Rebuilding only the short-form clip timeline would have left the exact surface the
+issue argues from untouched. A 40-second clip is tolerable without zoom; a 22-minute source never was.
+
+**Every threshold is in PIXELS, converted to seconds at the point of use.** This is the single idea
+the whole issue rests on. An 8px snap radius is ~10 seconds of tolerance on a 22-minute source at fit
+and ~4 milliseconds at 64×; a 6px edge grab zone likewise. Stored as durations, either figure makes
+the feature unusable at one end. The same reasoning gives the keyboard its fine step: a bare arrow
+moves ONE PIXEL at the current zoom, so it is a coarse nudge zoomed out and frame-accurate zoomed in
+without the creator ever choosing a unit. Shift keeps the player's 5s jump.
+
+**Zoom is anchored on the pointer**, following [Audacity](https://manual.audacityteam.org/man/zooming.html) —
+`zoomAtAnchor` returns the new pps AND the scroll together, because changing one without the other is
+exactly what makes zoom feel like a jump instead of a magnifier. Zooming out past fit is refused, and
+fit is proven to be a fixed point (one step converges, a second is a no-op) — the property that would
+otherwise let zoom-to-fit iterate forever.
+
+**The wheel listener is not React's `onWheel`.** React attaches wheel listeners passively, so
+`preventDefault()` inside one silently does nothing ([react#14856](https://github.com/facebook/react/issues/14856))
+and Ctrl+wheel would zoom the entire browser page. It is attached with `{ passive: false }`. Trackpad
+pinch arrives as a wheel event with `ctrlKey: true`
+([MDN](https://developer.mozilla.org/en-US/docs/Web/API/Element/wheel_event)), so that one branch
+gives pinch-to-zoom for free. A plain wheel is only swallowed when there is somewhere to scroll, so a
+fitted timeline never traps the page.
+
+**ARIA: the container stops being a `slider`, and that fixed a live defect.**
+[MDN](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Reference/Roles/slider_role) is
+explicit that `role="slider"` forces every descendant to `presentation` — so the waveform's
+`role="img"` and every `Cut N:` label were being suppressed in production, before this issue added
+anything. The rail is now a `group`; the playhead is the slider and keeps the "Timeline scrubber"
+name the container used to claim; each cut edge is its own thumb per
+[W3C APG multi-thumb](https://www.w3.org/WAI/ARIA/apg/patterns/slider-multithumb/). Accepted cost,
+stated rather than hidden: N cuts produce 1+2N tab stops. Roving tabindex is the named follow-up.
+
+**Positions are pixels, not percentages** — an explicit constraint change. Percent cannot express a
+scrolled, zoomed view; it only ever describes the whole clip. The pre-390 test asserting
+`playhead.style.left === '50%'` was rewritten to assert pixels.
+
+**One shortcut bus, capture-phase, module singleton.** `VideoPlayer` mounts before the timeline, so
+its bubble-phase document listener would win ←/→ on registration order alone; capture always precedes
+bubble, making precedence structural rather than an accident a refactor could flip. It is a module
+singleton rather than React context because `video-player.test.tsx` asserts a consumer renders
+exactly once — the player reports time through a ref precisely to avoid re-rendering the editor at
+4 Hz. Both layers now bail on `defaultPrevented`, which is what lets them compose.
+
+**Snapping made real, not just visible.** `addTimeCut` used to store RAW drag times with SNAPPED word
+indices, so the struck-through words and the times sent to the server disagreed. Committed times are
+now the snapped boundaries, and `indices` is OMITTED when a range covers no word — the old
+`?? [0, 0]` fallback silently struck through the first word of the transcript on every drag over a gap.
+
+**Four defects found while building** (all logged in `docs/OFF_COURSE_BUGS.md`):
+1. The scrub bar's arrow keys **had never worked** — an `onKeyDownCapture` calling `stopPropagation`
+   in the capture phase also prevents the element's own bubble handler. Found because a test written
+   from the WRONG hypothesis (I expected a double-seek) failed reporting no movement at all.
+2. `mergeAdjacent` mutated caller-owned objects through a shallow `.slice()`, so the undo snapshot
+   taken immediately before a merge was corrupted by that merge.
+3. Cuts were addressed by array index while the merge re-sorts, so an edge drag detached mid-gesture.
+4. `clientXToTime` derived zoom from stale state width — invisible only because nothing consumed the
+   hook yet.
+
+**A structural gate was fixed rather than worked around.** `no-synthetic-waveform` scanned raw text
+for `getContext('2d')` and flagged `TimelineRuler`'s comment explaining why it is deliberately NOT a
+canvas — the second time a raw-text scan in that file has flagged an explanation rather than an
+offence. It is now AST-based (a `CallExpression` whose callee property is `getContext`), which cannot
+see comments at all and is strictly stronger.
+
+**Date:** 2026-08-03
+
+---
+
+## 2026-08-03 — Issue 392: BBC's waveform FORMAT without BBC's waveform BINARY
+
+**What was decided.** Real audio peaks replace the fabricated long-form waveform. The artifact is the
+**BBC `audiowaveform` JSON data format** — min/max pairs, 8-bit, `samples_per_pixel` recorded in the
+file — computed by **ffmpeg + numpy**, both already dependencies. `audiowaveform` itself is NOT
+installed.
+
+**Why the format.** It is the de-facto interchange standard for waveform data and is readable by
+`waveform-data.js` / `peaks.js` if we ever adopt them, so this is not an invented shape.
+8-bit is BBC's own recommendation (smaller, and peaks.js does not read 16-bit).
+Sources: [DataFormat.md](https://github.com/bbc/audiowaveform/blob/master/doc/DataFormat.md),
+[bbc/audiowaveform](https://github.com/bbc/audiowaveform),
+[peaks.js](https://www.npmjs.com/package/peaks.js/v/3.0.0-beta.7).
+
+**Why not the binary.** `audiowaveform` is not in the Debian repositories, and our base image is
+`python:3.12-slim`. Shipping it means fetching a third-party `.deb` at image-build time — supply-chain
+surface plus image weight — to produce bytes numpy already produces from a WAV that ingest has
+already written to local disk ([issue #119](https://github.com/bbc/audiowaveform/issues/119)).
+
+**Why not `ffmpeg showwavespic`.** `ingestion/audio.py:143` already wraps it, is tested, and is the
+WRONG artifact: a raster can be stretched or squeezed but not re-bucketed, so it blurs zoomed in and
+aliases zoomed out. Issue 390 needs data at adaptive density. (Its only callers are 5 tests; whether
+to delete it is left to 390, which will know whether it wants the PNG path at all.)
+
+**The resolution number, and why it is not arbitrary.** `samples_per_pixel = 512` at the 16 kHz mono
+WAV gives **31.25 pairs/second**. The floor is set by zoom, not by looks: BBC data **cannot be zoomed
+in past the resolution it was generated at**, and Issue 390 zooms a ~40 s clip across a ~1100 px
+timeline (27.5 px/s). `MAX_PAIRS = 60_000` caps the artifact so a three-hour podcast coarsens rather
+than emitting megabytes — safe precisely because `samples_per_pixel` travels in the file. A 22-minute
+source is ~330 KB raw / ~90 KB gzipped; the cap first binds at ~32 minutes.
+
+**One artifact on `Video`, not per `Clip`.** A clip is a time window into its parent source, so the
+short-form timeline reads the same file windowed to `[setup_start_s ?? start_s, end_s]`. A per-clip
+copy would store the same samples N times and give #390 two render paths to maintain.
+
+**Scope extended at build time (approved).** The short-form editor moved onto this artifact too,
+deleting a client-side WebAudio decode that fetched the entire rendered mp4 with credentials on every
+clip switch and built an ~8 MB `Float32Array` in a main-thread loop while racing the `<video>` element
+for the same bytes. Leaving it would have meant #390 building its renderer against PCM and then
+rewriting it.
+
+**The honesty rule, made structural.** There is no synthetic fallback anywhere in the pipeline:
+`peakEnvelope` returns `null` rather than a zero-filled array (so "no data" and "measured silence"
+cannot be confused), `Waveform` draws a flat line, and the timeline says *"Waveform unavailable for
+this source"* in words. A new source-scanning gate forbids deriving a bar height from a loop index
+inside `components/editor/`. **A raw-text check for the old literal `(i * 37) % 60` was written and
+then deleted**: it failed on the three comments that quote the generator in order to explain its
+removal — exactly the false-positive mode `sourceScan.ts`'s own docstring warns about — and deleting
+an explanatory comment to satisfy a test is the wrong trade.
+
+**Accepted limitation, documented rather than worked around.** Peaks are computed from `audio_uri`,
+which `purge_stale_source_media` deletes at 72 h. A video whose audio is already purged can therefore
+NEVER get peaks; the backfill stops matching it and `has_peaks` stays false permanently. The
+alternative — retaining audio longer so the backfill can reach it — would weaken a retention promise
+to improve a navigation aid. See `docs/COMPLIANCE.md`.
+
+**Verification note.** The extractor was validated against real ffmpeg-generated audio, not only
+synthetic arrays. That caught a false alarm worth recording: ffmpeg's `sine` source runs at 0.125 full
+scale (−18 dBFS), so a "suspiciously quiet" 16/127 reading was correct rather than a normalisation
+bug. A genuinely full-scale file quantises to exactly 127/−128.
+
+**Date:** 2026-08-03
+
+---
+
+## 2026-08-03 — Issue 389: the tool routes get their own chrome, and why the disclaimer moved
+
+**What was decided.** `/editor` and `/review` render under a new `ToolChrome` route layout — a
+full-height, non-scrolling application shell — instead of `AppChrome`'s centred document with a
+marketing footer. Five sub-decisions, each recorded because each diverges from something that
+already existed.
+
+**1. A sibling route layout, not a `variant` prop on `AppChrome`.** The two chromes differ in
+element set (no `Footer`), height model (`h-dvh` vs `min-h-screen`), overflow (clipped vs visible)
+and bottom inset. Forking four things behind one boolean makes every `AppChrome` consumer's tree
+depend on a flag and hides "no footer on tool routes" inside a shared component instead of showing
+it in the route tree. `AppChrome` itself exists because `AppLayout` was split for this same reason
+(Issue 85b). *Evidence:* `frontend/src/components/AppChrome.tsx:15-24`, `App.tsx` route tree.
+
+**2. The honesty statement moved from a top band to a docked status bar — but stays inside the
+PAGE's component tree, not the route layout.** `CLAUDE.md` makes the wording a hard constraint, so
+this was the risk-bearing part of the issue. The text is byte-identical (all ten former inline
+`DisclaimerBand` call sites carried the same string, now a single `HONESTY_STATEMENT` constant), it
+is always visible without scrolling, and `e2e/tool-shell.spec.ts` asserts `toBeInViewport()` on
+every tool route in both projects. It is rendered by `ToolShell` rather than `ToolChrome` because
+`Editor.test.tsx` and `Review.test.tsx` render the pages **standalone**, with no layout element, and
+assert the disclaimer — an acceptance criterion of this issue required those tests to stay green.
+Hoisting the status bar into the route layout looks like a tidy-up and would break them; there is a
+`WHY` comment on `ToolShell` pinning this. *Evidence:* `frontend/src/pages/Editor.test.tsx:103-113`.
+
+**3. `dvh`, not `svh` or `100vh`.** MDN cautions that `dvh` resizes content mid-scroll as browser UI
+retracts, and industry guidance defaults to `svh` for stability
+([MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/length),
+[Tailwind](https://tailwindcss.com/docs/height)). That caution does not apply here: the shell does
+not document-scroll at `lg`, so the toolbar transition is unreachable from inside it. `svh` would
+permanently reserve the retractable-toolbar height and leave dead background under the status bar —
+the exact "dead region" the issue forbids — and `100vh` resolves to the *large* viewport on mobile
+Safari, which would push the honesty statement under the browser chrome.
+
+**4. No new dependency.** `react-resizable-panels` is the purpose-built choice for VS-Code-style
+splits ([npm-compare](https://npm-compare.com/react-grid-layout,react-resizable-panels,react-split-pane,react-splitter-layout),
+[LogRocket](https://blog.logrocket.com/essential-tools-implementing-react-panel-layouts/)), but this
+issue needs independently-*scrolling* regions, not user-*draggable* ones. Plain CSS grid, zero deps.
+Revisit when #390 or #394 actually wants a draggable split.
+
+**5. `index.css` was NOT touched.** The global `min-height: 100vh` on `html, body, #root` is a
+*minimum*; a descendant at `100dvh` satisfies it exactly. Changing it would move the footer on the
+nine other `min-h-screen` pages and put the `empty-dashboard` pixel baseline at risk — and baselines
+can only be regenerated on `ubuntu-latest`, costing a CI round-trip. The three visual-regression
+tests still pass, which is the evidence this held.
+
+**Divergences from the plan, found by measuring rather than reasoning.** Both are recorded because
+the plan asserted the opposite:
+
+- The plan said stacking the clip meta *under* the player would remove the dead region. It does
+  remove it, but it also makes the player **smaller**: in a height-constrained column at 9:16 every
+  pixel spent beside the media comes out of the player's height. The meta became one compact row and
+  the engine's case for the clip moved to the transcript column, where the evidence already lives.
+- **This project's root font-size is ~14.39px, not 16px.** The player-sizing constants in
+  `lib/toolLayout.ts` were first derived at 16px/rem, came out ~10% short, and the viewer card
+  silently overflowed its grid row with the meta clipped below the fold. All three constants are now
+  measured in Chromium at 1440×900 and the trap is documented at the constant and in `docs/UI.md`.
+
+**Deferred, deliberately.** The keyboard shortcut bus goes to **#390** (which adds the first
+competing bindings — `VideoPlayer` already owns space/←→/J/K/L via a document listener), and the
+cut-state de-duplication between `ShortFormEditor` and `review/TranscriptEditor` goes to **#391**
+(which deletes the duplicated state outright; extracting it earlier would pay for it twice and put
+the merge conflict inside the newly-extracted file).
+
+**Date:** 2026-08-03
+
+---
+
 ## 2026-08-03 — Issue 387: poster frames — three calls that read as inconsistent and are not
 
 **What was decided.** Videos and clips gain a `poster_uri` column (migration 0050), a poster still is

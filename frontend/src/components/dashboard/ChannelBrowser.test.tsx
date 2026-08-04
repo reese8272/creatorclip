@@ -21,6 +21,7 @@ function catalogPayload(): CatalogListResponse {
         origin: 'catalog',
         clippable: false,
     has_poster: false,
+    has_peaks: false,
       },
     ],
     total: 1,

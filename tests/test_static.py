@@ -1803,19 +1803,33 @@ def test_accessibility_page_has_required_clauses(client):
 
 
 def test_footer_tsx_has_accessibility_link():
-    """Issue 301: frontend/src/components/Footer.tsx must include an Accessibility link
-    pointing to /static/accessibility.html."""
+    """Issue 301: the SPA footer must link /static/accessibility.html.
+
+    Issue 389 extracted the link set out of Footer.tsx into LegalLinks.tsx so the
+    marketing footer and the tool routes' docked status bar share one href list.
+    This asserts on wherever the links actually live, and — importantly — that
+    Footer still RENDERS them, because the EAA requirement is about the shipped
+    page, not about which file the strings sit in.
+    """
     import pathlib
 
-    footer_path = (
-        pathlib.Path(__file__).parent.parent / "frontend" / "src" / "components" / "Footer.tsx"
-    )
+    components = pathlib.Path(__file__).parent.parent / "frontend" / "src" / "components"
+    footer_path = components / "Footer.tsx"
+    legal_path = components / "LegalLinks.tsx"
     if not footer_path.exists():
         return  # frontend not checked out
-    src = footer_path.read_text()
-    assert "accessibility" in src.lower(), (
-        "Footer.tsx must include an Accessibility link (Issue 301 — EAA footer requirement)."
+
+    footer_src = footer_path.read_text()
+    link_src = legal_path.read_text() if legal_path.exists() else footer_src
+
+    assert "accessibility" in link_src.lower(), (
+        "The SPA footer must include an Accessibility link (Issue 301 — EAA footer requirement)."
     )
-    assert "accessibility.html" in src, (
-        "Footer.tsx must link to /static/accessibility.html (Issue 301)."
+    assert "accessibility.html" in link_src, (
+        "The SPA footer must link to /static/accessibility.html (Issue 301)."
     )
+    if legal_path.exists():
+        assert "LegalLinks" in footer_src, (
+            "Footer.tsx must still render <LegalLinks/> — moving the hrefs into their "
+            "own module only satisfies Issue 301 if the footer actually uses it."
+        )

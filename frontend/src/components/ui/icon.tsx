@@ -50,6 +50,13 @@ export {
   RectangleVertical,
   RectangleHorizontal,
 
+  // Timeline zoom (Issue 390). `Maximize` is zoom-to-fit; note the sibling
+  // `Maximize2` would NOT be picked up by no-glyph-icons' allow-list regex,
+  // which rejects digits in the name.
+  ZoomIn,
+  ZoomOut,
+  Maximize,
+
   // Accents.
   Star,
   Sparkles,

@@ -151,6 +151,89 @@ host they tie. A translucent tint token would fix it properly; deferred.
   never uses `text-[10px]`, and never uses `text-subtle` (see the AA rule).
 - Timecodes use `font-mono text-mono` — the token exists for exactly this.
 
+## App shell — the tool routes (Issue 389)
+
+`/editor` and `/review` are **tools, not documents**. They render under
+`ToolChrome` (a route layout, sibling of `AppChrome`) instead of the marketing
+chrome: viewport height, no page scroll, no footer, and the honesty statement
+docked in a persistent status bar. Every other route keeps `AppChrome` unchanged.
+
+**The height contract.** The shell engages at `lg` (1024px) and above. Below it
+everything disengages and the document scrolls exactly as before — that is how
+"mobile keeps a stacked layout" is satisfied without a second layout to maintain.
+
+| Element | ≥ `lg` | < `lg` |
+|---|---|---|
+| `html, body, #root` | **unchanged** (`min-height: 100vh`) | unchanged |
+| `[data-tool-chrome]` | `h-dvh overflow-hidden flex flex-col` | `min-h-dvh flex flex-col` |
+| Nav wrapper | `shrink-0` | `shrink-0` |
+| `[data-tool-shell]` | `flex flex-1 flex-col min-h-0` | `flex flex-1 flex-col` |
+| `<main>` | `flex-1 min-h-0` + `overflow-hidden` (workspace) or `overflow-y-auto` (guard states) | `flex-1`, no overflow |
+| `[data-tool-scroll]` | `min-h-0 overflow-y-auto` | own `max-h-[Nvh]` cap, or none |
+| status bar `<footer>` | `shrink-0 order-last border-t` | `shrink-0 order-first border-b` |
+
+⚠ **Every `flex-1` in that chain needs `min-h-0`, and every grid region needs
+`lg:grid-rows-[minmax(0,1fr)]`.** Flex auto-minimum-size is content-based *per
+level*; one omission anywhere silently defeats the whole thing and reads as "the
+page is cut off". This is the single most likely way to break the shell.
+
+**`dvh`, not `svh` or `screen`.** MDN cautions that `dvh` resizes content
+mid-scroll as the URL bar retracts — unreachable here, because the shell does not
+document-scroll at `lg`. `svh` would permanently reserve the retractable-toolbar
+height and leave dead background under the status bar; `100vh` resolves to the
+*large* viewport on mobile Safari and would push the honesty statement under the
+browser chrome.
+
+**Media inside a fixed-height column must be height-bounded.** A `w-full`
+player with an aspect ratio takes its height from the column width and will
+crowd everything else out — that is how the long-form source player rendered
+605px tall and pushed the master timeline off-screen. `lib/toolLayout.ts` derives
+each player's width from the viewport height instead. Note that **this project's
+root font-size is ~14.39px, not 16px** — deriving those constants at 16px/rem
+comes out ~10% short.
+
+**Every `[data-tool-scroll]` must be keyboard-reachable.** axe's
+`scrollable-region-focusable` is SERIOUS impact (WCAG 2.1.1 / 2.1.3) and both
+tool routes are gated on it. Use a `<section>` with an `aria-label`; if the
+region contains no natively focusable element, it also needs `tabIndex={0}`
+(the Editor transcript is the only such region today). Never put `aria-label` on
+a bare `<div>` — axe flags `aria-prohibited-attr`.
+
+**z-ladder.** Nav `z-40`, ActivityPanel `z-50`. Anything docked in the shell
+sits below 40; a floating overlay inside a panel sits below 50. The
+ActivityPanel clears docked chrome via `--app-bottom-inset`, set by `ToolChrome`
+and undefined everywhere else.
+
+## Timelines (Issue 390)
+
+Both editing timelines compose `components/editor/TimelineRail`. It owns the measured element, the
+pointer model, zoom, scroll and the ruler; the callers own only what is specific to them.
+
+**The pixel is the unit.** Every interaction threshold is stored in PIXELS and converted to seconds
+at the point of use — `EDGE_GRAB_PX = 6`, `SNAP_THRESHOLD_PX = 8`, and the keyboard's fine step of one
+pixel. An 8px snap radius is ~10 seconds of tolerance on a 22-minute source at fit and ~4 milliseconds
+at 64×; as a duration, either figure is unusable at one end. If you add a threshold to a timeline,
+add it in pixels.
+
+**Zoom model.** `pxPerSecond` plus `scrollLeft`. Zoom is anchored on the pointer, refuses to go below
+fit, and `zoomAtAnchor` returns pps and scroll TOGETHER — applying one without the other is the bug.
+
+**Wheel.** Attach with `addEventListener(..., { passive: false })`, never React's `onWheel` (which is
+passive, so `preventDefault` silently no-ops). Ctrl/Cmd+wheel zooms; trackpad pinch arrives as exactly
+that event. Only swallow a plain wheel when there is somewhere to scroll.
+
+**ARIA.** The rail is a `role="group"`. It must NOT be a `slider`: that forces every descendant to
+`presentation`, which silently hides the waveform and every cut label. The playhead is a `slider`
+thumb, and each cut edge is another, per the W3C APG multi-thumb pattern — every thumb needs
+`tabIndex`, a name, and `aria-valuenow`.
+
+**No canvas outside `Waveform.tsx`.** The ruler, thumbs and indicators are DOM. `niceTickInterval`
+guarantees ≥80px label spacing, so a full-width rail emits ~14 tick nodes at any zoom. A structural
+gate enforces this.
+
+**Keyboard** goes through `hooks/useEditorShortcuts` — one document listener, capture phase. Never add
+a second `document` keydown listener; two racing listeners is how one keypress deletes two cuts.
+
 ## Confidence badges — "fit with your channel style"
 
 Three tiers. **Never** "viral" or "predicted performance." Tooltip on every

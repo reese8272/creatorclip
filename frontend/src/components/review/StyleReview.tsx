@@ -91,8 +91,10 @@ export function StyleReview({ videoId }: { videoId: string }) {
     : null
   const items = feedbackQuery.data?.items ?? []
 
+  // A <div>, not a <main>: this only ever renders inside ToolShell, which owns
+  // the route's single <main> landmark (Issue 389).
   return (
-    <main className="mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-2">
+    <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-2">
       {/* Left: the video being reviewed */}
       <div className="flex flex-col gap-3">
         {streamError ? (
@@ -242,6 +244,6 @@ export function StyleReview({ videoId }: { videoId: string }) {
           )}
         </div>
       </div>
-    </main>
+    </div>
   )
 }

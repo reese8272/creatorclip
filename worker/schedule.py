@@ -117,4 +117,12 @@ celery.conf.beat_schedule = {
         "task": "worker.tasks.backfill_video_posters",
         "schedule": timedelta(hours=1),
     },
+    # Issue 392 — same doctrine as the poster backfill, and cheaper per row: it
+    # downloads the extracted WAV rather than the full source. It also drains
+    # faster than it can grow, because a video is only eligible while its audio
+    # is inside the 72h retention window.
+    "backfill-video-peaks-hourly": {
+        "task": "worker.tasks.backfill_video_peaks",
+        "schedule": timedelta(hours=1),
+    },
 }

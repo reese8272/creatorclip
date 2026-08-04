@@ -45,6 +45,7 @@ function makeVideo(over: Partial<Video> = {}): Video {
     created_at: '2026-06-01T00:00:00Z',
     origin: 'upload',
     has_poster: false,
+    has_peaks: false,
     clippable: true,
     ...over,
   }

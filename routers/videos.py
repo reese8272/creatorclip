@@ -55,6 +55,10 @@ class VideoListItemOut(BaseModel):
     # the catalog endpoint, which reuses this model, is unaffected — the same
     # trick `failure_reason` uses above.
     has_poster: bool = False
+    # Issue 392. Also a BOOLEAN — same reasoning. Lets the editor decide between
+    # fetching the waveform and drawing the labelled flat track WITHOUT a
+    # speculative 404 on every open.
+    has_peaks: bool = False
 
 
 class VideoListOut(BaseModel):
@@ -164,6 +168,7 @@ async def list_videos(
             # Only uploaded videos carry stored media and can run the pipeline.
             "clippable": v.source_uri is not None,
             "has_poster": v.poster_uri is not None,
+            "has_peaks": v.peaks_uri is not None,
         }
         for v in videos
     ]
@@ -632,6 +637,47 @@ async def get_video_poster(
     return Response(
         content=data,
         media_type="image/jpeg",
+        # `private` is required: these bytes are per-creator and must never enter
+        # a shared or CDN cache. Immutable because the key is deterministic and
+        # only changes on re-ingest.
+        headers={"Cache-Control": "private, max-age=86400, immutable"},
+    )
+
+
+@router.get("/{video_id}/peaks", response_model=None)
+# 60/minute, NOT the poster's 300: a waveform is one request per deliberate
+# editor open, not one per dashboard row.
+@limiter.limit("60/minute", key_func=creator_key)
+async def get_video_peaks(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Serve the waveform envelope for a video (Issue 392).
+
+    A same-origin byte proxy for the same reasons as `/poster` above — chiefly
+    that a presigned URL is a bearer token and its rotating signature would
+    cache-bust the artifact on every poll.
+
+    404 here is NORMAL and the client is built for it: it means either the video
+    predates Issue 392 and its audio was purged before the backfill reached it,
+    or the audio could not be decoded. The editor draws an explicitly-labelled
+    flat track in that case. It must never invent amplitude — drawing something
+    plausible over a creator's own audio is exactly the defect this issue exists
+    to remove.
+    """
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    if not video.peaks_uri:
+        raise HTTPException(status_code=404, detail="No waveform for this video")
+    # A 22-minute source is ~330 KB and the cap is 2 MB, so the default read
+    # ceiling in `aread_bytes` already bounds this; MAX_PAIRS bounds it at source.
+    data = await aread_bytes(video.peaks_uri)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Waveform not found")
+    return Response(
+        content=data,
+        media_type="application/json",
         # `private` is required: these bytes are per-creator and must never enter
         # a shared or CDN cache. Immutable because the key is deterministic and
         # only changes on re-ingest.

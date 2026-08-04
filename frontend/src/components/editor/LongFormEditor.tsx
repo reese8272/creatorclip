@@ -2,13 +2,17 @@ import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import { SOURCE_PLAYER_W } from '@/lib/toolLayout'
 import { fitTier } from '@/lib/fit'
-import { fmtClock, parseClock } from '@/lib/timecode'
+import { fmtClock } from '@/lib/timecode'
 import type { FitTier } from '@/components/ui/fit-badge'
 import { Chip } from '@/components/Chip'
 import { Button } from '@/components/ui/button'
 import { ChaptersPanel } from '@/components/analysis/ChaptersPanel'
 import { FullTranscriptPanel } from '@/components/editor/FullTranscriptPanel'
+import { MasterTimeline, type SourceSelection } from '@/components/editor/MasterTimeline'
+import { useVideoPeaks } from '@/hooks/useVideoPeaks'
 import type { Chapter, ReviewClip, Video, VideoTranscript } from '@/types'
 import { ArrowRight } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
@@ -19,185 +23,10 @@ const TIER_LABEL: Record<FitTier, string> = {
   moderate: 'Moderate',
   exploratory: 'Exploratory',
 }
-const TIER_SEGMENT: Record<FitTier, { background: string; borderColor: string }> = {
-  strong: { background: 'oklch(20% 0.06 145 / 0.55)', borderColor: 'oklch(32% 0.09 145)' },
-  moderate: { background: 'oklch(20% 0.05 75 / 0.5)', borderColor: 'oklch(32% 0.09 75)' },
-  exploratory: { background: 'oklch(17% 0.01 285 / 0.6)', borderColor: 'var(--color-strong)' },
-}
 const TIER_TEXT: Record<FitTier, string> = {
   strong: 'oklch(72% 0.16 145)',
   moderate: 'oklch(78% 0.14 75)',
   exploratory: 'var(--color-muted)',
-}
-
-// A drag shorter than this reads as a click (segment open / stray tap), not a
-// selection (Issue 373 — same threshold idea as the short editor's MIN_CUT_S).
-const MIN_SELECT_S = 1.0
-
-export interface SourceSelection {
-  start_s: number
-  end_s: number
-}
-
-// Master timeline: candidate clips drawn over a waveform placeholder, positioned
-// by their source-relative start/end and coloured by fit tier. Issue 373 adds
-// drag-to-select: dragging a range on the bar proposes a creator-made clip via
-// onSelect (clicks on segments still open them — the 1s threshold disambiguates).
-function MasterTimeline({
-  clips,
-  chapters,
-  sourceDuration,
-  onOpenClip,
-  onSelect,
-}: {
-  clips: ReviewClip[]
-  chapters: Chapter[]
-  sourceDuration: number
-  onOpenClip: (clipId: string) => void
-  onSelect: (sel: SourceSelection) => void
-}) {
-  const dur = sourceDuration > 0 ? sourceDuration : 1
-  const barRef = useRef<HTMLDivElement>(null)
-  const [dragStart, setDragStart] = useState<number | null>(null)
-  const [dragEnd, setDragEnd] = useState<number | null>(null)
-
-  function xToTime(clientX: number): number {
-    const el = barRef.current
-    if (!el) return 0
-    const rect = el.getBoundingClientRect()
-    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
-    return frac * dur
-  }
-
-  function finishDrag(clientX: number) {
-    if (dragStart === null) return
-    const t = xToTime(clientX)
-    const lo = Math.min(dragStart, t)
-    const hi = Math.max(dragStart, t)
-    if (hi - lo >= MIN_SELECT_S) onSelect({ start_s: lo, end_s: hi })
-    setDragStart(null)
-    setDragEnd(null)
-  }
-  // Chapter ticks: drawn from real generated chapters (right-rail panel). Only
-  // those that fall within the derived source span are positioned.
-  const ticks = chapters
-    .map((c) => ({ title: c.title, at: parseClock(c.timestamp_formatted) }))
-    .filter((t) => t.at >= 0 && t.at <= dur)
-  return (
-    <div>
-      <div className="mb-2 text-label uppercase tracking-[0.06em] text-muted">Source timeline</div>
-      {ticks.length > 0 && (
-        <div className="relative mb-1 h-4">
-          {ticks.map((t, i) => (
-            <span
-              key={i}
-              className="absolute -translate-x-1/2 whitespace-nowrap text-label text-muted"
-              style={{ left: `${Math.min(100, (t.at / dur) * 100)}%` }}
-              title={`${t.title} · ${fmtClock(t.at)}`}
-            >
-              {t.title}
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="relative overflow-hidden rounded-md border border-default bg-surface inset-shadow-highlight">
-        <div
-          ref={barRef}
-          data-testid="master-timeline-bar"
-          className="relative h-24 cursor-crosshair select-none"
-          onMouseDown={(e) => {
-            if (e.button !== 0) return
-            setDragStart(xToTime(e.clientX))
-            setDragEnd(null)
-          }}
-          onMouseMove={(e) => {
-            if (dragStart !== null) setDragEnd(xToTime(e.clientX))
-          }}
-          onMouseUp={(e) => finishDrag(e.clientX)}
-          onMouseLeave={(e) => {
-            if (dragStart !== null && dragEnd !== null) finishDrag(e.clientX)
-            else {
-              setDragStart(null)
-              setDragEnd(null)
-            }
-          }}
-        >
-          {/* chapter tick lines */}
-          {ticks.map((t, i) => (
-            <div
-              key={i}
-              className="absolute bottom-0 top-0 w-px bg-strong/70"
-              style={{ left: `${Math.min(100, (t.at / dur) * 100)}%` }}
-            />
-          ))}
-          {/* waveform placeholder */}
-          <div className="absolute inset-0 flex items-center gap-px px-1.5">
-            {Array.from({ length: 48 }, (_, i) => (
-              <div
-                key={i}
-                className="flex-1 rounded-[1px] bg-strong/60"
-                style={{ height: `${20 + ((i * 37) % 60)}%` }}
-              />
-            ))}
-          </div>
-          {/* candidate + creator segments */}
-          {clips.map((c) => {
-            const tier = fitTier(c.score)
-            const isCreator = c.origin === 'creator'
-            const left = `${Math.max(0, Math.min(100, (c.start_s / dur) * 100))}%`
-            const width = `${Math.max(1.5, ((c.end_s - c.start_s) / dur) * 100)}%`
-            return (
-              <button
-                key={c.id}
-                onClick={() => onOpenClip(c.id)}
-                title={
-                  isCreator
-                    ? `Open your selection at ${fmtClock(c.start_s)} in the clip editor`
-                    : `Open clip at ${fmtClock(c.start_s)} in the clip editor`
-                }
-                aria-label={
-                  isCreator
-                    ? `Open your selection at ${fmtClock(c.start_s)}`
-                    : `Open ${TIER_LABEL[tier]}-fit clip at ${fmtClock(c.start_s)}`
-                }
-                className="absolute bottom-0 top-0 cursor-pointer rounded-[3px] border"
-                style={
-                  isCreator
-                    ? {
-                        left,
-                        width,
-                        background: 'oklch(22% 0.04 285 / 0.5)',
-                        borderColor: 'var(--color-accent)',
-                        borderStyle: 'dashed',
-                      }
-                    : { left, width, ...TIER_SEGMENT[tier] }
-                }
-              />
-            )
-          })}
-          {/* live drag-selection overlay */}
-          {dragStart !== null && dragEnd !== null && (
-            <div
-              className="pointer-events-none absolute bottom-0 top-0 rounded-[3px] border border-accent bg-accent-soft/40"
-              style={{
-                left: `${(Math.min(dragStart, dragEnd) / dur) * 100}%`,
-                width: `${(Math.abs(dragEnd - dragStart) / dur) * 100}%`,
-              }}
-            />
-          )}
-        </div>
-        <div className="flex justify-between border-t border-default px-2 py-[5px] font-mono text-label text-muted">
-          <span>0:00</span>
-          <span>{fmtClock(dur / 2)}</span>
-          <span>{fmtClock(dur)}</span>
-        </div>
-      </div>
-      <p className="mt-[5px] text-label text-subtle">
-        Green = strong fit · Amber = moderate · Gray = exploratory · Dashed = your selection. Click a
-        segment to open it, or drag an empty stretch to create your own clip.
-      </p>
-    </div>
-  )
 }
 
 // Confirmation card for a proposed creator clip (Issue 373): shows the range,
@@ -260,6 +89,7 @@ export function LongFormEditor({
   videoId,
   video,
   onOpenClip,
+  className,
 }: {
   clips: ReviewClip[]
   videoId: string
@@ -267,6 +97,8 @@ export function LongFormEditor({
    *  clippable (source presence) for proactive retention honesty. */
   video?: Video
   onOpenClip: (clipId: string) => void
+  /** Sizing from the tool shell (Issue 389) — the parent owns the height. */
+  className?: string
 }) {
   // Issue 373: engine candidates keep the ranked "Suggested" list; creator-made
   // selections get their own honest group (never a fake fit tier).
@@ -306,6 +138,12 @@ export function LongFormEditor({
   // player. A stream error (e.g. purge raced the page) lands the same way.
   const sourceAvailable = (video ? video.clippable : true) && !streamError
 
+  // Issue 392 — gated on has_peaks so a video that will never have a waveform
+  // costs zero requests instead of a 404 on every open. Note peaks OUTLIVE the
+  // source: `sourceAvailable` can be false (media purged) while the waveform is
+  // still served, which is the point — you can still see the shape of the audio.
+  const { peaks } = useVideoPeaks(videoId, video?.has_peaks ?? false)
+
   // Real source duration (Issue 372): videos-list row → transcript span →
   // furthest clip end as the last-resort fallback so the timeline never
   // renders degenerate.
@@ -315,8 +153,16 @@ export function LongFormEditor({
     clips.reduce((max, c) => Math.max(max, c.end_s), 0)
 
   return (
-    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-      <div className="flex flex-col gap-4">
+    <div
+      className={cn(
+        'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)]',
+        className,
+      )}
+    >
+      {/* The source player and its master timeline stay pinned; only the lists
+          below them scroll, so the timeline you are selecting against cannot
+          leave the viewport (Issue 389). */}
+      <div className="flex min-h-0 flex-col gap-4">
         {sourceAvailable ? (
           <VideoPlayer
             ref={playerRef}
@@ -326,10 +172,15 @@ export function LongFormEditor({
             transport
             onTimeChange={setCurrentTime}
             onError={() => setStreamError(true)}
-            className="w-full"
+            className={cn(SOURCE_PLAYER_W, 'mx-auto shrink-0')}
           />
         ) : (
-          <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black/60 px-6 text-center text-sm text-subtle">
+          <div
+            className={cn(
+              SOURCE_PLAYER_W,
+              'mx-auto flex aspect-video shrink-0 flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black/60 px-6 text-center text-sm text-subtle',
+            )}
+          >
             <span className="text-danger">Source media expired</span>
             <span className="text-xs">
               The original upload passed its retention window — re-upload the video to edit the
@@ -345,7 +196,7 @@ export function LongFormEditor({
         )}
 
         {/* Chip scan callout */}
-        <div className="flex items-center gap-3 rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface px-3.5 py-2.5">
+        <div className="flex shrink-0 items-center gap-3 rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface px-3.5 py-2.5">
           <Chip pose="magnify" size={46} className="flex-shrink-0" />
           <div className="text-small leading-relaxed text-fg">
             <strong className="text-accent-text">Chip:</strong> I scanned your source and surfaced{' '}
@@ -360,6 +211,7 @@ export function LongFormEditor({
           sourceDuration={sourceDuration}
           onOpenClip={onOpenClip}
           onSelect={setPendingSelection}
+          peaks={peaks}
         />
 
         {pendingSelection && (
@@ -370,6 +222,14 @@ export function LongFormEditor({
           />
         )}
 
+        {/* Everything below the timeline is a list — it scrolls, the instrument
+            above it does not. No tabIndex needed: every row carries an Open or
+            seek button, which already satisfies scrollable-region-focusable. */}
+        <section
+          data-tool-scroll
+          aria-label="Source clips and transcript"
+          className="flex min-h-0 flex-1 flex-col gap-4 lg:overflow-y-auto"
+        >
         {/* Your clips (Issue 373) — creator-made selections, honest provenance */}
         {creatorClips.length > 0 && (
           <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
@@ -443,10 +303,15 @@ export function LongFormEditor({
           onSeek={seek}
           onClipSegment={(seg) => setPendingSelection({ start_s: seg.start_s, end_s: seg.end_s })}
         />
+        </section>
       </div>
 
       {/* Right rail: chapters (functional) + export (UI only) */}
-      <div className="flex flex-col gap-4">
+      <section
+        data-tool-scroll
+        aria-label="Chapters and export"
+        className="flex min-h-0 flex-col gap-4 lg:overflow-y-auto"
+      >
         <ChaptersPanel videoId={videoId} onChapters={setChapters} />
 
         {/* Export (Issue 373): real per-clip artifacts — every rendered clip
@@ -487,7 +352,7 @@ export function LongFormEditor({
             </p>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   )
 }

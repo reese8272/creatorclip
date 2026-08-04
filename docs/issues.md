@@ -5,9 +5,18 @@ queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `d
 (2026-08-03). This file is the live queue.
 
 **Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
-2026-08-03) — see `docs/PROJECT_STATE.md`. **Batch B (389–392) is next and is now unblocked:** it
-inherits the primitive layer, the `VideoPlayer` that #390's timeline attaches to, and the elevation
-rules #389's app shell composes against. Filed from the 2026-08-03 review of the
+2026-08-03). **Batch B is in progress: #389, #392 and #390 are DONE** (the tool-route app shell; real
+waveform peaks; Timeline v2) — see `docs/PROJECT_STATE.md`. **#391 (edit persistence) is the last
+one, and is planned as its own PR.**
+
+> **Batch B order was changed at build time to 389 → 392 → 390 → 391** (user decision, 2026-08-03).
+> #392 is the batch's only live honesty-constraint violation, it is pure backend (zero overlap with
+> the frontend files the others rewrite), and it hands #390 the final waveform data contract *before*
+> #390 designs its zoom/LOD renderer — landing it last would force a second pass over code #390 had
+> just written. #389 also turned out to be a soft prerequisite for #390: "zoom-to-fit" and "playhead
+> stays in view" are not demonstrable in a scrolling document where the timeline itself scrolls away.
+
+Filed from the 2026-08-03 review of the
 editor and presentation layer against the 2026 field. Every issue below carries: what we're doing,
 the analysis behind it, in-repo evidence (file:line or a committed screenshot), and the external
 sources that set the bar. Research links are listed inline per issue and collected in
@@ -31,7 +40,7 @@ changes the gut reaction to the product.
 | Batch | Theme | Issues | Size |
 |-------|-------|--------|------|
 | **A** ✅ | Visual credibility — stop reading as a prototype | 384–388, **400** — **ALL DONE 2026-08-03** | days |
-| **B** | Make it an application, not a webpage | 389–392 | 1–2 weeks |
+| **B** | Make it an application, not a webpage | **389 ✅ · 392 ✅ · 390 ✅** — 391 remains | 1–2 weeks |
 | **C** | Close the capability gap | 393–397, **401** | multi-week |
 | **D** | Asset management | 398–399, **402** | ~1 week |
 | **E** | Breadth — scope-call cluster, do not start before D closes | **403–405** | multi-week |
@@ -404,7 +413,12 @@ professionalism and reliability
 # Batch B — Make it an application
 
 ### Issue 389: App-shell layout for Editor and Review
-- [ ] **Status:** open · **Batch:** B · **Size:** M · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** B · **Size:** M
+- **Scope extended at build time** (see `docs/DECISIONS.md` 2026-08-03): also extracted
+  `components/editor/ShortFormEditor.tsx` out of the 700-line `Editor.tsx` (all four Batch-B issues
+  rewrite that file, so the split makes them conflict in different files) and made the
+  `ResizeObserver` test stub fireable, without which #390's zoom-math acceptance criterion is
+  untestable. The keyboard shortcut bus went to #390 and the cut-state de-duplication to #391.
 
 **What we're doing.** Converting the tool routes from centered document pages to a full-height
 application shell: `100vh`, panel regions that scroll independently, no marketing footer, and the
@@ -443,17 +457,45 @@ simplified timeline with transcript editing inside a single sustained workspace
 [Descript Complete Guide 2026](https://aitoolsdevpro.com/ai-tools/descript-guide/)).
 
 **Acceptance**
-- [ ] Editor and Review render at `100vh` with no page scroll; panels scroll independently
-- [ ] Marketing footer removed from tool routes; legal links reachable from shell chrome
-- [ ] Disclaimer text **unchanged**, still present and visible on every tool route
-- [ ] Existing structural test asserting the disclaimer on tool routes stays green
-- [ ] Player sized proportionally to its importance; no dead regions at 1440px
-- [ ] Responsive down to tablet; mobile keeps a stacked layout (no horizontal page scroll)
+- [x] Editor and Review render at `100dvh` with no page scroll; panels scroll independently —
+      `ToolChrome` + `ToolShell`, engaged at `lg`. Measured: chrome height == viewport height,
+      `scrollBy(0,500)` leaves `scrollY === 0`, ≥2 `[data-tool-scroll]` regions per route
+      (`e2e/tool-shell.spec.ts`). `dvh` over `svh`/`vh` justified in DECISIONS.
+- [x] Marketing footer removed from tool routes; legal links reachable from shell chrome —
+      `LegalLinks` extracted from `Footer` and rendered in the docked status bar; tests assert
+      exactly ONE legal-link set (two would mean the footer came back, zero a lost Google-
+      verification requirement)
+- [x] Disclaimer text **unchanged**, still present and visible on every tool route — one
+      `HONESTY_STATEMENT` constant replacing ten byte-identical inline call sites; asserted as an
+      exact string (not a regex) so softened wording fails loudly, and `toBeInViewport()` on every
+      route in both projects
+- [x] Existing structural test asserting the disclaimer on tool routes stays green — `Editor.test.tsx`,
+      `Review.test.tsx`, `StyleReview.test.tsx` and `VideoPickerLanding.test.tsx` all pass
+      **unedited**. This is what forced the status bar into `ToolShell` rather than the route layout
+- [x] Player sized proportionally to its importance; no dead regions at 1440px — Editor player
+      **180px → 257px**, Review off a frozen `max-w-[320px]`, both height-derived in
+      `lib/toolLayout.ts`; card-width-minus-player-width < 40px asserted in e2e
+- [x] Responsive down to tablet; mobile keeps a stacked layout (no horizontal page scroll) —
+      shell disengages below `lg` (chrome and `main` both `overflow: visible`), panels keep
+      viewport-relative caps, no horizontal overflow; asserted on the Pixel 5 project
+
+**Also fixed** (defects the shell exposed, not in the original brief)
+- [x] The long-form source player was `aspect-video w-full` → 605px tall at the column width,
+      pushing the master timeline to the viewport edge and the clip lists off-screen (top y=831 → 536)
+- [x] The Editor transcript was a latent axe `scrollable-region-focusable` failure (SERIOUS) that
+      only passed because the fixture is two words long — logged in `docs/OFF_COURSE_BUGS.md`
+- [x] `fullPage: true` audit screenshots silently degraded to viewport captures under the shell;
+      a second `-expanded` artifact recovers the full content (editor-long: 900px → 1060px)
 
 ---
 
 ### Issue 390: Timeline v2
-- [ ] **Status:** open · **Batch:** B · **Size:** L · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** B · **Size:** L
+- **Scope extended at build time** (user decision, see `docs/DECISIONS.md`): the engine is shared by
+  BOTH timelines. The brief says "rebuild `Timeline.tsx`", but its own motivating evidence is the
+  22-minute long-form source, which was a separate hand-rolled bar with the same mouse-only defect.
+  Rebuilding only the short-form clip timeline would have left the surface the issue points at
+  unusable.
 
 **What we're doing.** Rebuilding `components/editor/Timeline.tsx`: pointer events, zoom and scroll,
 draggable cut edges with snapping, a real ruler, and standard editing keyboard shortcuts.
@@ -499,14 +541,42 @@ The component's own docstring (`Timeline.tsx:38-49`) already cites Descript/Opus
 reference — this issue closes the distance to that reference.
 
 **Acceptance**
-- [ ] Pointer events throughout; verified working with touch and trackpad
-- [ ] Zoom (scroll / pinch / keyboard) plus zoom-to-fit, with horizontal scroll; playhead stays in view
-- [ ] Existing cut regions expose draggable edges
-- [ ] Snap-to-word is **visible** (snap indicator + snapped-boundary highlight) and toggleable
-- [ ] Real time ruler with adaptive tick density at every zoom level
-- [ ] Keyboard: I/O set in/out, space, ←/→, delete removes selected cut
-- [ ] Clip-quality eval harness green — setup-start geometry unchanged
-- [ ] Component test covers zoom math and edge-drag at multiple zoom levels
+- [x] Pointer events throughout; works with touch and trackpad — both timelines on `TimelineRail`
+      with `setPointerCapture` and `touch-action: none`. The drag state is a ref and never consults
+      `hasPointerCapture`, which jsdom stubs to `false` (that is why the player's scrub drag has
+      never been testable). Removes the old `onMouseLeave` commit hack outright.
+- [x] Zoom (wheel / pinch / keyboard) plus zoom-to-fit, horizontal scroll, playhead stays in view —
+      `lib/timelineZoom.ts` + `useTimelineViewport`. Ctrl/Cmd+wheel zooms and **pinch arrives as the
+      same event** (MDN); the listener is `{ passive: false }` because React's `onWheel` is passive
+      and `preventDefault` there silently no-ops (react#14856), which would zoom the whole page.
+      Zoom is **anchored on the pointer** (Audacity's model) and fit is proven a fixed point.
+- [x] Existing cut regions expose draggable edges — 6px grab zone, and merging is deferred to
+      gesture completion so a neighbour cannot be absorbed (and the dragged id retired) mid-drag
+- [x] Snap-to-word is **visible** and toggleable — a line at the snapped instant, a `data-snapped`
+      ring on the thumb, the word named in the caption and in `aria-valuetext`, and a `Switch`
+      persisted at `editor:snap`. **Threshold is in PIXELS**, so it feels identical at every zoom
+      (~10s of tolerance at fit on a 22-minute source, ~4ms at 64×)
+- [x] Real time ruler with adaptive tick density — intervals drawn from a human-round table
+      (1s/5s/30s/2m…) constrained by minimum label spacing, never `duration / n`. DOM, not canvas
+- [x] Keyboard: I/O set in/out, space, ←/→, Delete removes the selected cut — plus `=`/`-`/`0` zoom
+      and `S` snap, all on one shortcut bus. **A bare arrow steps ONE PIXEL at the current zoom**;
+      Shift keeps the old 5s jump
+- [x] Clip-quality eval harness green — setup-start geometry unchanged. Verified structurally:
+      `git diff 73c3223..HEAD -- clip_engine worker routers models.py alembic ingestion tests` is
+      **empty**, so 390 is frontend-only by construction. `tests/test_clip_engine.py` 53 passed
+- [x] Component test covers zoom math and edge-drag at multiple zoom levels — 24 zoom-maths cases,
+      plus a `Timeline` test asserting the same 67px drag trims **4× fewer seconds at 4× zoom**
+
+**Also fixed** (defects found while building, not in the original brief)
+- [x] The container's `role="slider"` was **suppressing the waveform's `role="img"` and every
+      per-cut label in production** — MDN: a slider forces all descendants to `presentation`. Now a
+      `group` with the playhead and each cut edge as real thumbs (W3C APG multi-thumb)
+- [x] The scrub bar's arrow keys **had never worked**: an `onKeyDownCapture` calling
+      `stopPropagation` in the capture phase also prevented the element's own bubble handler
+- [x] `mergeAdjacent` mutated caller-owned objects, so single-level undo was already wrong for any
+      merged cut; cuts were index-addressed while the merge re-sorts, so an edge drag detached
+- [x] `clientXToTime` derived zoom from stale state width, mapping every pointer x to the end of
+      the clip before the first ResizeObserver
 
 ---
 
@@ -558,7 +628,12 @@ comments with mentions, notifications — which presumes a server-authoritative 
 ---
 
 ### Issue 392: Replace the fabricated long-form waveform
-- [ ] **Status:** open · **Batch:** B · **Size:** S · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** B · **Size:** S (backend turned out M)
+- **Scope extended at build time** (approved; see `docs/DECISIONS.md` 2026-08-03): the SHORT-form
+  timeline moved onto the same artifact too, deleting the client-side WebAudio decode that fetched
+  the whole rendered mp4 and built an ~8 MB `Float32Array` per clip switch, plus the dead
+  `waveformImageUrl` prop. Leaving it would have meant #390 building its renderer against PCM and
+  then rewriting it.
 
 **What we're doing.** Serving real audio peak data for the long-form source timeline, or rendering an
 honest neutral track when peaks are unavailable. Removing the synthetic amplitude generator.
@@ -592,11 +667,27 @@ own sibling docstring (`Timeline.tsx:38-49`) names Descript/Opus/Riverside wavef
 standard being targeted.
 
 **Acceptance**
-- [ ] Real peak data: precomputed peaks generated server-side (ffmpeg) and served for the source
-- [ ] When peaks are unavailable, render a flat neutral track or the low-opacity placeholder idiom —
-      **never synthetic amplitude**
-- [ ] Peak generation is incremental/cached, not recomputed per page load
-- [ ] Test asserts no synthetic amplitude generator remains in the component
+- [x] Real peak data: precomputed peaks generated server-side and served for the source —
+      `ingestion/peaks.py` emits the **BBC `audiowaveform` JSON format** (the interchange standard)
+      from the 16 kHz WAV ingest already extracts, via ffmpeg + numpy with **no new dependency**;
+      migration 0051 `videos.peaks_uri`, R2 `peaks/{creator_id}/…`, served by
+      `GET /videos/{id}/peaks` (authed byte proxy, `private, immutable`)
+- [x] When peaks are unavailable, render a flat neutral track — **never synthetic amplitude**.
+      Enforced at three layers: `peakEnvelope` returns `null` rather than a zero array (so "no data"
+      cannot be confused with "measured silence"), `Waveform` draws a flat line, and the timeline
+      says *"Waveform unavailable for this source"* in words
+- [x] Peak generation is incremental/cached, not recomputed per page load — computed **once at
+      ingest**, hourly `backfill_video_peaks` for older rows, `staleTime: Infinity` client-side, and
+      `has_peaks` gates the request so a video that will never have one costs zero fetches
+- [x] Test asserts no synthetic amplitude generator remains — `src/test/no-synthetic-waveform.test.ts`,
+      a source-scanning gate (bar height may not derive from a loop index in `components/editor/`;
+      `Waveform.tsx` must be the only painter). **Verified it fires** by reintroducing the old
+      generator
+
+**Known limitation, accepted and documented** (`docs/COMPLIANCE.md`)
+- Peaks derive from `audio_uri`, which is purged at 72h, so a video whose audio is already gone can
+  never get peaks — `has_peaks` stays false permanently and the flat track is shown. Retaining audio
+  longer to enable backfill would weaken a retention promise to improve a navigation aid.
 
 ---
 
@@ -1263,6 +1354,72 @@ each brief in `docs/issues-archive-2026-08-03.md`, consistent with `docs/PROJECT
 
 ---
 
+# Hygiene — outside the L25 lane
+
+### Issue 406: Clear the 6 `pip-audit` advisories in aiohttp and cryptography
+- [ ] **Status:** open · **Batch:** — (hygiene) · **Size:** S · **Agent:** `python-senior-engineer`
+
+**What we're doing.** Bumping `aiohttp` 3.14.1 → **3.14.3** and `cryptography` 48.0.1 → **50.0.0**
+to clear all six advisories the `pip_audit` gate has been failing on since the Batch A baseline, and
+returning that gate to green **without** adding anything to `[tool.pip-audit].ignore-vulns`.
+
+**Why — the analysis.** The gate has been red across the whole of L25 Batch B. It is genuinely
+pre-existing — `git diff main -- requirements*.txt '*.py'` on `wave/l25-batch-b` is empty, so no
+editor work caused it — and it was correctly logged rather than papered over. But a permanently red
+security gate is a gate nobody reads, and `cryptography` is the library behind the Fernet token path
+(`crypto.py`), which makes "we'll get to it" the wrong posture even when the specific advisories miss us.
+
+**The six, triaged against actual usage.** Exposure is genuinely low; the *fix* is cheap. Both are
+true, and the second is the reason to just do it.
+
+| Advisory | Pkg | Fix | Real exposure here |
+|---|---|---|---|
+| CVE-2026-69243 (GHSA-mfx4-hv73-q22v) — request smuggling via WebSocket upgrade | aiohttp | 3.14.2 | **None.** Server-side component only; we never run an aiohttp server. |
+| CVE-2026-59881 (GHSA-mq44-7p77-q5h7) — client decompresses RSV1 frames without negotiated `permessage-deflate` | aiohttp | 3.14.2 | **None.** WebSocket path only. `ingestion/transcribe.py:130-150` uses Deepgram **prerecorded** (REST); the live/streaming client is never constructed. |
+| CVE-2026-69244 (GHSA-cq5v-8q36-5273) — OOB heap read in the C response parser while formatting a malformed-response error | aiohttp | 3.14.3 | **Low but real.** Needs a hostile/faulty response from Deepgram or Voyage. |
+| CVE-2026-69248 (GHSA-m2h6-j472-rp4c) — name-constraint escape: constrained CA + wildcard leaf SAN | cryptography | 49.0.0 | **None.** X.509 path validation; we import `Fernet`/`MultiFernet` only. |
+| CVE-2026-69249 (GHSA-jwv3-5hgf-82ww) — exponential blowup on chains with duplicate self-signed certs | cryptography | 49.0.0 | **None.** Same — X.509 verifier unused. |
+| CVE-2026-69247 (GHSA-g6cj-pr64-35w5) — PKCS#7 decryption oracle (distinguishable `encryptedKey` failures) | cryptography | 50.0.0 | **None.** `pkcs7_decrypt_*` unused. |
+
+The seventh advisory pip-audit reports — pytest `PYSEC-2026-1845` / `GHSA-6w46-j5rx-g56g`, the
+predictable `/tmp/pytest-of-{user}` path — is **already accepted-risk** in
+`pyproject.toml [tool.pip-audit].ignore-vulns` with a written justification (dev/CI only; the fix is
+pytest 9, which `pytest-asyncio<0.25` caps). That entry is why the gate reads **6** and not 7.
+**Leave it alone** — it is not part of this issue.
+
+**Why this is a small change.** Neither bump is constrained by anything:
+- `aiohttp` is **transitive only** — no `import aiohttp` anywhere in the tree. Consumers are
+  `deepgram-sdk` (`aiohttp>=3.9.1`) and `voyageai` (unpinned). 3.14.3 is a patch release inside both ranges.
+- `cryptography` shows `Required-by:` **(nothing)** — it is a direct dependency with no downstream
+  consumers in the venv, so the 48 → 50 major bump has exactly one caller to satisfy: `crypto.py`'s
+  Fernet/MultiFernet usage, which the `crypto` module's **100.0% coverage floor** already pins.
+
+**Evidence in this repo.**
+- `requirements.txt:40` — `cryptography==48.0.1` · `requirements.txt:49` — `aiohttp==3.14.1`.
+- `crypto.py:3` — `from cryptography.fernet import Fernet, InvalidToken, MultiFernet` (the whole
+  surface we use); `config.py:6` likewise.
+- `ingestion/transcribe.py:130-150` — `_deepgram_prerecorded_options()`; prerecorded REST, no live socket.
+- `pyproject.toml [tool.pip-audit].ignore-vulns` — the pytest and pip entries, each with a rationale.
+- `docs/OFF_COURSE_BUGS.md` — logged 2026-08-03 during Batch B; **this issue is that log entry promoted.**
+
+**Industry standard checked.** OSV/GHSA advisory data via `pip-audit` (2026-08-04 run against the
+installed environment; fix versions above are OSV's `fix_versions`). The house rule is the one
+already written into `pyproject.toml`: an `ignore-vulns` entry requires a stated reason *and* a
+re-evaluation trigger, and is reserved for advisories with no fix in our compatible range. Both of
+these have a fix in range, so neither qualifies — bump, don't ignore.
+
+**Acceptance**
+- [ ] `aiohttp==3.14.3` and `cryptography==50.0.0` pinned with `==` in `requirements.txt`
+- [ ] `pip-audit` reports **0** vulnerabilities beyond the existing justified `ignore-vulns` entries
+- [ ] **Nothing new added to `ignore-vulns`** — if a bump proves impossible, the issue reports back
+      rather than silently converting to an exception
+- [ ] `run_layer0.py` `pip_audit` gate green; baseline updated to reflect 0, not 6
+- [ ] Full pytest run green, `crypto` module coverage floor still 100.0
+- [ ] Deepgram + Voyage paths exercised (unit lane) after the aiohttp bump
+- [ ] `docs/OFF_COURSE_BUGS.md` entry marked resolved, pointing at this issue
+
+---
+
 ## Source index
 
 Collected from the 2026-08-03 research pass. Cited inline above; listed here so a future pass can
@@ -1336,4 +1493,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **406**.
+- Next free issue number: **407**.

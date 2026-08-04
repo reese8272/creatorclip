@@ -59,6 +59,11 @@ export interface Video {
   // URL: the poster is fetched from the authed endpoint, and a signed URL in
   // this payload would cache-bust on every 5s dashboard poll.
   has_poster: boolean
+  // Issue 392 — whether /videos/{id}/peaks will serve a waveform. Also a boolean,
+  // for the same reason. False is PERMANENT for any video whose audio was purged
+  // before the backfill reached it; the editor draws a labelled flat track and
+  // never invents amplitude.
+  has_peaks: boolean
 }
 
 export interface VideoListResponse {
@@ -403,11 +408,19 @@ export interface ClipTranscript {
   words: TranscriptWord[]
 }
 
-// One queued cut in the transcript editor (clip-relative seconds + word span).
+// One queued cut in the editor (clip-relative seconds + word span).
 export interface EditorCut {
+  // Issue 390 — stable, client-generated. Cuts used to be addressed by array
+  // index, and `mergeAdjacent` re-sorts, so dragging one edge past a neighbour
+  // renumbered everything mid-gesture and the drag silently moved to a different
+  // cut. Also #391's command target and edit-document key. See lib/editorCuts.ts.
+  id: string
   start_s: number
   end_s: number
-  indices: [number, number]
+  // Optional since Issue 390: ABSENT means the range covers no transcript word.
+  // Previously this defaulted to `[0, 0]`, which struck through the first word of
+  // the transcript on every drag over a gap.
+  indices?: [number, number]
 }
 
 export interface DnaProfile {

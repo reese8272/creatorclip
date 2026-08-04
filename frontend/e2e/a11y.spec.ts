@@ -21,6 +21,11 @@ const ROUTES = [
   // spike on the pre-#386 tree confirmed it passes clean, so anything that
   // appears here is ours.
   'editor?video_id=v1&clip_id=c1',
+  // Added 2026-08-03 (Issue 389). Long-form source mode gained two independently
+  // scrolling regions, and `scrollable-region-focusable` is a SERIOUS-impact rule
+  // — a scroll container with no keyboard-reachable content fails it. Short mode
+  // alone would not have covered them.
+  'editor?video_id=v1',
   // NOT added: `settings`. It has PRE-EXISTING serious contrast violations from
   // the "Soon" preview rows (commit 80a7474, 2026-06-23) — decorative disabled
   // mocks wrapped in `pointer-events-none opacity-50`, which halves their
@@ -30,7 +35,10 @@ const ROUTES = [
 ]
 
 for (const path of ROUTES) {
-  const name = path.split('?')[0]
+  // The editor appears twice (short and long mode), so the bare pathname is no
+  // longer a unique test title — Playwright rejects duplicates outright.
+  const base = path.split('?')[0]
+  const name = base === 'editor' ? (path.includes('clip_id') ? 'editor-short' : 'editor-long') : base
   test(`a11y: ${name}`, async ({ page }) => {
     await page.goto(path, { waitUntil: 'domcontentloaded' })
     await page
