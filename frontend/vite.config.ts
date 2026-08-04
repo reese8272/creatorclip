@@ -56,6 +56,12 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    // Issue 390: without this a vi.spyOn leaks for the rest of the FILE. The old
+    // Timeline.test spied on Element.prototype.getBoundingClientRect and every
+    // subsequent test in it saw the same 400x80 rect for every element — which
+    // would silently make zoom assertions pass for the wrong reason, since
+    // viewportWidth === contentWidth unconditionally.
+    restoreMocks: true,
     globals: false,
     css: false,
     // Vitest owns src/ component tests; Playwright owns e2e/ (its own runner and
