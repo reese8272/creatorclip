@@ -605,7 +605,10 @@ jobs:
         # Dispatch this workflow with update_snapshots=true to (re)generate the
         # baselines here on ubuntu-latest; they are uploaded as an artifact below.
         # `inputs` is empty on pull_request runs, so the expression is a no-op there.
-        run: npx playwright test --grep "@visual" ${{ inputs.update_snapshots == true && '--update-snapshots' || '' }}
+        # =all, not bare (=changed): changed-mode keeps any baseline whose diff is
+        # inside maxDiffPixelRatio, so a regen dispatch can silently retain stale
+        # renders (bit Issue 413: a fallback-font login-desktop survived two regens).
+        run: npx playwright test --grep "@visual" ${{ inputs.update_snapshots == true && '--update-snapshots=all' || '' }}
       - name: Upload regenerated baselines
         # Only on a `gh workflow run ci.yml -f update_snapshots=true` dispatch.
         # Download with `gh run download <run-id> -n visual-baselines-<sha> -D
