@@ -70,6 +70,7 @@ const VIDEOS: VideoListResponse = {
       created_at: '2026-06-10T12:00:00Z',
       origin: 'youtube',
       clippable: true,
+      has_peaks: true,
     },
     {
       id: 'v2',
@@ -409,6 +410,22 @@ const TRANSCRIPT: ClipTranscript = {
   ],
 }
 
+// A BBC-audiowaveform payload for v1 (Issue 392). Deliberately speech-shaped —
+// bursts separated by pauses — so the audit screenshots exercise the real render
+// path, not just the "no peaks" fallback (which v2/v3 still cover).
+const PEAKS_V1 = (() => {
+  const length = 640
+  const data: number[] = []
+  for (let i = 0; i < length; i++) {
+    // Phrases of ~40 pairs with ~15-pair gaps, amplitude varying inside each.
+    const inPhrase = i % 55 < 40
+    const env = inPhrase ? 0.35 + 0.6 * Math.abs(Math.sin(i * 0.7)) * Math.abs(Math.cos(i * 0.13)) : 0.02
+    const v = Math.round(env * 120)
+    data.push(-v, v)
+  }
+  return { version: 1, sample_rate: 16000, samples_per_pixel: 512, bits: 8, length, data }
+})()
+
 // Static GET endpoints → fixture body.
 const GET_TABLE: Record<string, unknown> = {
   '/billing/balance': BALANCE,
@@ -432,6 +449,14 @@ function json(route: Route, body: unknown, status = 200): Promise<void> {
 async function dispatch(route: Route, seed: Seed): Promise<void> {
   const { pathname } = new URL(route.request().url())
   const method = route.request().method()
+
+  // Waveform peaks (Issue 392). Only v1 has them; every other video 404s, which
+  // is the normal terminal state the editor draws a labelled flat track for.
+  if (/^\/videos\/[^/]+\/peaks$/.test(pathname)) {
+    return pathname === '/videos/v1/peaks'
+      ? json(route, PEAKS_V1)
+      : json(route, { detail: 'No waveform for this video' }, 404)
+  }
 
   // Auth probe drives AuthGate: authed → user, anon → 401 (redirect to /login).
   if (pathname === '/auth/me') {

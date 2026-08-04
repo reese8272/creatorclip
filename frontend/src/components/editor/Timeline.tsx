@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { safeUrl } from '@/lib/safeUrl'
+import { useRef, useState } from 'react'
+import { Waveform } from '@/components/editor/Waveform'
+import type { WaveformPeaks } from '@/lib/peaks'
 import { cn } from '@/lib/utils'
 
 // The visual height of the waveform canvas in px (CSS pixels).
@@ -24,25 +25,24 @@ interface TimelineProps {
   onSeek: (time: number) => void
   /** Emitted when a new time-range selection is completed on the waveform. */
   onSelection: (cut: Cut) => void
-  /** Optional: URL of a server-generated waveform PNG (ffmpeg showwavespic).
-   *  When absent, the component renders a placeholder waveform via WebAudio. */
-  waveformImageUrl?: string | null
-  /** Optional: raw Float32Array PCM data drawn via Canvas (client-side fallback). */
-  waveformData?: Float32Array | null
+  /** Real audio peaks for the PARENT SOURCE, or null → an honest flat track.
+   *  Issue 392: one artifact per video, windowed here to the clip's span. */
+  peaks?: WaveformPeaks | null
+  /** Clip start within the source, in seconds — the window offset into `peaks`. */
+  sourceStartS?: number
   className?: string
 }
 
 /**
  * Timeline — waveform + synced playhead + trim-selection component.
  *
- * Design notes (Issue 188):
+ * Design notes (Issue 188, waveform reworked in 392):
  *  - Industry standard (Descript / Opus / Riverside) is a waveform bar with a
  *    moving playhead and drag-to-select for cuts. HTML5 Canvas + timeupdate is
  *    the idiomatic zero-dependency implementation for this scale.
- *  - Two rendering paths: (a) a server-generated waveform image (<img> overlay),
- *    (b) a Canvas-drawn amplitude path from Float32Array PCM data.
- *  - A third "placeholder" path (uniform bars) is used when neither is supplied,
- *    so the component renders at any stage of the pipeline.
+ *  - ONE waveform path: real server-computed peaks for the parent source,
+ *    windowed to this clip's span. There is deliberately no synthetic fallback —
+ *    when peaks are absent `Waveform` draws a flat line (Issue 392).
  *  - The playhead is a CSS-positioned div driven by currentTime / duration, re-
  *    rendered only when the ratio changes — no continuous Canvas redraws.
  *  - Drag-to-select emits a Cut on mouseup; it does not mutate the cuts array
@@ -54,12 +54,11 @@ export function Timeline({
   cuts,
   onSeek,
   onSelection,
-  waveformImageUrl,
-  waveformData,
+  peaks = null,
+  sourceStartS = 0,
   className,
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const [dragStart, setDragStart] = useState<number | null>(null)
   const [dragEnd, setDragEnd] = useState<number | null>(null)
 
@@ -73,36 +72,6 @@ export function Timeline({
     const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
     return ratio * duration
   }
-
-  // Draw the amplitude waveform from Float32Array PCM data.
-  const drawWave = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas || !waveformData || waveformData.length === 0) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    const { width, height } = canvas
-    ctx.clearRect(0, 0, width, height)
-
-    const mid = height / 2
-    const step = Math.max(1, Math.floor(waveformData.length / width))
-
-    ctx.strokeStyle = 'oklch(55% 0.12 240)'
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    for (let x = 0; x < width; x++) {
-      const slice = waveformData.slice(x * step, (x + 1) * step)
-      const peak = slice.reduce((m, v) => Math.max(m, Math.abs(v)), 0)
-      const amp = peak * mid * 0.9
-      ctx.moveTo(x, mid - amp)
-      ctx.lineTo(x, mid + amp)
-    }
-    ctx.stroke()
-  }, [waveformData])
-
-  useEffect(() => {
-    if (waveformData && !waveformImageUrl) drawWave()
-  }, [waveformData, waveformImageUrl, drawWave])
 
   // Mouse interaction — seek on click, select on drag.
   function onMouseDown(e: React.MouseEvent) {
@@ -142,9 +111,6 @@ export function Timeline({
     setDragEnd(null)
   }
 
-  // Server-influenced image URL: allowlist http(s)/relative before binding to src.
-  const waveformSrc = safeUrl(waveformImageUrl)
-
   // Compute selection overlay geometry (% of container width).
   const selectionStyle =
     dragStart !== null && dragEnd !== null && duration > 0
@@ -169,28 +135,16 @@ export function Timeline({
       aria-valuemax={duration}
       aria-valuenow={currentTime}
     >
-      {/* Waveform layer — image path takes priority over canvas path. */}
-      {waveformSrc ? (
-        <img
-          src={waveformSrc}
-          alt="Clip waveform"
-          draggable={false}
-          className="absolute inset-x-0 top-0 h-[80px] w-full object-fill opacity-70"
-          style={{ userSelect: 'none', pointerEvents: 'none' }}
+      {/* The creator's ACTUAL audio, windowed from the source's peaks. No
+          synthetic fallback exists: absent peaks render a flat line (Issue 392). */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[80px] text-accent">
+        <Waveform
+          peaks={peaks}
+          startS={sourceStartS}
+          endS={sourceStartS + duration}
+          ariaLabel={peaks ? 'Clip audio waveform' : 'Waveform unavailable'}
         />
-      ) : waveformData ? (
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-x-0 top-0 h-[80px] w-full"
-          style={{ pointerEvents: 'none' }}
-          // Actual pixel dimensions set by the resize observer below.
-          width={800}
-          height={WAVE_HEIGHT}
-        />
-      ) : (
-        /* Placeholder: uniform bars at low opacity when no waveform data is available yet. */
-        <PlaceholderWave />
-      )}
+      </div>
 
       {/* Cut regions: dimmed overlays for each queued cut. */}
       {duration > 0 &&
@@ -248,20 +202,4 @@ function fmtTime(s: number): string {
   const m = Math.floor(s / 60)
   const sec = Math.floor(s % 60)
   return `${m}:${sec.toString().padStart(2, '0')}`
-}
-
-/** Placeholder waveform — a row of uniform amplitude bars at low opacity. */
-function PlaceholderWave() {
-  const bars = Array.from({ length: 60 })
-  return (
-    <div className="absolute inset-x-0 top-0 flex h-[80px] items-center gap-px px-2 opacity-20" aria-hidden="true">
-      {bars.map((_, i) => (
-        <div
-          key={i}
-          className="flex-1 rounded-full bg-muted"
-          style={{ height: `${20 + Math.sin(i * 0.6) * 30 + Math.cos(i * 1.3) * 20}%` }}
-        />
-      ))}
-    </div>
-  )
 }

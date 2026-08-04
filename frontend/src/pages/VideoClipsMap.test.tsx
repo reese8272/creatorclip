@@ -35,6 +35,7 @@ function makeVideo(over: Partial<Video> = {}): Video {
     origin: 'upload',
     clippable: true,
     has_poster: false,
+    has_peaks: false,
     ...over,
   }
 }

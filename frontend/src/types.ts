@@ -59,6 +59,11 @@ export interface Video {
   // URL: the poster is fetched from the authed endpoint, and a signed URL in
   // this payload would cache-bust on every 5s dashboard poll.
   has_poster: boolean
+  // Issue 392 — whether /videos/{id}/peaks will serve a waveform. Also a boolean,
+  // for the same reason. False is PERMANENT for any video whose audio was purged
+  // before the backfill reached it; the editor draws a labelled flat track and
+  // never invents amplitude.
+  has_peaks: boolean
 }
 
 export interface VideoListResponse {

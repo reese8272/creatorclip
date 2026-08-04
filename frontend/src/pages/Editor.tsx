@@ -180,7 +180,12 @@ export function Editor() {
             </Button>
           </div>
         ) : (
-          <ShortFormEditor className="min-h-0 flex-1" clip={clip} videoId={videoId} />
+          <ShortFormEditor
+            className="min-h-0 flex-1"
+            clip={clip}
+            videoId={videoId}
+            hasPeaks={videoRow?.has_peaks ?? false}
+          />
         )}
       </>
     </ToolShell>

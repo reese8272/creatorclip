@@ -11,6 +11,9 @@ import { Chip } from '@/components/Chip'
 import { Button } from '@/components/ui/button'
 import { ChaptersPanel } from '@/components/analysis/ChaptersPanel'
 import { FullTranscriptPanel } from '@/components/editor/FullTranscriptPanel'
+import { Waveform } from '@/components/editor/Waveform'
+import { useVideoPeaks } from '@/hooks/useVideoPeaks'
+import type { WaveformPeaks } from '@/lib/peaks'
 import type { Chapter, ReviewClip, Video, VideoTranscript } from '@/types'
 import { ArrowRight } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
@@ -51,12 +54,15 @@ function MasterTimeline({
   sourceDuration,
   onOpenClip,
   onSelect,
+  peaks,
 }: {
   clips: ReviewClip[]
   chapters: Chapter[]
   sourceDuration: number
   onOpenClip: (clipId: string) => void
   onSelect: (sel: SourceSelection) => void
+  /** Real audio peaks, or null → the honest flat track (Issue 392). */
+  peaks: WaveformPeaks | null
 }) {
   const dur = sourceDuration > 0 ? sourceDuration : 1
   const barRef = useRef<HTMLDivElement>(null)
@@ -132,15 +138,18 @@ function MasterTimeline({
               style={{ left: `${Math.min(100, (t.at / dur) * 100)}%` }}
             />
           ))}
-          {/* waveform placeholder */}
-          <div className="absolute inset-0 flex items-center gap-px px-1.5">
-            {Array.from({ length: 48 }, (_, i) => (
-              <div
-                key={i}
-                className="flex-1 rounded-[1px] bg-strong/60"
-                style={{ height: `${20 + ((i * 37) % 60)}%` }}
-              />
-            ))}
+          {/* The creator's ACTUAL audio (Issue 392). This replaced 48 bars sized
+              `20 + ((i * 37) % 60)%` — decoration under a label that told the
+              creator it was their source. When peaks are unavailable Waveform
+              draws a flat line and the caption below says so; it never fills the
+              space with invented amplitude. */}
+          <div className="pointer-events-none absolute inset-0 px-1.5 text-strong">
+            <Waveform
+              peaks={peaks}
+              startS={0}
+              endS={dur}
+              ariaLabel={peaks ? 'Source audio waveform' : 'Waveform unavailable'}
+            />
           </div>
           {/* candidate + creator segments */}
           {clips.map((c) => {
@@ -198,6 +207,14 @@ function MasterTimeline({
         Green = strong fit · Amber = moderate · Gray = exploratory · Dashed = your selection. Click a
         segment to open it, or drag an empty stretch to create your own clip.
       </p>
+      {/* Say it outright when there is no audio data. A silent flat line could be
+          mistaken for a silent source; this distinguishes "we don't have it" from
+          "your audio is quiet" (Issue 392). */}
+      {!peaks && (
+        <p className="mt-1 text-label text-subtle">
+          Waveform unavailable for this source — the audio is past its retention window.
+        </p>
+      )}
     </div>
   )
 }
@@ -311,6 +328,12 @@ export function LongFormEditor({
   // player. A stream error (e.g. purge raced the page) lands the same way.
   const sourceAvailable = (video ? video.clippable : true) && !streamError
 
+  // Issue 392 — gated on has_peaks so a video that will never have a waveform
+  // costs zero requests instead of a 404 on every open. Note peaks OUTLIVE the
+  // source: `sourceAvailable` can be false (media purged) while the waveform is
+  // still served, which is the point — you can still see the shape of the audio.
+  const { peaks } = useVideoPeaks(videoId, video?.has_peaks ?? false)
+
   // Real source duration (Issue 372): videos-list row → transcript span →
   // furthest clip end as the last-resort fallback so the timeline never
   // renders degenerate.
@@ -378,6 +401,7 @@ export function LongFormEditor({
           sourceDuration={sourceDuration}
           onOpenClip={onOpenClip}
           onSelect={setPendingSelection}
+          peaks={peaks}
         />
 
         {pendingSelection && (

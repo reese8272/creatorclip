@@ -78,27 +78,28 @@ describe('Timeline', () => {
     expect(screen.getByLabelText(/Cut 2:/i)).toBeInTheDocument()
   })
 
-  it('shows the placeholder wave when no waveformData or image is supplied', () => {
-    renderTimeline({ waveformData: null, waveformImageUrl: null })
-    // The placeholder is aria-hidden but the bars render
-    const { container } = render(
-      <Timeline
-        duration={30}
-        currentTime={0}
-        cuts={[]}
-        onSeek={vi.fn()}
-        onSelection={vi.fn()}
-      />,
-    )
-    // The placeholder div contains aria-hidden="true" bars — check the container has them
-    expect(container.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0)
+  it('labels the waveform as unavailable when no peaks are supplied', () => {
+    // Issue 392: there is no synthetic fallback. Absent peaks must announce
+    // themselves rather than render invented amplitude that a creator would
+    // read as their own audio.
+    renderTimeline({ peaks: null })
+    expect(screen.getByRole('img', { name: /waveform unavailable/i })).toBeInTheDocument()
   })
 
-  it('renders a waveform image when waveformImageUrl is provided', () => {
-    renderTimeline({ waveformImageUrl: 'http://cdn/wave.png' })
-    const img = screen.getByRole('img', { name: /clip waveform/i })
-    expect(img).toBeInTheDocument()
-    expect(img).toHaveAttribute('src', 'http://cdn/wave.png')
+  it('renders the real waveform when peaks are supplied', () => {
+    renderTimeline({
+      peaks: {
+        version: 1,
+        sample_rate: 16000,
+        samples_per_pixel: 512,
+        bits: 8,
+        length: 3,
+        data: [-100, 120, -10, 12, -60, 64],
+      },
+      sourceStartS: 0,
+    })
+    expect(screen.getByRole('img', { name: /clip audio waveform/i })).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: /waveform unavailable/i })).toBeNull()
   })
 
   it('playhead position reflects currentTime / duration ratio', () => {

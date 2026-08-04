@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
@@ -13,6 +13,7 @@ import { CleanPassPanel } from '@/components/review/CleanPassPanel'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { Chip } from '@/components/Chip'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
+import { useVideoPeaks } from '@/hooks/useVideoPeaks'
 import type { ClipTranscript, EditorCut, ReviewClip, TranscriptWord } from '@/types'
 import { ArrowLeft, TriangleAlert, X } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
@@ -92,17 +93,21 @@ function activeWordIndex(words: TranscriptWord[], currentTime: number): number {
  * this surface, and before the split they would all have rewritten the same
  * 700-line Editor.tsx.
  *
- * Waveform rendering is currently a client-side WebAudio decode of the rendered
- * mp4. That is Issue 392's target — it fetches the whole artifact and builds a
- * full-length Float32Array on the main thread per clip switch.
+ * The waveform is real server-computed peaks for the parent source, windowed to
+ * this clip (Issue 392). It replaced a client-side WebAudio decode of the
+ * rendered mp4.
  */
 export function ShortFormEditor({
   clip,
   videoId,
+  hasPeaks = false,
   className,
 }: {
   clip: ReviewClip
   videoId: string
+  /** The parent video's `has_peaks`. Gating on it means a source that will never
+   *  have a waveform costs zero requests instead of a 404 per clip open. */
+  hasPeaks?: boolean
   className?: string
 }) {
   const navigate = useNavigate()
@@ -132,45 +137,19 @@ export function ShortFormEditor({
     setCurrentTime(t)
   }
 
-  // ── Waveform (client-side WebAudio decode) ───────────────────────────────
+  // ── Waveform ─────────────────────────────────────────────────────────────
 
-  const [waveformData, setWaveformData] = useState<Float32Array | null>(null)
-
-  const decodeWaveform = useCallback(async (mediaSrc: string) => {
-    try {
-      const resp = await fetch(mediaSrc, { credentials: 'include' })
-      if (!resp.ok) return
-      const buf = await resp.arrayBuffer()
-      // AudioContext is only available in browser; vitest jsdom stubs it.
-      const AudioCtx =
-        window.AudioContext ??
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-      if (!AudioCtx) return
-      const audioCtx = new AudioCtx()
-      const decoded = await audioCtx.decodeAudioData(buf)
-      // Down-mix all channels to mono by averaging.
-      const length = decoded.length
-      const mono = new Float32Array(length)
-      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
-        const channel = decoded.getChannelData(ch)
-        for (let i = 0; i < length; i++) mono[i] += channel[i]
-      }
-      for (let i = 0; i < length; i++) mono[i] /= decoded.numberOfChannels
-      setWaveformData(mono)
-      await audioCtx.close()
-    } catch {
-      // Waveform decode failure is non-fatal — placeholder is shown instead.
-    }
-  }, [])
-
-  useEffect(() => {
-    const src = `/clips/${clip.id}/download?disposition=inline`
-    // Intentional: kick off the async waveform decode (which sets loading state)
-    // when the selected clip changes — a genuine external-sync effect, not derivable
-    // during render. Proper refactor tracked in OFF_COURSE_BUGS (lint sweep).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    decodeWaveform(src)
-  }, [clip.id, decodeWaveform])
+  // Issue 392 replaced a client-side WebAudio decode here. That path fetched the
+  // ENTIRE rendered mp4 with credentials on every clip switch, buffered it,
+  // decodeAudioData'd it and built a Float32Array of every sample (~8 MB for a
+  // 40s clip) in a main-thread loop, while racing the <video> element for the
+  // same bytes. The server now precomputes an ~8-bit envelope once per source.
+  //
+  // The peaks belong to the SOURCE, so the timeline windows them to this clip's
+  // span. The render origin is setup_start_s when set — the engine starts the
+  // clip at the setup — so that, not start_s, is the window offset.
+  const { peaks } = useVideoPeaks(clip.video_id, hasPeaks)
+  const sourceStartS = clip.setup_start_s ?? clip.start_s
 
   // ── Cut state (mirrors TranscriptEditor, shares localStorage key) ────────
 
@@ -488,7 +467,8 @@ export function ShortFormEditor({
             cuts={cuts}
             onSeek={handleSeek}
             onSelection={({ start_s, end_s }) => addTimeCut(start_s, end_s)}
-            waveformData={waveformData}
+            peaks={peaks}
+            sourceStartS={sourceStartS}
           />
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button
