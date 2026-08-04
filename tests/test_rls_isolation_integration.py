@@ -202,7 +202,7 @@ async def _seed_all_tenant_rows(session: AsyncSession, creator_id: uuid.UUID) ->
         VideoFeedback(
             creator_id=creator_id,
             video_id=video.id,
-            sentiment=VideoSentiment.positive,
+            sentiment=VideoSentiment.like,
             feedback_tags=["x"],
         )
     )
