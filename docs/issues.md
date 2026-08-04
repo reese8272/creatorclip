@@ -1383,7 +1383,7 @@ each brief in `docs/issues-archive-2026-08-03.md`, consistent with `docs/PROJECT
 # Hygiene — outside the L25 lane
 
 ### Issue 406: Clear the 6 `pip-audit` advisories in aiohttp and cryptography
-- [ ] **Status:** open · **Batch:** — (hygiene) · **Size:** S · **Agent:** `python-senior-engineer`
+- [x] **Status:** **DONE 2026-08-04** · **Batch:** — (hygiene) · **Size:** S · **Agent:** `python-senior-engineer`
 
 **What we're doing.** Bumping `aiohttp` 3.14.1 → **3.14.3** and `cryptography` 48.0.1 → **50.0.0**
 to clear all six advisories the `pip_audit` gate has been failing on since the Batch A baseline, and
@@ -1435,14 +1435,25 @@ re-evaluation trigger, and is reserved for advisories with no fix in our compati
 these have a fix in range, so neither qualifies — bump, don't ignore.
 
 **Acceptance**
-- [ ] `aiohttp==3.14.3` and `cryptography==50.0.0` pinned with `==` in `requirements.txt`
-- [ ] `pip-audit` reports **0** vulnerabilities beyond the existing justified `ignore-vulns` entries
-- [ ] **Nothing new added to `ignore-vulns`** — if a bump proves impossible, the issue reports back
-      rather than silently converting to an exception
-- [ ] `run_layer0.py` `pip_audit` gate green; baseline updated to reflect 0, not 6
-- [ ] Full pytest run green, `crypto` module coverage floor still 100.0
-- [ ] Deepgram + Voyage paths exercised (unit lane) after the aiohttp bump
-- [ ] `docs/OFF_COURSE_BUGS.md` entry marked resolved, pointing at this issue
+- [x] `aiohttp==3.14.3` and `cryptography==50.0.0` pinned with `==` in `requirements.txt`
+- [x] `pip-audit` reports **0** vulnerabilities beyond the existing justified `ignore-vulns` entries
+      (7 raw findings → 1, and that one is the already-justified pytest entry)
+- [x] **Nothing new added to `ignore-vulns`** — the file is byte-identical
+- [x] `run_layer0.py` `pip_audit` gate green. **No baseline change was needed:**
+      `docs/assessment/baselines.json` already had `pip_audit_vulns: 0` and was never relaxed, so
+      the gate stayed honestly red for the whole of Batch B rather than being bumped away. The fix
+      makes reality meet the baseline, which is the right direction.
+- [x] Full pytest run green (2572), `crypto` module coverage still **100.0**
+- [x] Deepgram + Voyage paths exercised (unit lane) after the aiohttp bump —
+      `tests/ingestion/` + `tests/test_crypto.py` + `tests/test_doctor.py` green
+- [x] `docs/OFF_COURSE_BUGS.md` entry marked resolved, pointing at this issue
+
+**Verified before bumping** (`cryptography` 48 → 50 is two majors):
+the [changelog](https://cryptography.io/en/latest/changelog/) confirms **no Fernet or MultiFernet
+API change** in 49.0.0 or 50.0.0 — the only surface this codebase uses. Every backward-incompatible
+change is in X.509 parsing, ChaCha20 nonce semantics, FFDH deprecation or OCSP version validation,
+none of which is imported here. The dropped platforms (x86_64 macOS wheels, 32-bit Windows) do not
+apply to `python:3.12-slim` on linux/amd64.
 
 ---
 

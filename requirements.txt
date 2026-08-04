@@ -37,16 +37,30 @@ celery-redbeat==2.3.3
 # ── Config / Security ────────────────────────────────────────────────────────
 pydantic-settings==2.6.1
 python-dotenv==1.2.2
-cryptography==48.0.1  # >=48.0.1 fixes GHSA-537c-gmf6-5ccf (OpenSSL OOB read in wheels, Issue 143)
+# >=48.0.1 fixed GHSA-537c-gmf6-5ccf (OpenSSL OOB read in wheels, Issue 143).
+# 50.0.0 clears CVE-2026-69247 (PKCS#7 decryption oracle), -69248 (name-constraint
+# escape) and -69249 (exponential blowup on duplicate self-signed certs) — Issue 406.
+# None had an exposure path here: we import ONLY Fernet/MultiFernet (crypto.py,
+# config.py) and never the X.509 verifier or pkcs7_decrypt_*. Bumped rather than
+# ignored because a fix exists in our compatible range. The 49/50 breaking changes
+# are all X.509 parsing, ChaCha20, FFDH and OCSP; Fernet's API is untouched.
+cryptography==50.0.0
 PyJWT==2.13.0
 bcrypt==4.2.0
 
 # ── Anthropic / Embeddings ───────────────────────────────────────────────────
 anthropic==0.105.2
 voyageai==0.3.2
-# aiohttp is a transitive dep of voyageai. Pinned to 3.14.1 to close
-# CVE-2026-34993 and CVE-2026-47265 (both fixed in >=3.14.0).
-aiohttp==3.14.1
+# Transitive only — there is no `import aiohttp` in this tree; deepgram-sdk
+# (>=3.9.1) and voyageai both pull it, so the pin is ours to choose freely.
+# >=3.14.0 closed CVE-2026-34993 and CVE-2026-47265 (Issue 143).
+# 3.14.3 clears CVE-2026-59881 + -69243 (both WebSocket-path, and unreachable
+# here: Deepgram is used PRERECORDED/REST — see ingestion/transcribe.py — so the
+# live socket is never constructed, and we run no aiohttp server) plus
+# CVE-2026-69244, an OOB heap read in the C response parser while formatting an
+# error for a malformed response. That last one is the only one with a real, if
+# narrow, path: a hostile or faulty response from Deepgram/Voyage. Issue 406.
+aiohttp==3.14.3
 tenacity==9.1.4
 
 # ── Audio Analysis ───────────────────────────────────────────────────────────
