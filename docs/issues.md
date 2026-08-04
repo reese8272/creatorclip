@@ -5,9 +5,13 @@ queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `d
 (2026-08-03). This file is the live queue.
 
 **Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
-2026-08-03). **Batch B is in progress: #389, #392 and #390 are DONE** (the tool-route app shell; real
-waveform peaks; Timeline v2) — see `docs/PROJECT_STATE.md`. **#391 (edit persistence) is the last
-one, and is planned as its own PR.**
+2026-08-03). **Batch B: #389, #392 and #390 are DONE, MERGED and DEPLOYED** — PR #70 → `main`
+(`67fe4db`), 2026-08-04; prod DB now at `0051`. **#391 (edit persistence) is the last Batch B issue**,
+deliberately held out of that PR because it touches the paid render path, and is planned as its own
+PR off fresh `main`. See `docs/PROJECT_STATE.md`.
+
+**Also open, outside the lane:** **#406** — clear the 6 `pip-audit` advisories (aiohttp,
+cryptography). Filed 2026-08-04 from the OFF_COURSE_BUGS log; see § Hygiene below.
 
 > **Batch B order was changed at build time to 389 → 392 → 390 → 391** (user decision, 2026-08-03).
 > #392 is the batch's only live honesty-constraint violation, it is pure backend (zero overlap with
@@ -413,7 +417,7 @@ professionalism and reliability
 # Batch B — Make it an application
 
 ### Issue 389: App-shell layout for Editor and Review
-- [x] **Status:** DONE 2026-08-03 · **Batch:** B · **Size:** M
+- [x] **Status:** DONE 2026-08-03 · **MERGED + DEPLOYED** 2026-08-04 (PR #70) · **Batch:** B · **Size:** M
 - **Scope extended at build time** (see `docs/DECISIONS.md` 2026-08-03): also extracted
   `components/editor/ShortFormEditor.tsx` out of the 700-line `Editor.tsx` (all four Batch-B issues
   rewrite that file, so the split makes them conflict in different files) and made the
@@ -490,7 +494,7 @@ simplified timeline with transcript editing inside a single sustained workspace
 ---
 
 ### Issue 390: Timeline v2
-- [x] **Status:** DONE 2026-08-03 · **Batch:** B · **Size:** L
+- [x] **Status:** DONE 2026-08-03 · **MERGED + DEPLOYED** 2026-08-04 (PR #70) · **Batch:** B · **Size:** L
 - **Scope extended at build time** (user decision, see `docs/DECISIONS.md`): the engine is shared by
   BOTH timelines. The brief says "rebuild `Timeline.tsx`", but its own motivating evidence is the
   22-minute long-form source, which was a separate hand-rolled bar with the same mouse-only defect.
@@ -628,7 +632,7 @@ comments with mentions, notifications — which presumes a server-authoritative 
 ---
 
 ### Issue 392: Replace the fabricated long-form waveform
-- [x] **Status:** DONE 2026-08-03 · **Batch:** B · **Size:** S (backend turned out M)
+- [x] **Status:** DONE 2026-08-03 · **MERGED + DEPLOYED** 2026-08-04 (PR #70) · **Batch:** B · **Size:** S (backend turned out M)
 - **Scope extended at build time** (approved; see `docs/DECISIONS.md` 2026-08-03): the SHORT-form
   timeline moved onto the same artifact too, deleting the client-side WebAudio decode that fetched
   the whole rendered mp4 and built an ~8 MB `Float32Array` per clip switch, plus the dead

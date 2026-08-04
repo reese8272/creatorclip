@@ -4,6 +4,52 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-04 — L25 Batch B (part 1) MERGED and DEPLOYED · Issue 406 filed
+
+**PR #70 `wave/l25-batch-b` → `main` (`67fe4db`), deployed to `autoclip.studio`.** 29 commits,
+closing **#389** (tool-route app shell), **#392** (real waveform peaks) and **#390** (Timeline v2).
+`staging` fast-forwarded to `67fe4db` per `docs/BRANCHING.md`.
+
+**Deploy.** Docker publish → deploy chain green end to end: preflight, migrations, roll out, smoke
+test (auto-rollback armed, not triggered), old-image cleanup. Prod `GET /health` **200** with
+postgres/redis/storage all `ok`. Migration **`0051_video_peaks`** applied — prod DB moves `0050` →
+**`0051`**. New Beat task `backfill-video-peaks-hourly` is live.
+
+**CI: 11 of 12 green.** Every functional gate passed — unit, integration (postgres+redis), coverage
+floor, frontend, Playwright smoke+a11y, **visual regression**, Squawk migration lint, Docker build,
+clip eval, ruff, flake detection. The visual-regression baselines were **predicted to need
+regeneration on `ubuntu-latest`** given how much #389 and #390 moved tool-route layout; they passed
+unchanged, so no regeneration was needed.
+
+**The one red gate — `pip_audit fail 6` — was merged knowingly, and is not a regression.** The static
+job reported `ruff 0 · mypy 0 · bandit {high:0, medium:0} · freshness ok · pip_audit fail 6`. The
+identical `requirements.txt` pins are already on `main`, so the PR neither introduced nor worsened
+the condition. Triaged per-CVE against actual usage before merging, and **promoted out of
+`docs/OFF_COURSE_BUGS.md` into `docs/issues.md` as Issue 406** rather than baseline-bumped:
+
+- The gate reads **6, not 7** — the pytest advisory is already justified in
+  `[tool.pip-audit].ignore-vulns`. That entry stays.
+- **None of the 6 has a live exposure path.** Both aiohttp WebSocket CVEs require a server or a live
+  socket; `ingestion/transcribe.py:130-150` uses Deepgram **prerecorded REST** and never constructs
+  the streaming client. All three cryptography CVEs are X.509 path validation or PKCS#7 decryption,
+  while the codebase imports only `Fernet`/`MultiFernet`.
+- The remaining one (aiohttp `CVE-2026-69244`, OOB heap read formatting a malformed-response error)
+  needs a hostile or faulty response from Deepgram/Voyage — low, but real.
+- The fix is unconstrained: `aiohttp` is transitive-only (`deepgram-sdk>=3.9.1`, `voyageai` unpinned)
+  and `cryptography` has **no** downstream consumer in the venv. Issue 406 forbids adding anything to
+  `ignore-vulns`, because both have a fix inside our compatible range.
+
+**Noted during the deploy, not new:** the prod deploy annotated *"No `BACKUP_R2_BUCKET` configured —
+skipping pre-migration dump (Issue 256 not yet activated). Migrating WITHOUT a safety dump."*
+`0051` is additive and nullable so the risk was low here, but Issue 256 is now load-bearing for any
+migration that isn't.
+
+**Batch B is not finished.** **#391** (server-side edit document + undo/redo) was deliberately kept
+out of this PR — it touches the paid render path and warrants separate review. It is the last Batch B
+issue; the approved plan is Part 2 of `~/.claude/plans/yes-but-ensure-a-agile-glacier.md`.
+
+---
+
 ## 2026-08-03 (L25 W2) — Issue 390 DONE: the editor is an editor
 
 **Both timelines were rebuilt on one shared engine.** They can now be zoomed, scrolled, scrubbed by
