@@ -1,7 +1,7 @@
 import * as ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
-import { formatHits, scanSources, sourcePaths, sourceText } from './sourceScan'
+import { formatHits, scanSources } from './sourceScan'
 
 // Issue 392's structural gate.
 //
@@ -61,9 +61,22 @@ describe('no synthetic waveform amplitude (Issue 392)', () => {
   it('the Waveform component is the only thing that paints a waveform', () => {
     // If a second painter appears, this gate stops applying to it — which is how
     // the fabricated one would sneak back.
-    const painters = sourcePaths(EDITOR_SOURCES).filter((p) =>
-      /getContext\(\s*'2d'\s*\)/.test(sourceText(p) ?? ''),
+    //
+    // AST, not raw text (Issue 390). This started as a regex over file contents
+    // and false-positived on TimelineRuler.tsx's own comment explaining why it is
+    // deliberately NOT a canvas — the second time a raw-text scan in this file
+    // has flagged an explanation rather than an offence. Matching a CallExpression
+    // whose callee property is `getContext` cannot see comments at all, because
+    // comments are trivia and never become AST nodes.
+    const painters = new Set(
+      scanSources(({ node, sourceFile, report, path }) => {
+        if (!ts.isCallExpression(node)) return
+        const callee = node.expression
+        if (!ts.isPropertyAccessExpression(callee)) return
+        if (callee.name.getText(sourceFile) !== 'getContext') return
+        report(node, path)
+      }, EDITOR_SOURCES).map((hit) => hit.file),
     )
-    expect(painters).toEqual(['/src/components/editor/Waveform.tsx'])
+    expect([...painters]).toEqual(['/src/components/editor/Waveform.tsx'])
   })
 })
