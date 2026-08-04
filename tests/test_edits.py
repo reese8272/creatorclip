@@ -185,6 +185,31 @@ def _mock_creator():
     return c
 
 
+def _stub_edit_document(session, segments, revision=1):
+    """Issue 391 — the render path reads the SERVER document, not the request.
+
+    The cut list under test now reaches the endpoint through this stub rather
+    than through the POST body.
+    """
+    from datetime import UTC, datetime
+
+    from models import ClipEditDocument
+
+    row = MagicMock(spec=ClipEditDocument)
+    row.revision = revision
+    row.doc = {
+        "version": 1,
+        "cuts": [
+            {"id": f"c{i}", "start_s": seg["start_s"], "end_s": seg["end_s"]}
+            for i, seg in enumerate(segments)
+        ],
+        "last_applied_at": None,
+    }
+    row.updated_at = datetime(2026, 8, 4, tzinfo=UTC)
+    session.scalar = AsyncMock(return_value=row)
+    return row
+
+
 def _mock_clip(creator_id, duration_s=10.0):
     from models import Clip, RenderStatus
 
@@ -213,6 +238,7 @@ def test_post_cuts_happy_path_returns_202(client):
     async def _session():
         s = AsyncMock()
         stub_get_owned(s, clip)
+        _stub_edit_document(s, [{"start_s": 2.0, "end_s": 3.0}], revision=4)
         s.commit = AsyncMock()
         yield s
 
@@ -229,7 +255,7 @@ def test_post_cuts_happy_path_returns_202(client):
         try:
             resp = client.post(
                 f"/clips/{clip.id}/cuts",
-                json={"segments": [{"start_s": 2.0, "end_s": 3.0}]},
+                json={"base_revision": 4},
             )
         finally:
             app.dependency_overrides.clear()
@@ -271,6 +297,7 @@ def test_post_cuts_validation_returns_422_with_code(client, segments, expected_c
     async def _session():
         s = AsyncMock()
         stub_get_owned(s, clip)
+        _stub_edit_document(s, segments, revision=2)
         s.commit = AsyncMock()
         yield s
 
@@ -282,7 +309,7 @@ def test_post_cuts_validation_returns_422_with_code(client, segments, expected_c
         try:
             resp = client.post(
                 f"/clips/{clip.id}/cuts",
-                json={"segments": segments},
+                json={"base_revision": 2},
             )
         finally:
             app.dependency_overrides.clear()
@@ -321,7 +348,7 @@ def test_post_cuts_rejects_other_creators_clip(client):
         with patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)):
             resp = client.post(
                 f"/clips/{clip.id}/cuts",
-                json={"segments": [{"start_s": 2.0, "end_s": 3.0}]},
+                json={"base_revision": 0},
             )
     finally:
         app.dependency_overrides.clear()
@@ -415,7 +442,7 @@ def test_post_cuts_rejects_when_cleaned_render_uri_already_set(client):
         with patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)):
             resp = client.post(
                 f"/clips/{clip.id}/cuts",
-                json={"segments": [{"start_s": 2.0, "end_s": 3.0}]},
+                json={"base_revision": 0},
             )
     finally:
         app.dependency_overrides.clear()

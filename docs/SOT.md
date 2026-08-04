@@ -425,6 +425,13 @@ clips
                                        -- back to video.title / "#Shorts")
 
 clip_edit_documents                  -- the creator's in-progress edit (Issue 391, migration 0052)
+  -- READ BY THE RENDER PATH. POST /clips/{id}/cuts sends only `base_revision`;
+  --   the server renders whatever this table holds at that revision, or 409s
+  --   `stale_revision`. There is no way to post a cut list any more — that
+  --   would be a second, unvalidated route into a PAID render.
+  -- /clean/confirm CLEARS it in the same transaction as the render swap (the
+  --   edit is baked in, so leaving it would double-cut the next export) and
+  --   returns the new revision. /clean/discard deliberately does NOT.
   id, clip_id (FK, UNIQUE, CASCADE), creator_id (FK, CASCADE, indexed),
   doc (JSONB), revision (int), created_at, updated_at
   -- ONE ROW PER CLIP, read and written WHOLE. Replaces

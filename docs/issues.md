@@ -6,8 +6,9 @@ queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `d
 
 **Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
 2026-08-03). **Batch B: #389, #392 and #390 are DONE, MERGED and DEPLOYED** — PR #70 → `main`
-(`67fe4db`), 2026-08-04; prod DB now at `0051`. **#391 (edit persistence) is the last Batch B issue;
-its PR A is built on `feat/391-edit-persistence` and PR B (the render path) remains.** See `docs/PROJECT_STATE.md`.
+(`67fe4db`) and **#391 merged as PR #71** (`0b59a75`, migration `0052`), both deployed.
+**BATCH B IS COMPLETE.** Issue **406** (dependency advisories) also closed, so Layer 0 is fully green.
+**Next: Batch C — close the capability gap (393–397, 401).** See `docs/PROJECT_STATE.md`.
 
 **Also open, outside the lane:** **#406** — clear the 6 `pip-audit` advisories (aiohttp,
 cryptography). Filed 2026-08-04 from the OFF_COURSE_BUGS log; see § Hygiene below.
@@ -43,7 +44,7 @@ changes the gut reaction to the product.
 | Batch | Theme | Issues | Size |
 |-------|-------|--------|------|
 | **A** ✅ | Visual credibility — stop reading as a prototype | 384–388, **400** — **ALL DONE 2026-08-03** | days |
-| **B** | Make it an application, not a webpage | **389 ✅ · 392 ✅ · 390 ✅** (merged PR #70) — **391 PR A built, PR B remains** | 1–2 weeks |
+| **B** ✅ | Make it an application, not a webpage | **389 ✅ · 392 ✅ · 390 ✅ · 391 ✅** — **BATCH COMPLETE 2026-08-04** | 1–2 weeks |
 | **C** | Close the capability gap | 393–397, **401** | multi-week |
 | **D** | Asset management | 398–399, **402** | ~1 week |
 | **E** | Breadth — scope-call cluster, do not start before D closes | **403–405** | multi-week |
@@ -584,8 +585,8 @@ reference — this issue closes the distance to that reference.
 ---
 
 ### Issue 391: Real edit persistence — undo/redo stack + server-side edit document
-- [ ] **Status:** **PR A BUILT** 2026-08-04 (`feat/391-edit-persistence`, 6 commits, unmerged) ·
-      **PR B open** — the render path · **Batch:** B · **Size:** L · **Agent:** `python-senior-engineer`
+- [x] **Status:** **DONE 2026-08-04** — PR A merged (#71, `0b59a75`, deployed with migration `0052`);
+      PR B on `feat/391-render-from-document` · **Batch:** B · **Size:** L · **Agent:** `python-senior-engineer`
 
 > **Split into two PRs at plan time.** `POST /clips/{id}/cuts` is paid, flag-gated and
 > budget-checked, and LEFT_OFF ranked it the SEV1 risk of this issue. **PR A is purely additive:**
@@ -648,8 +649,18 @@ comments with mentions, notifications — which presumes a server-authoritative 
       structural gate, `src/test/no-local-cut-storage.test.ts` (mutation-checked).
 - [x] Alembic migration written; **RLS integration test extended but NOT run locally** — it needs
       Docker, which this box lacks. CI-verified only; say so plainly rather than claiming it passed.
-- [ ] **(PR B)** Render path reads the document via `base_revision`; legacy `segments` branch deleted
-- [ ] **(PR B)** `POST /clean/confirm` clears the document server-side; `/clean/discard` does not
+- [x] **(PR B)** Render path reads the document via `base_revision`; legacy `segments` branch
+      **deleted, not deprecated** — leaving it would keep a second, unvalidated way to drive a paid
+      render. `CutSegmentIn` went with it, and a test asserts the old shape is now REJECTED.
+- [x] **(PR B)** `POST /clean/confirm` clears the document server-side **in the same transaction as
+      the swap** and reports the new revision so the client can adopt it; `/clean/discard` does not
+      — the creator rejected that render, and their cuts still describe an unapplied edit.
+
+**Two races on the paid path were found and fixed while wiring PR B**, neither of which was in the
+plan: `flush()` was fire-and-forget, so export could post `base_revision` while the matching PUT was
+still in flight and have the server render the *previous* document; and the revision was going to be
+read off `query.data`, which never advances under `staleTime: Infinity`, so every export after the
+first save would have 409ed against a base the client itself had moved past. Both are mutation-checked.
 
 ---
 
