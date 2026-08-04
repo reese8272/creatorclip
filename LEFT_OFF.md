@@ -1,9 +1,9 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-04 (evening) · **Branch:** `main` @ **`500b715`** + the close-out docs commit · **working tree clean**
-**Trunk:** `main` and `staging` in sync. No open PRs, no live feature branches.
-**Prod:** `https://autoclip.studio` `GET /health` → **200** after both of today's deploys.
-Prod DB head **`0052_clip_edit_documents`** — unchanged this wave (no migrations); in sync with the repo.
+**Last updated:** 2026-08-04 (night) · **Branch:** `main` @ `aefdd0b` + the Issue 413 commit (this one) · **working tree clean after it**
+**Trunk:** `main` ahead of `staging` until the post-push sync (`git push origin origin/main:staging`). No open PRs, no live feature branches.
+**Prod:** `https://autoclip.studio` — push to `main` auto-deploys (docker-publish → deploy); verify `GET /health` → 200 after this push.
+Prod DB head **`0052_clip_edit_documents`** — unchanged by 413 (frontend-only, no migrations).
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -11,42 +11,51 @@ Prod DB head **`0052_clip_edit_documents`** — unchanged this wave (no migratio
 
 ## CURRENT FOCUS
 
-**BATCHES A AND B ARE 100% CLOSED.** The 2026-08-04 assessment found six issues (407–412) plus
-bookkeeping debt; the same-day close-out wave shipped all of it as **PR #74** (correctness,
-`9672de8`) and **PR #75** (presentation, `500b715`), both merged, deployed, and health-checked.
-No unchecked acceptance box, no deferred proof, and no tracker contradiction remains for A/B.
+**Issue 413 — app typeface swapped to Lexend — is BUILT, GATED, and COMMITTED direct-to-main**
+(user's explicit call: no PR). All non-mono text is Lexend; Geist Sans + Inter removed; Geist Mono
+stays for data. Chosen by the creator from an 11-face specimen against the live palette
+(`docs/DECISIONS.md` 2026-08-04). Batches A/B remain 100% closed; Batch C not started yet.
 
-### → NEXT ACTION
+### → NEXT ACTION — the 413 tail, in order
 
-1. **Start Issue 393 — client-side cut preview** (unchanged from before the wave; it was never
-   blocked, only queue-jumped by the close-out). Read `docs/issues.md` § Batch C.
+1. **Regenerate visual baselines on CI** (every screen's text changed — the `visual` job WILL fail
+   until this lands):
    ```bash
-   git checkout main && git pull --ff-only
-   git checkout -b feat/393-cut-preview
+   gh workflow run ci.yml -f update_snapshots=true --ref main
+   gh run list --workflow=ci.yml --limit 1        # grab <run-id> once it finishes
+   gh run download <run-id> -n visual-baselines-<sha> -D frontend/e2e/
+   git add frontend/e2e/__snapshots__ && git commit && git push   # direct to main, per user
    ```
-2. **Plan it through `/issue-workflow`** — Phase 1 research with LIVE documentation lookup.
-3. **Before any local gate run:**
+2. **Confirm green**: plain `gh workflow run ci.yml --ref main`, watch to 12/12 incl. visual; then
+   tick the last Issue 413 acceptance box in `docs/issues.md`.
+3. **Verify the auto-deploy** that this push already triggered: `gh run list` for docker-publish +
+   deploy, then `curl https://autoclip.studio/health` → 200, and eyeball Lexend live.
+4. **Sync staging**: `git push origin origin/main:staging`.
+5. Then resume the queue: **Issue 393 — client-side cut preview** (Batch C) via `/issue-workflow`.
+6. **Before any local gate run:**
    ```bash
    export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH
    redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
    ```
    and run every frontend command **from `frontend/`** (npx from repo root silently uses a CACHED
-   npx Playwright and dies with `ERR_INTERNAL_ASSERTION` — bit this wave, twice).
+   npx Playwright and dies with `ERR_INTERNAL_ASSERTION` — bit the A/B wave, twice).
 
 ---
 
-## WHAT WORKS NOW (verified on the close-out wave — do not re-investigate)
+## WHAT WORKS NOW (verified on the Issue 413 finish state — do not re-investigate)
 
 | Gate | Value |
 |---|---|
-| Backend pytest | **2582 passed**, 64 skipped (+1 unit; +2 integration-marked poster tests run in CI's lane) |
-| Frontend vitest | **600 passed / 83 files** |
-| Playwright | **80 passed** (+2 editor-persistence, +2 settings-axe) — `/settings` is IN the axe gate now (24/24) |
-| Layer 0 | `ruff 0 · mypy 0 · coverage 83.34 · bandit 0/0 · pip_audit 0` — all green |
+| Layer 0 (incl. full pytest via coverage) | `ruff 0 · mypy 0 · coverage 83.38 · bandit 0/0 · pip_audit 0` — all green |
 | module floors | clip_engine 92.61 · preference 90.45 · crypto/limiter/auth 100.0 |
-| `tsc -b` · lint · build | clean · 0 errors (1 pre-existing warning in `useStageStream.ts`) · clean |
-| CI | **12/12 green on PR #74 AND PR #75**, incl. visual regression unchanged (no baseline regen needed) |
-| Live prod | `/health` 200 after both deploys; last deploy = PR #75 |
+| Frontend vitest (node 22) | **600 passed / 83 files** on the Lexend state |
+| `tsc -b` · lint · build | clean · 0 errors (1 pre-existing warning in `useStageStream.ts`, logged off-course) · clean; `dist/` ships Lexend + Geist Mono only |
+| Playwright visual | **STALE — every screen's text changed.** Regen is NEXT ACTION 1; do not treat a red `visual` job as a code bug |
+| Live prod | was `/health` 200 after PR #75; re-verify after this push's auto-deploy (NEXT ACTION 3) |
+
+**Layer 0 must run as `.venv/bin/python …/run_layer0.py`** — bare `python3` audits the SYSTEM
+interpreter and reports ~102 phantom pip-audit vulns (re-confirmed this session; the script's own
+header documents it).
 
 **Integration/RLS tests still need Docker (absent here) — CI-verified only; say so plainly.**
 
@@ -101,16 +110,16 @@ No unchecked acceptance box, no deferred proof, and no tracker contradiction rem
 | Repo | `github.com/reese8272/creatorclip` |
 | Production | `https://autoclip.studio` — VM + docker-compose + Cloudflare tunnel (**not** Render) |
 | Branches | `main`, `staging` — in sync. All feature branches merged and deleted |
-| Last merged PRs | **#75** (412) · **#74** (407–411 + 387 proofs + bookkeeping) · #73/#71 (391) · #72 (406) · #70 (Batch B pt 1) · #69 (Batch A) |
+| Last landed | **Issue 413** (Lexend swap, direct-to-main by user's call) · PRs: **#75** (412) · **#74** (407–411 + 387 proofs) · #73/#71 (391) · #72 (406) · #70 (Batch B pt 1) · #69 (Batch A) |
 | Staging sync | after any merge to `main`: `git push origin origin/main:staging` (`docs/BRANCHING.md`) |
-| Deploy chain | push to `main` → `docker-publish.yml` → `deploy.yml` (staging gate → prod) |
-| Baseline regen | `gh workflow run ci.yml -f update_snapshots=true --ref <branch>` → `gh run download <id> -n visual-baselines-<sha>` (NOT needed this wave — 12/12 incl. visual on both PRs) |
+| Deploy chain | push to `main` → `docker-publish.yml` → `deploy.yml` (staging gate → prod) — **so the 413 push auto-deploys** |
+| Baseline regen | `gh workflow run ci.yml -f update_snapshots=true --ref main` → `gh run download <id> -n visual-baselines-<sha> -D frontend/e2e/` — **REQUIRED for 413** (NEXT ACTION 1) |
 | Node for local gates | `/home/reese/.nvm/versions/node/v22.17.1/bin` (**`frontend/.nvmrc` = 22**) |
 | Python | `.venv/bin/python` (system `python3` lacks pydantic) |
 | Redis for unit lane | `redis-server --daemonize yes --save '' --appendonly no` |
 | Layer 0 | `.venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py` — **run from repo root** |
 | Alembic head | **`0052_clip_edit_documents`** — unchanged this wave; next is `0053`, re-check `alembic heads` first |
-| Active lane | **L25 Batch C** — 393–397, 401. A ✅ B ✅ (100%, incl. the 407–412 close-out) |
+| Active lane | **L25 Batch C** — 393–397, 401. A ✅ B ✅ · 407–412 ✅ · 413 ✅ (baseline-regen tail open) |
 | Assessment screenshots | committed at repo root (`Editor.png`, `Review.png`, …) — Issue 412's evidence anchors |
 | Secrets | `.env` on the VM; rotation runbook in `docs/RUNBOOKS.md`. **Names only — never values.** |
 
@@ -181,7 +190,7 @@ escrow · `MAILING_ADDRESS` deliberately unset (CAN-SPAM) — do not "fix" in co
 
 | Doc | Purpose |
 |---|---|
-| `docs/issues.md` | Work queue — **A ✅ B ✅ 100% · Assessment 407–412 ✅ ALL CLOSED. Active: Batch C (393–397, 401)** |
+| `docs/issues.md` | Work queue — **A ✅ B ✅ · 407–413 ✅ (413 = Lexend swap; snapshot box open). Active: Batch C (393–397, 401)** |
 | `docs/PROJECT_STATE.md` | Progress log — top entry is the 2026-08-04 close-out wave (PRs #74 + #75) |
 | `docs/DECISIONS.md` | Top entries: the wave's four decisions + retroactive 386/388/400b back-fills |
 | `docs/SOT.md` | Stack, schema, structure |

@@ -5,6 +5,30 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-04 — Issue 413: app typeface is now Lexend (replaces Geist Sans + Inter)
+
+**What changed.** All non-mono text — `--font-ui`, `--font-display`, and the legacy `--font-sans` —
+now resolves to **Lexend** (`@fontsource-variable/lexend`, self-hosted). Geist Sans and Inter are
+removed from the dependency tree; **Geist Mono stays** for timecodes/IDs/counts. One family for
+prose and chrome, differentiated by weight/size; `--font-display` is kept as a distinct token so
+display can diverge again without a migration.
+
+**Why.** Direct creator feedback after Batch A + Issue 412 shipped: the main text still read
+"super blocky and ugly" — a letterform complaint the hierarchy/balance passes could not fix. The
+choice was made by eye from an 11-face specimen artifact rendering the real Review card in the
+live OKLCH palette at the exact app type scale: the six-face researched slate (Geist, Inter,
+Figtree, DM Sans, Manrope, Hanken Grotesk — per 2026 surveys: Untitled UI "Best Free Fonts",
+DiverseKit, Superfiles "Inter alternatives") was judged "not much different", and a five-face
+creative slate was added (Instrument Sans, Bricolage Grotesque, Rubik, Lexend, Schibsted
+Grotesk). The creator picked Lexend: *"soft and helps fill the screen"* — its width is also a
+point fix for the void-heavy layouts Issue 412 fought.
+
+**Evidence.** Specimen artifact (session 2026-08-04); 600/600 unit tests green on node 22; prod
+build ships Lexend + Geist Mono only. Known follow-up: CI must regenerate e2e visual baselines
+(`--update-snapshots`), as every screen's text changed.
+
+---
+
 ## 2026-08-04 — Batch A/B close-out wave (Issues 407–411): four decisions
 
 **1. Conflict roles are structural, and the copy names the situation (407).** `ConflictInfo` gains

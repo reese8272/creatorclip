@@ -1618,6 +1618,34 @@ None of this is a correctness defect; together it is the difference between "des
       library card's bare em-dashes, now explained. The Review mascot's "counters" turned out to
       be decorative floating binary — a static-screenshot misread, deliberately left alone)*
 
+### Issue 413: Swap the app's text face — Geist Sans/Inter → Lexend
+- [x] **Status:** DONE 2026-08-04 · **Batch:** — (user-driven follow-up to A/412) · **Size:** S
+
+**What we're doing.** Replacing Geist Sans (app chrome/body) and Inter (display headings) with
+**Lexend** for all non-mono text. Geist Mono stays for timecodes/IDs/counts.
+
+**Why.** Direct creator feedback on 2026-08-04, after Batch A + Issue 412 shipped: the main text
+still read "super blocky and ugly". Geist is a squarish technical grotesque; the complaint survived
+the hierarchy and balance passes because it is about the letterforms themselves.
+
+**Industry standard checked.** 2026 UI-typography surveys (Untitled UI "Best Free Fonts", DiverseKit,
+Superfiles "Inter alternatives") name Inter/Figtree/DM Sans/Manrope/Hanken Grotesk as the safe slate.
+Decision was made from an 11-face specimen artifact rendering the real Review card (actual OKLCH
+tokens, actual copy, exact type scale) — six researched + five characterful candidates. The creator
+picked **Lexend** ("soft and helps fill the screen"): a wide, low-contrast face built from
+reading-proficiency research, whose width also works against the void-heavy layouts Issue 412 fought.
+
+**Acceptance criteria**
+- [x] `--font-ui`, `--font-display`, `--font-sans` all resolve to `'Lexend Variable'`; `--font-mono`
+      unchanged (`index.css`)
+- [x] `@fontsource-variable/lexend` self-hosted (GDPR posture unchanged); `geist` + `inter` packages
+      removed from the dependency tree; bundle ships Lexend + Geist Mono only (verified in `dist/`)
+- [x] Full unit suite green on node 22 (600/600), tsc + eslint clean (one pre-existing warning logged
+      off-course), production build green
+- [x] `docs/UI.md` typography section + `docs/DECISIONS.md` updated
+- [ ] e2e visual snapshots regenerated on the CI runner (`--update-snapshots`) — every screen's text
+      changes, so the first CI run after merge must refresh baselines
+
 ---
 
 ## Source index
@@ -1693,4 +1721,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **407**.
+- Next free issue number: **414**.

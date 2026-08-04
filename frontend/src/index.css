@@ -2,13 +2,12 @@
    Evolution of the Issue 99 dark-Linear look: a warmer, OKLCH-built palette
    (hue 285 neutrals, warmer violet accent) plus the foundation tokens for the
    overhaul (accent states, semantic set, "channel fit" confidence tiers, 8pt
-   spacing, spring motion, dark-surface shadows, Geist+Inter type).
+   spacing, spring motion, dark-surface shadows; type is Lexend + Geist Mono
+   since Issue 413 — originally Geist+Inter).
 
    Token NAMES are preserved from the Issue 99 set so existing utilities
    (bg-surface, text-muted, border-default) keep resolving; only the VALUES
-   moved to OKLCH. The existing text and radius metrics and the global body font
-   are intentionally unchanged here; the refined type scale and Geist UI font
-   land per page as each ports and gets visual QA (see docs/UI.md). This @theme
+   moved to OKLCH. This @theme
    styles the React SPA only; legacy static pages keep static/_design-tokens.css.
    See docs/DECISIONS.md (2026-06-18). */
 /* Fonts are self-hosted via Fontsource variable packages, imported in main.tsx
@@ -71,10 +70,12 @@
   --color-fit-exploratory: oklch(55% 0.01 285);
   --color-fit-exploratory-soft: oklch(17% 0.01 285);
 
-  /* Typography (font-ui = Geist for chrome on port; docs/UI.md). */
-  --font-sans: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-  --font-ui: 'Geist Variable', 'Geist', 'Geist Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-display: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  /* Typography — Lexend across UI chrome AND display (Issue 413, DECISIONS
+     2026-08-04): one family, differentiated by weight/size. Wide + soft, the
+     direct answer to the "blocky" read of Geist. Geist Mono stays for data. */
+  --font-sans: 'Lexend Variable', 'Lexend', ui-sans-serif, system-ui, sans-serif;
+  --font-ui: 'Lexend Variable', 'Lexend', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Lexend Variable', 'Lexend', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'Geist Mono Variable', 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Legacy size scale — preserved so existing text-2xs..text-2xl utilities keep
@@ -90,8 +91,8 @@
 
   /* Refined semantic scale (docs/UI.md) — size + line-height + weight bundled
      so `text-h1` etc. carry their full typographic intent. Letter-spacing is
-     applied per primitive (tracking utilities). h1/h2 pair with font-display
-     (Inter); h3/body/label with font-ui (Geist); mono with font-mono. */
+     applied per primitive (tracking utilities). h1/h2 pair with font-display;
+     h3/body/label with font-ui (both Lexend); mono with font-mono. */
   --text-h1: 2.25rem;
   --text-h1--line-height: 1.15;
   --text-h1--font-weight: 650;
@@ -178,18 +179,15 @@
   #root {
     background: var(--color-bg);
     color: var(--color-fg);
-    /* App-shell chrome is Geist (docs/UI.md: "inside the app shell → Geist").
-       Marketing/greeting headings opt into Inter via font-display per primitive. */
+    /* App shell + headings are all Lexend (docs/UI.md, Issue 413); font-display
+       is kept as a separate token so display can diverge again later. */
     font-family: var(--font-ui);
     font-size: var(--text-base);
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: 'cv11', 'ss01', 'ss03';
   }
 
-  /* Page titles / hero greet the user in Inter (font-display); card-level h3/h4
-     stay in Geist (inherited) for chrome cohesion. */
   h1, h2 {
     font-family: var(--font-display);
     font-weight: 600;

@@ -4,6 +4,17 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-04 — Issue 413: app typeface swapped to Lexend (user-driven)
+
+Creator feedback after the close-out wave: the main text still read "blocky and ugly". Chosen by
+eye from an 11-face specimen (researched slate + creative slate) rendered in the live palette —
+**Lexend** replaces Geist Sans + Inter for all non-mono text; Geist Mono stays for data. One token
+line + one dependency; 600/600 unit tests green (node 22), prod build verified. Open tail: CI must
+regenerate e2e visual baselines on first run (every screen's text changed). Details:
+`docs/DECISIONS.md` (2026-08-04), `docs/UI.md` § Typography, `docs/issues.md` Issue 413.
+
+---
+
 ## 2026-08-04 — Close-out wave: Issues 407–412 + 387's deferred proofs. **BATCHES A & B ARE 100% CLOSED.**
 
 **Two PRs, both merged and deployed the same day.** A brutal post-Batch-B assessment (all gates

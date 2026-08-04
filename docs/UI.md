@@ -5,6 +5,8 @@
 **Polish pass 1 (2026-06-19):** `index.css` reconciled to this spec (radii ladder, semantic
 type scale, Geist app-shell font) and the system applied to the shared primitives (Card, Panel,
 Button, Badge, **FitBadge**, Modal, Nav) — elevation/shadow/motion/confidence tokens now consumed.
+**Type swap (2026-08-04, Issue 413):** Lexend replaced Geist Sans + Inter for all non-mono
+text — see § Typography.
 **Reconciliation + elevation rules (2026-08-03, Issue 400a):** five values in this
 doc had drifted from `index.css` and were corrected **in the CSS's favour**, per the
 "fix the mismatch, do not fork" rule below — the surface ladder, the two border
@@ -250,22 +252,27 @@ Raw scores are never shown; tier thresholds are a product decision.
 
 ## Typography
 
+> **Issue 413 (2026-08-04): Lexend replaced Geist Sans + Inter** for all
+> non-mono text, chosen by the creator from an 11-face specimen against the live
+> palette (see `docs/DECISIONS.md`). `--font-display` survives as a token so
+> display can diverge again later; today it resolves to Lexend like `--font-ui`.
+
 | Font | Token | Role |
 |---|---|---|
-| Geist Sans | `--font-ui` | App chrome: nav, labels, badges, buttons, forms, tables |
-| Inter | `--font-display` | Page titles (h1), onboarding/marketing headings |
+| Lexend | `--font-ui` | App chrome + body: nav, labels, badges, buttons, forms, tables |
+| Lexend | `--font-display` | Page titles (h1), onboarding/marketing headings |
 | Geist Mono | `--font-mono` | Timecodes, IDs, code |
 
-Rule of thumb: inside the app shell → Geist; greeting the user (splash/onboarding) → Inter.
+Rule of thumb: everything is Lexend except data (timecodes/IDs/counts) → Geist Mono.
 
 | Token | Size | Line-height | Weight | Font | Use |
 |---|---|---|---|---|---|
-| `--text-h1` | 2.25rem | 1.15 | 650 | Inter | Page title, hero |
-| `--text-h2` | 1.5rem | 1.25 | 600 | Inter | Section heading |
-| `--text-h3` | 1.125rem | 1.35 | 600 | Geist | Card title |
-| `--text-body` | 0.875rem | 1.55 | 400 | Geist | Body copy |
-| `--text-small` | 0.75rem | 1.5 | 400 | Geist | Captions, metadata |
-| `--text-label` | 0.6875rem | 1.4 | 500 | Geist | Badge text, overlines |
+| `--text-h1` | 2.25rem | 1.15 | 650 | Lexend | Page title, hero |
+| `--text-h2` | 1.5rem | 1.25 | 600 | Lexend | Section heading |
+| `--text-h3` | 1.125rem | 1.35 | 600 | Lexend | Card title |
+| `--text-body` | 0.875rem | 1.55 | 400 | Lexend | Body copy |
+| `--text-small` | 0.75rem | 1.5 | 400 | Lexend | Captions, metadata |
+| `--text-label` | 0.6875rem | 1.4 | 500 | Lexend | Badge text, overlines |
 | `--text-mono` | 0.8125rem | 1.6 | 400 | Geist Mono | Timecodes, IDs |
 
 Letter-spacing: h1 `-0.025em`, h2/h3 `-0.015em`, label `+0.04em` (all-caps `+0.08em`).
