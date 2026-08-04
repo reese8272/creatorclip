@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import case, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -172,6 +172,8 @@ class RenderStyleIn(BaseModel):
     All fields are optional. Omitting a field means "keep the existing value"
     (or the default on first render). This lets the UI send only changed fields.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     # "bold_pop" | "gradient_slide" | "minimal" | null — see clip_engine/captions.py.
     # (Issue-119 legacy keys white_large/yellow_impact/captions_sm were drawtext
@@ -377,6 +379,8 @@ class CreateClipIn(BaseModel):
     ``allow_inf_nan=False`` rejects NaN/±inf at the schema layer; range and
     duration bounds are validated in the handler against the real source.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     start_s: float = Field(ge=0.0, allow_inf_nan=False)
     end_s: float = Field(gt=0.0, allow_inf_nan=False)
@@ -1087,6 +1091,12 @@ class CutsIn(BaseModel):
     leaving it would keep a second, unvalidated way to drive a paid render.
     """
 
+    # extra="forbid" is what makes the deletion REAL: without it Pydantic v2
+    # silently drops unknown fields, so a stale client posting `segments`
+    # would get a 202 and a render of a different cut list than it sent
+    # (Issue 408).
+    model_config = ConfigDict(extra="forbid")
+
     base_revision: int = Field(ge=0)
 
 
@@ -1487,6 +1497,8 @@ class EditDocumentIn(BaseModel):
     against the stored row inside the upsert, so a client that has fallen
     behind gets a 409 instead of silently clobbering the newer document.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     base_revision: int = Field(ge=0)
     doc: dict
