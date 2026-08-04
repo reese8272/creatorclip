@@ -40,8 +40,17 @@ const RATE_LIMIT_BACKOFF_MS = 15_000
 const EMPTY_DOC: EditDocument = { version: 1, cuts: [], last_applied_at: null }
 
 export interface ConflictInfo {
+  /** ALWAYS the server's actual document — never the local copy. `keepMine`
+   * keeps `history.present` and `takeTheirs` adopts this field, so crossing
+   * them is the data-loss inversion Issue 407 fixed. */
   serverDoc: EditDocument
   serverRevision: number
+  /**
+   * 'remote'  — a save 409ed: the document moved on another device/tab.
+   * 'resumed' — a dirty offline cache from a previous session on THIS device,
+   *             with the server unmoved. Different situation, different copy.
+   */
+  kind: 'remote' | 'resumed'
 }
 
 interface Seed {
@@ -79,10 +88,13 @@ function deriveSeed(clipId: string, data: EditDocumentResponse): Seed {
   if (cached?.dirty && cached.revision === data.revision) {
     // Unsaved work from this device, and the server has not moved on. Offer it
     // as an explicit choice rather than merging it or silently dropping it.
+    // Same convention as the 409 path: `present` is MINE (the unsaved work),
+    // `conflict.serverDoc` is THEIRS (the server's document) — `keepMine` and
+    // `takeTheirs` trust those roles.
     return {
-      history: initHistory(data.doc),
+      history: initHistory(cached.doc),
       saveState: 'conflict',
-      conflict: { serverDoc: cached.doc, serverRevision: data.revision },
+      conflict: { serverDoc: data.doc, serverRevision: data.revision, kind: 'resumed' },
       revision: data.revision,
       importedLegacy: false,
     }
@@ -228,6 +240,7 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
       setConflictOverride({
         serverDoc: detail?.doc ?? EMPTY_DOC,
         serverRevision: detail?.revision ?? 0,
+        kind: 'remote',
       })
       setStateOverride('conflict')
       // The server has spoken, so the legacy key can go — see clearLegacyCuts.
