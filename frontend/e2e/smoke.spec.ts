@@ -50,6 +50,20 @@ function isBenign(text: string): boolean {
   return BENIGN.some((re) => re.test(text))
 }
 
+// Issue 413: screenshots must never race webfont loading. The fixed 600ms
+// settle was not enough — the pre-413 login-desktop baseline was provably a
+// fallback-font render (byte-identical across a full typeface swap). Force the
+// app's two families to load, then await the FontFaceSet, before any capture.
+async function waitForFonts(page: import('@playwright/test').Page): Promise<void> {
+  await page.evaluate(async () => {
+    await Promise.all([
+      document.fonts.load('400 1rem "Lexend Variable"'),
+      document.fonts.load('400 1rem "Geist Mono Variable"'),
+    ])
+    await document.fonts.ready
+  })
+}
+
 async function capturePage(
   page: import('@playwright/test').Page,
   testInfo: import('@playwright/test').TestInfo,
@@ -69,7 +83,8 @@ async function capturePage(
     .getByText('Loading…', { exact: true })
     .waitFor({ state: 'detached', timeout: 10_000 })
     .catch(() => {})
-  await page.waitForTimeout(600) // let entrance animations + fonts settle
+  await waitForFonts(page)
+  await page.waitForTimeout(600) // let entrance animations settle
 
   // Playwright runs with cwd at the config dir (frontend/), so this lands in
   // frontend/e2e/__screenshots__/ regardless of which spec invokes it.
@@ -156,6 +171,7 @@ test.describe('visual regression @visual', () => {
         .getByText('Loading…', { exact: true })
         .waitFor({ state: 'detached', timeout: 10_000 })
         .catch(() => {})
+      await waitForFonts(page)
       await page.waitForTimeout(600)
 
       await expect(page).toHaveScreenshot('login.png', {
@@ -172,6 +188,7 @@ test.describe('visual regression @visual', () => {
       .getByText('Loading…', { exact: true })
       .waitFor({ state: 'detached', timeout: 10_000 })
       .catch(() => {})
+    await waitForFonts(page)
     await page.waitForTimeout(600)
 
     await expect(page).toHaveScreenshot('pricing.png', {
@@ -189,6 +206,7 @@ test.describe('visual regression @visual', () => {
       .getByText('Loading…', { exact: true })
       .waitFor({ state: 'detached', timeout: 10_000 })
       .catch(() => {})
+    await waitForFonts(page)
     await page.waitForTimeout(600)
 
     // Mask regions that carry dynamic numbers (balance, trial countdown).
