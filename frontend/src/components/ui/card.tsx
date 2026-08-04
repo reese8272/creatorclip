@@ -50,13 +50,19 @@ interface CardHeaderProps {
 }
 
 export function CardHeader({ title, description, aside, className }: CardHeaderProps) {
+  // Title and aside share the top row; the description spans the FULL card
+  // width beneath. Sharing a row with a shrink-0 aside squeezed descriptions
+  // into a 3-4-words-per-line column whenever the aside was wide — the DNA
+  // card's provenance badges left its copy ~250px on a 570px card (Issue 412).
+  // flex-wrap lets an oversized aside drop below the title instead of
+  // crushing it.
   return (
-    <div className={cn('flex items-start justify-between gap-4 px-5 pt-5', className)}>
-      <div className="min-w-0">
-        <h2 className="text-h3 font-ui text-fg">{title}</h2>
-        {description && <p className="mt-1 text-small text-muted">{description}</p>}
+    <div className={cn('px-5 pt-5', className)}>
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <h2 className="min-w-0 text-h3 font-ui text-fg">{title}</h2>
+        {aside && <div className="shrink-0">{aside}</div>}
       </div>
-      {aside && <div className="shrink-0">{aside}</div>}
+      {description && <p className="mt-1 text-small text-muted">{description}</p>}
     </div>
   )
 }

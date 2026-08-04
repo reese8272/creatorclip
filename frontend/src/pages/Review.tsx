@@ -106,6 +106,11 @@ function ReviewClipView({
         >
           <WhyThisClip clip={clip} />
         </CollapsibleTool>
+
+        {/* Scoring CONTEXT, not a decision — so it lives under the case, not in
+            the actions rail. Moving it here also fills the void below the case
+            card that left column A ~60% empty canvas at 1080p (Issue 412). */}
+        {personalization && <PersonalizationCard status={personalization} />}
       </section>
 
       {/* ── B · The media — the ONE primary panel (L2), on an `auto` track ──
@@ -130,8 +135,6 @@ function ReviewClipView({
         aria-label="Clip actions"
         className="flex min-h-0 flex-col gap-4 lg:overflow-y-auto"
       >
-        {personalization && <PersonalizationCard status={personalization} />}
-
         <YourCall clip={clip} trimStart={trim.start} trimEnd={trim.end} onAdvance={onAdvance} />
 
         {/* Collapsed by default. A rail of four open, equally-weighted cards is

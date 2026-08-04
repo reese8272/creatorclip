@@ -163,7 +163,7 @@ export function DnaCard({
                     <div className="mb-2 text-2xs uppercase tracking-[0.06em] text-subtle">
                       Signature traits
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       {traits.map((t) => (
                         <span
                           key={t}
@@ -172,6 +172,14 @@ export function DnaCard({
                           {t}
                         </span>
                       ))}
+                      {/* A lone chip beside empty space reads as a bug, not a
+                          profile (Issue 412) — say what fills this out. */}
+                      {traits.length <= 2 && (
+                        <span className="text-small text-subtle">
+                          Content pillars and tone tags you add in Editing settings appear here and
+                          sharpen your DNA.
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
@@ -200,7 +208,10 @@ export function DnaCard({
                   <p className="rounded-md border border-default bg-bg px-3 py-2.5 text-sm leading-relaxed text-fg">
                     {styleNotes.text}
                   </p>
-                  <p className="mt-1 font-mono text-xs text-subtle">
+                  {/* Prose meta, not a timecode/ID — font-ui per docs/UI.md
+                      (the mono here was part of why the card read as debug
+                      output; Issue 412 mono audit). */}
+                  <p className="mt-1 text-small text-subtle">
                     based on {styleNotes.source_count} review notes · updated{' '}
                     {fmtDate(styleNotes.updated_at)}
                   </p>
