@@ -2,6 +2,7 @@ import asyncio
 import logging
 import tempfile
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -12,6 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Resp
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import case, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +28,7 @@ from flags import require_flag
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, RENDER_DAILY_LIMIT, creator_key, limiter
 from models import (
     Clip,
+    ClipEditDocument,
     ClipFormat,
     ClipImpression,
     Creator,
@@ -1159,8 +1162,7 @@ async def submit_cuts(
                 "message": "Confirm or discard the pending cleaned/edited version first.",
             },
         )
-    clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
-    clip_duration_s = clip.end_s - clip_origin_s
+    clip_duration_s = _clip_duration_s(clip)
 
     try:
         validate_user_cuts(
@@ -1369,6 +1371,188 @@ async def update_clip_metadata(
         setattr(clip, field_name, value)
     await session.commit()
     return _clip_response(clip)
+
+
+def _clip_duration_s(clip: Clip) -> float:
+    """Playable duration of a clip, in clip-relative seconds.
+
+    The render origin is ``setup_start_s`` when set — the engine starts the clip
+    at the setup, not the peak's aftermath — so that, not ``start_s``, is what
+    every clip-relative time is measured from. Cut bounds, the edit document and
+    the frontend timeline all share this origin.
+    """
+    origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    return clip.end_s - origin_s
+
+
+class EditDocumentOut(BaseModel):
+    """The creator's edit document for one clip (Issue 391)."""
+
+    clip_id: str
+    revision: int
+    doc: dict
+    updated_at: str | None = None
+    clip_duration_s: float
+
+
+class EditDocumentIn(BaseModel):
+    """Request body for ``PUT /clips/{id}/edit-document``.
+
+    ``base_revision`` is the revision the client last saw. It is compared
+    against the stored row inside the upsert, so a client that has fallen
+    behind gets a 409 instead of silently clobbering the newer document.
+    """
+
+    base_revision: int = Field(ge=0)
+    doc: dict
+
+
+@clips_router.get("/{clip_id}/edit-document", response_model=EditDocumentOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def get_edit_document(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return the creator's edit document for this clip.
+
+    A clip with no document yet gets a SYNTHESISED empty one at
+    ``revision: 0`` — a GET must not write. ``revision: 0`` is the sentinel the
+    PUT and the client's one-time localStorage import both key off: it is the
+    only state in which importing a legacy browser-local cut list is safe,
+    because any revision >= 1 means the server already holds a decision the
+    creator made (possibly "no cuts at all", on another device).
+
+    Pure DB read, so it follows the ``GET /clips/{id}`` tier rather than the
+    render endpoints: no kill switch, no budget dependency, no balance check.
+    A creator whose balance hit zero must still be able to see their work.
+    """
+    from clip_engine.edits import empty_document
+
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+    row = await session.scalar(select(ClipEditDocument).where(ClipEditDocument.clip_id == clip_id))
+    return {
+        "clip_id": str(clip_id),
+        "revision": row.revision if row else 0,
+        "doc": row.doc if row else empty_document(),
+        "updated_at": row.updated_at.isoformat() if row else None,
+        "clip_duration_s": _clip_duration_s(clip),
+    }
+
+
+@clips_router.put("/{clip_id}/edit-document", response_model=EditDocumentOut)
+# 120/minute, NOT the 60/minute of the sibling PATCH. This endpoint is driven by
+# a debounced autosave rather than a button: the client's 2s max-wait emits up
+# to 30 writes/minute per tab while the creator drags continuously, so two tabs
+# on one clip would sit exactly on a 60 cap and start 429ing mid-edit. See
+# docs/DECISIONS.md — an autosave endpoint is not a hand-driven write.
+@limiter.limit("120/minute", key_func=creator_key)
+async def put_edit_document(
+    request: Request,
+    clip_id: uuid.UUID,
+    body: EditDocumentIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Replace the creator's edit document, if ``base_revision`` is still current.
+
+    FULL REPLACE, not a patch: the client's command stack always holds the
+    complete cut list, and a server-side merge of two divergent lists is
+    exactly what produces edits nobody made.
+
+    VALIDATION IS STRUCTURAL ONLY. The 5s-kept / 85%-removed caps live at the
+    render boundary — a work-in-progress edit is routinely past both, and
+    refusing to save it would destroy the creator's work, which is the defect
+    this issue exists to remove. Saving is always allowed; exporting is gated.
+
+    Note there is deliberately NO ``pending_clean_or_edit`` 409 here, unlike
+    ``POST /cuts``. That is a render-queue invariant, not an editing one.
+    """
+    from clip_engine.edits import CutValidationError, validate_document_structure
+
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+
+    try:
+        canonical = validate_document_structure(body.doc, _clip_duration_s(clip))
+    except CutValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+
+    now = datetime.now(UTC)
+    # ONE statement, not select-then-mutate. The read-modify-write in
+    # creators.py::_upsert_style_field is a lost update on a schedule under a
+    # debounced writer with two tabs open.
+    #
+    # The WHERE on DO UPDATE is the compare-and-set, and it is load-bearing:
+    # per the Postgres manual a row locked but NOT updated because the
+    # condition failed is NOT returned, so zero rows back means "someone else
+    # advanced the revision" with no second read. DO NOT "simplify" this into
+    # an unconditional upsert — that reintroduces the lost update.
+    stmt = (
+        pg_insert(ClipEditDocument)
+        .values(
+            id=uuid.uuid4(),
+            clip_id=clip_id,
+            # From the authenticated creator, never the request body.
+            creator_id=creator.id,
+            doc=canonical,
+            revision=1,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            constraint="uq_clip_edit_documents_clip_id",
+            set_={
+                "doc": canonical,
+                "revision": ClipEditDocument.revision + 1,
+                "updated_at": now,
+            },
+            where=ClipEditDocument.revision == body.base_revision,
+        )
+        .returning(ClipEditDocument.revision, ClipEditDocument.updated_at)
+    )
+    result = (await session.execute(stmt)).first()
+
+    # A stored row is ALWAYS at revision >= 1, so revision 0 means "no row" and
+    # is the only base a first save may claim. If the caller claimed a non-zero
+    # base and we nonetheless took the INSERT branch (no conflict fired, so the
+    # returned revision is 1), the row it meant to update is gone — resurrecting
+    # it under a new lineage would be a silent divergence, which is exactly what
+    # "never auto-merge" forbids. Roll back and let the creator choose.
+    took_insert_branch = result is not None and result[0] == 1 and body.base_revision > 0
+
+    if result is None or took_insert_branch:
+        # Either the row exists at a different revision, or it does not exist
+        # and the caller claimed a non-zero base. Re-read to tell the client
+        # what the current state actually is, so it can offer an explicit
+        # choice without a second round trip. Never auto-merge.
+        await session.rollback()
+        current = await session.scalar(
+            select(ClipEditDocument).where(ClipEditDocument.clip_id == clip_id)
+        )
+        from clip_engine.edits import empty_document
+
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "stale_revision",
+                "message": "This clip was edited elsewhere. Choose which version to keep.",
+                "revision": current.revision if current else 0,
+                "doc": current.doc if current else empty_document(),
+            },
+        )
+
+    await session.commit()
+    revision, updated_at = result
+    return {
+        "clip_id": str(clip_id),
+        "revision": revision,
+        "doc": canonical,
+        "updated_at": updated_at.isoformat(),
+        "clip_duration_s": _clip_duration_s(clip),
+    }
 
 
 @clips_router.get("/{clip_id}/poster", response_model=None)
