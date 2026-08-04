@@ -4,7 +4,60 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-04 — Issue 391 PR B: the render reads the document. **BATCH B IS COMPLETE.**
+## 2026-08-04 — Close-out wave: Issues 407–412 + 387's deferred proofs. **BATCHES A & B ARE 100% CLOSED.**
+
+**Two PRs, both merged and deployed the same day.** A brutal post-Batch-B assessment (all gates
+independently re-run; every finding confirmed by trace or repro) surfaced six issues and a set of
+bookkeeping contradictions; all of it closed within the day.
+
+**PR #74 (`9672de8`) — correctness close-out, Issues 407–411 + 387:**
+- **407 (the wave's headline): resume-from-cache conflict resolution was INVERTED** — "Keep my
+  edits" saved the server's document and destroyed the creator's unsaved work on the next cache
+  write. Roles are structural now (`ConflictInfo.kind: 'remote' | 'resumed'`, `serverDoc` always the
+  server's), the copy names the actual situation, and the previously-untested branch is pinned by a
+  seeded-dirty-cache test. Root cause of survival: the only conflict tests drove the 409 path,
+  where the wiring was correct — and e2e ran the editor against a `{}` catch-all (see 409).
+- **408**: `ConfigDict(extra="forbid")` on the five paid/render request models; the "segments
+  REJECTED" pin now actually proves rejection (it previously proved a missing required field).
+  `PreferencesPatch` deliberately excepted (documented tri-state reliance) — DECISIONS.
+- **409**: the e2e mock models `GET/PUT /edit-document` with a per-page compare-and-set revision
+  (empty revision-0 default → zero pixel-baseline movement; `editDocSeed` option for stored docs);
+  new `editor-persistence.spec.ts` pins hydrate → commit → "Saved"; the catch-all records and
+  reports unmodeled GETs (it immediately surfaced `/api/notifications` + `/clips/c1/download`);
+  the hook treats a malformed GET body as a load error instead of silently editing a void.
+- **410**: the short-form timeline says "Waveform unavailable…" visibly (was aria-only); one shared
+  string feeds both timelines.
+- **411**: `/settings` passes axe and joined the gate (24/24). The off-course log's one-attribute
+  `aria-hidden` theory was DISPROVEN by measurement — axe checks visible text regardless; fixed by
+  aria-hidden + muted tokens at full opacity instead of `opacity-50`.
+- **387's two deferred proofs, finally delivered**: poster cross-tenant cases WRITTEN into
+  `tests/test_isolation.py` (they had never been — the "wait for CI" framing hid an unwritten
+  test) and verified green in PR #74's integration lane (deselection ledger: unit-lane deselected
+  173 → 175, both new tests integration-marked); the real-ffmpeg awkward-file pass executed
+  locally on ffmpeg 8.1.2 — **5/5 within contract**, including the designed seek-0 retry firing
+  on lying metadata and audio-only returning False without raising.
+- **Bookkeeping**: Batch A merge/deploy record back-filled; phantom baselines corrected;
+  visual-baseline "contradiction" resolved (regenerated at `4e0dcae`, line never flipped);
+  OFF_COURSE rows 32/38 closed; DECISIONS back-filled for 386/388/400b.
+- Found-while-building (off-course, fixed inline as it blocked the suite): the undo/redo hook test
+  left a pending debounced save at unmount whose post-`afterEach` failure armed a REAL 1s retry
+  timer that fired a stray PUT into the next test — a pre-existing isolation leak the new tests
+  exposed.
+
+**PR #75 (`500b715`) — Issue 412, presentation balance:** untitled videos get a quiet dated label;
+Insights leads with one framing line + a Disclosure (~350-word explainer demoted) and stat tiles
+name their denominators; `CardHeader` restructured so descriptions span the card (the DNA card
+wrapped every 3–4 words beside a wide aside); PersonalizationCard moved into Review column A
+(scoring context, not a decision — fills the ~60% void); mono audit per `docs/UI.md` (prose leaves
+`font-mono`; timecodes/IDs/stat values keep it); Profile library dashes explain what fills them.
+Deliberately unchanged: the mascot's floating binary digits (decorative animation misread as
+counters only in a static screenshot) and all pinned honesty copy.
+
+**Gates (all independently re-run this wave).** Backend **2582** passed / 64 skipped (+1 unit, +2
+integration-marked). Frontend **600 / 83 files** (+5). Playwright **80** (+2 persistence, +2
+settings-axe). Layer 0 fully green, coverage **83.34**, `pip_audit` 0, crypto/limiter/auth 100.0.
+`ruff format --check` clean. CI **12/12 green on both PRs**, incl. visual regression unchanged.
+Prod deploys verified: `/health` 200 after each merge; `staging` synced to `main` both times.
 
 **Merged as PR #73 (`7b8f281`) and deployed; `staging` synced.** The last piece of Lane L25 Batch B.
 CI came back **12 / 12 green** — the first fully-clean matrix of the lane, after Issue 406 cleared

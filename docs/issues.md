@@ -1478,6 +1478,10 @@ frontend 595/83, Playwright 76, Layer 0 clean). Every finding below was confirme
 direct repro before filing — none is speculative. 407–409 are Issue-391 hardening and should land
 **before or alongside #393**, which builds directly on the same editor state.
 
+> **ALL SIX CLOSED 2026-08-04.** 407–411 + the two deferred 387 proofs shipped as **PR #74**
+> (`9672de8`); 412 as **PR #75** (`500b715`). Both merged and deployed. **Batches A and B are
+> 100% closed** — no unchecked box, no deferred proof, no open bookkeeping contradiction remains.
+
 ### Issue 407: Conflict resolution is INVERTED in the resume-from-cache path
 - [x] **Status:** **DONE 2026-08-04** (close-out wave) · **Batch:** C (pre-393 hardening) · **Size:** S
 
@@ -1583,7 +1587,7 @@ consequently the one dense route excluded from `e2e/a11y.spec.ts`. Likely a one-
 - [x] The OFF_COURSE_BUGS row is flipped to fixed with this issue number
 
 ### Issue 412: Presentation balance — the screens read emptier than the product is
-- [ ] **Status:** open · **Batch:** schedule against C/D (design pass, not a blocker) · **Size:** M
+- [x] **Status:** **DONE 2026-08-04** — PR #75 (`500b715`), merged + deployed · **Batch:** — (shipped as the close-out wave's follow-up) · **Size:** M
 
 **What's wrong.** From the 2026-08-04 screenshot review (`Review.png`, `Channel.png`,
 `Insights 1-3.png`, `Videos.png`, `Assistant.png`), judged against `docs/UI.md`:
@@ -1602,13 +1606,17 @@ None of this is a correctness defect; together it is the difference between "des
 "assembled" on first contact, working against the Batch A/B investment.
 
 **Acceptance criteria**
-- [ ] Review/Channel: no primary column whose majority is empty canvas at 1080p — content reflows,
+- [x] Review/Channel: no primary column whose majority is empty canvas at 1080p — content reflows,
       the column narrows, or the empty region earns its space (e.g. scoring detail moves up)
-- [ ] Insights: the explainer collapses to one line per panel (disclosure for the rest); paired
+- [x] Insights: the explainer collapses to one line per panel (disclosure for the rest); paired
       stats that use different denominators are labeled so they cannot read as contradictory
-- [ ] Untitled videos get a derived label (filename or date), never `UNTITLED`
-- [ ] Monospace audit: mono for timecodes/IDs/counts only, per `docs/UI.md`
-- [ ] Empty states name the next action in context (what unlocks this panel, and where)
+- [x] Untitled videos get a derived label (filename or date), never `UNTITLED`
+- [x] Monospace audit: mono for timecodes/IDs/counts only, per `docs/UI.md`
+- [x] Empty states name the next action in context (what unlocks this panel, and where)
+      *(measured against code, two of the three flagged panels — Videos analytics and
+      Proof-of-lift — already named their next action; the genuinely mute one was the Profile
+      library card's bare em-dashes, now explained. The Review mascot's "counters" turned out to
+      be decorative floating binary — a static-screenshot misread, deliberately left alone)*
 
 ---
 
