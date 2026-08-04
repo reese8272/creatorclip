@@ -4,6 +4,39 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-04 — Issue 406 DONE: the `pip_audit` gate is green again
+
+`aiohttp` 3.14.1 → **3.14.3**, `cryptography` 48.0.1 → **50.0.0**. Layer 0 is now **fully green** —
+`ruff 0 · mypy 0 · coverage 83.28 · module floors ok (crypto still 100.0) · bandit 0/0 ·
+pip_audit 0`. It had been red since the Batch A baseline.
+
+**Nothing was added to `ignore-vulns`; the file is byte-identical.** Both packages had a fix inside
+our compatible range, which is exactly the condition under which an exception does not qualify.
+
+**No baseline was moved either.** `docs/assessment/baselines.json` already carried
+`pip_audit_vulns: 0` and had never been relaxed — the gate stayed honestly red for the whole of
+Batch B rather than being bumped away. This closes it in the right direction.
+
+**Both bumps were unconstrained.** `aiohttp` is transitive-only — there is no `import aiohttp` in
+the tree; `deepgram-sdk` (`>=3.9.1`) and `voyageai` (unpinned) pull it. `cryptography` reports
+`Required-by:` *nothing*, so the 48 → 50 double-major had exactly one caller to satisfy.
+
+**Checked before bumping two majors:** the [changelog](https://cryptography.io/en/latest/changelog/)
+confirms **no Fernet/MultiFernet API change** in 49.0.0 or 50.0.0 — the only surface we import
+(`crypto.py`, `config.py`). Every backward-incompatible change is X.509 parsing, ChaCha20 nonce
+semantics, FFDH deprecation, or OCSP version validation. The dropped platforms (x86_64 macOS wheels,
+32-bit Windows) do not apply to `python:3.12-slim` on linux/amd64.
+
+**Exposure was low and is recorded honestly:** of the six, five had no reachable path at all (the
+aiohttp WebSocket pair needs a server or a live socket — Deepgram is prerecorded REST; the three
+cryptography ones are X.509/PKCS#7, which we never call). The sixth, aiohttp `CVE-2026-69244`, is an
+OOB heap read while formatting an error for a malformed response — narrow, but real. The reason to
+fix was never the exposure; it was that a permanently red security gate is a gate nobody reads.
+
+Backend **2572 passed**, `pip check` clean.
+
+---
+
 ## 2026-08-04 — Issue 391 PR A: the edit stops being browser state
 
 **Branch `feat/391-edit-persistence`, 6 commits, not yet merged.** The last issue in Batch B, split
