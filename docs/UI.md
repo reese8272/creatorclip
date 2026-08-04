@@ -204,6 +204,36 @@ sits below 40; a floating overlay inside a panel sits below 50. The
 ActivityPanel clears docked chrome via `--app-bottom-inset`, set by `ToolChrome`
 and undefined everywhere else.
 
+## Timelines (Issue 390)
+
+Both editing timelines compose `components/editor/TimelineRail`. It owns the measured element, the
+pointer model, zoom, scroll and the ruler; the callers own only what is specific to them.
+
+**The pixel is the unit.** Every interaction threshold is stored in PIXELS and converted to seconds
+at the point of use — `EDGE_GRAB_PX = 6`, `SNAP_THRESHOLD_PX = 8`, and the keyboard's fine step of one
+pixel. An 8px snap radius is ~10 seconds of tolerance on a 22-minute source at fit and ~4 milliseconds
+at 64×; as a duration, either figure is unusable at one end. If you add a threshold to a timeline,
+add it in pixels.
+
+**Zoom model.** `pxPerSecond` plus `scrollLeft`. Zoom is anchored on the pointer, refuses to go below
+fit, and `zoomAtAnchor` returns pps and scroll TOGETHER — applying one without the other is the bug.
+
+**Wheel.** Attach with `addEventListener(..., { passive: false })`, never React's `onWheel` (which is
+passive, so `preventDefault` silently no-ops). Ctrl/Cmd+wheel zooms; trackpad pinch arrives as exactly
+that event. Only swallow a plain wheel when there is somewhere to scroll.
+
+**ARIA.** The rail is a `role="group"`. It must NOT be a `slider`: that forces every descendant to
+`presentation`, which silently hides the waveform and every cut label. The playhead is a `slider`
+thumb, and each cut edge is another, per the W3C APG multi-thumb pattern — every thumb needs
+`tabIndex`, a name, and `aria-valuenow`.
+
+**No canvas outside `Waveform.tsx`.** The ruler, thumbs and indicators are DOM. `niceTickInterval`
+guarantees ≥80px label spacing, so a full-width rail emits ~14 tick nodes at any zoom. A structural
+gate enforces this.
+
+**Keyboard** goes through `hooks/useEditorShortcuts` — one document listener, capture phase. Never add
+a second `document` keydown listener; two racing listeners is how one keypress deletes two cuts.
+
 ## Confidence badges — "fit with your channel style"
 
 Three tiers. **Never** "viral" or "predicted performance." Tooltip on every

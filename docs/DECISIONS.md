@@ -5,6 +5,84 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-03 — Issue 390: Timeline v2 — the pixel is the unit
+
+**What was decided.** Both timelines are rebuilt on one shared `TimelineRail`: pointer events with
+capture, a pixels-per-second zoom model, an adaptive ruler, draggable cut edges, visible snapping,
+and a single keyboard bus.
+
+**Both timelines, not just `Timeline.tsx`.** The brief says "rebuild `components/editor/Timeline.tsx`",
+but the analysis directly beneath it points at the 22-minute LONG-FORM source where "one pixel is
+roughly a second, which makes precise work impossible" — a separate hand-rolled bar with the same
+mouse-only defect. Rebuilding only the short-form clip timeline would have left the exact surface the
+issue argues from untouched. A 40-second clip is tolerable without zoom; a 22-minute source never was.
+
+**Every threshold is in PIXELS, converted to seconds at the point of use.** This is the single idea
+the whole issue rests on. An 8px snap radius is ~10 seconds of tolerance on a 22-minute source at fit
+and ~4 milliseconds at 64×; a 6px edge grab zone likewise. Stored as durations, either figure makes
+the feature unusable at one end. The same reasoning gives the keyboard its fine step: a bare arrow
+moves ONE PIXEL at the current zoom, so it is a coarse nudge zoomed out and frame-accurate zoomed in
+without the creator ever choosing a unit. Shift keeps the player's 5s jump.
+
+**Zoom is anchored on the pointer**, following [Audacity](https://manual.audacityteam.org/man/zooming.html) —
+`zoomAtAnchor` returns the new pps AND the scroll together, because changing one without the other is
+exactly what makes zoom feel like a jump instead of a magnifier. Zooming out past fit is refused, and
+fit is proven to be a fixed point (one step converges, a second is a no-op) — the property that would
+otherwise let zoom-to-fit iterate forever.
+
+**The wheel listener is not React's `onWheel`.** React attaches wheel listeners passively, so
+`preventDefault()` inside one silently does nothing ([react#14856](https://github.com/facebook/react/issues/14856))
+and Ctrl+wheel would zoom the entire browser page. It is attached with `{ passive: false }`. Trackpad
+pinch arrives as a wheel event with `ctrlKey: true`
+([MDN](https://developer.mozilla.org/en-US/docs/Web/API/Element/wheel_event)), so that one branch
+gives pinch-to-zoom for free. A plain wheel is only swallowed when there is somewhere to scroll, so a
+fitted timeline never traps the page.
+
+**ARIA: the container stops being a `slider`, and that fixed a live defect.**
+[MDN](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Reference/Roles/slider_role) is
+explicit that `role="slider"` forces every descendant to `presentation` — so the waveform's
+`role="img"` and every `Cut N:` label were being suppressed in production, before this issue added
+anything. The rail is now a `group`; the playhead is the slider and keeps the "Timeline scrubber"
+name the container used to claim; each cut edge is its own thumb per
+[W3C APG multi-thumb](https://www.w3.org/WAI/ARIA/apg/patterns/slider-multithumb/). Accepted cost,
+stated rather than hidden: N cuts produce 1+2N tab stops. Roving tabindex is the named follow-up.
+
+**Positions are pixels, not percentages** — an explicit constraint change. Percent cannot express a
+scrolled, zoomed view; it only ever describes the whole clip. The pre-390 test asserting
+`playhead.style.left === '50%'` was rewritten to assert pixels.
+
+**One shortcut bus, capture-phase, module singleton.** `VideoPlayer` mounts before the timeline, so
+its bubble-phase document listener would win ←/→ on registration order alone; capture always precedes
+bubble, making precedence structural rather than an accident a refactor could flip. It is a module
+singleton rather than React context because `video-player.test.tsx` asserts a consumer renders
+exactly once — the player reports time through a ref precisely to avoid re-rendering the editor at
+4 Hz. Both layers now bail on `defaultPrevented`, which is what lets them compose.
+
+**Snapping made real, not just visible.** `addTimeCut` used to store RAW drag times with SNAPPED word
+indices, so the struck-through words and the times sent to the server disagreed. Committed times are
+now the snapped boundaries, and `indices` is OMITTED when a range covers no word — the old
+`?? [0, 0]` fallback silently struck through the first word of the transcript on every drag over a gap.
+
+**Four defects found while building** (all logged in `docs/OFF_COURSE_BUGS.md`):
+1. The scrub bar's arrow keys **had never worked** — an `onKeyDownCapture` calling `stopPropagation`
+   in the capture phase also prevents the element's own bubble handler. Found because a test written
+   from the WRONG hypothesis (I expected a double-seek) failed reporting no movement at all.
+2. `mergeAdjacent` mutated caller-owned objects through a shallow `.slice()`, so the undo snapshot
+   taken immediately before a merge was corrupted by that merge.
+3. Cuts were addressed by array index while the merge re-sorts, so an edge drag detached mid-gesture.
+4. `clientXToTime` derived zoom from stale state width — invisible only because nothing consumed the
+   hook yet.
+
+**A structural gate was fixed rather than worked around.** `no-synthetic-waveform` scanned raw text
+for `getContext('2d')` and flagged `TimelineRuler`'s comment explaining why it is deliberately NOT a
+canvas — the second time a raw-text scan in that file has flagged an explanation rather than an
+offence. It is now AST-based (a `CallExpression` whose callee property is `getContext`), which cannot
+see comments at all and is strictly stronger.
+
+**Date:** 2026-08-03
+
+---
+
 ## 2026-08-03 — Issue 392: BBC's waveform FORMAT without BBC's waveform BINARY
 
 **What was decided.** Real audio peaks replace the fabricated long-form waveform. The artifact is the

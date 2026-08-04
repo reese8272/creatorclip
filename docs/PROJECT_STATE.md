@@ -4,6 +4,61 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-03 (L25 W2) — Issue 390 DONE: the editor is an editor
+
+**Both timelines were rebuilt on one shared engine.** They can now be zoomed, scrolled, scrubbed by
+touch or keyboard, and their cuts trimmed by dragging an edge with visible, toggleable snapping.
+Before this, the timeline mapped the whole clip to the container width with no zoom, listened only to
+mouse events, and made cuts immutable once created.
+
+| Commit | What landed |
+|---|---|
+| `a506dc0` | `lib/timelineZoom.ts` — pixels-per-second maths, pointer-anchored, 24 tests |
+| `d58775d` `e798e63` | `useTimelineViewport` — measurement, zoom, the non-passive wheel listener |
+| `c2ec642` | One `isTypingTarget`; `defaultPrevented` bail; **the dead scrub-bar arrows fixed** |
+| `71dee2f` | The shortcut bus — capture-phase, module singleton, 12 tests |
+| `7e056f3` | Adaptive DOM ruler + zoom icons; its own gate made AST-based |
+| `dda3366` | Stable cut ids + non-mutating `mergeAdjacent`; `TranscriptEditor` deleted |
+| `7138e9c` | Hit-testing + pixel-threshold snapping, 19 tests |
+| `115e556` | **`TimelineRail`** — pointer events, zoom, the real ARIA model |
+| `a09d8d0` | The long-form master timeline on the same rail |
+| `5223541` | Editing keys — I/O, Delete, zoom, zoom-aware fine step |
+
+**Gates.** Frontend **549 passed / 78 files** (441 after 392, **+108**). `tsc -b` clean, lint 0 errors
+(1 pre-existing warning). Playwright green incl. axe on both editor routes and the tool-shell
+regression suite. Backend untouched — verified structurally: `git diff 73c3223..HEAD` over
+`clip_engine worker routers models.py alembic ingestion tests` is **empty**, which is what makes the
+clip-quality eval green by construction (53 passed).
+
+**The idea the whole issue rests on: the pixel is the unit.** Every threshold — the 8px snap radius,
+the 6px edge grab, the keyboard's one-pixel fine step — is stored in pixels and converted to seconds
+at the point of use. An 8px snap radius is ~10 seconds of tolerance on a 22-minute source at fit and
+~4 milliseconds at 64×. Stored as a duration, either figure is unusable at one end.
+
+**Scope extended, with the user's agreement:** the engine is shared by BOTH timelines. The brief says
+"rebuild `Timeline.tsx`", but the analysis under it argues from the 22-minute long-form source — a
+separate hand-rolled bar with the same defect. Rebuilding only the short-form clip timeline would
+have left the exact surface the issue points at unusable.
+
+**Four defects found while building, none of them in the brief** (all in `OFF_COURSE_BUGS.md`):
+- The container's `role="slider"` was **suppressing the waveform and every cut label in production** —
+  MDN: a slider forces all descendants to `presentation`.
+- **The scrub bar's arrow keys had never worked.** An `onKeyDownCapture` calling `stopPropagation` in
+  the capture phase also prevents the element's own bubble handler. Found because a test written from
+  the WRONG hypothesis (I expected a double-seek) failed reporting no movement at all.
+- `mergeAdjacent` mutated caller-owned objects, so single-level undo was already wrong for merged cuts.
+- `clientXToTime` derived zoom from stale state width, mapping every pointer x to the end of the clip.
+
+Also fixed a structural gate rather than working around it: `no-synthetic-waveform` scanned raw text
+and flagged `TimelineRuler`'s comment explaining why it is deliberately not a canvas. Now AST-based,
+and strictly stronger.
+
+**Batch B is 3 of 4.** #391 (server-side edit document + undo/redo) is planned in detail and is
+deliberately its own PR — it carries a migration, an RLS-isolated table, and a rewrite of how edits
+are stored, and deserves its own review and deploy.
+
+---
+
 ## 2026-08-03 (L25 W2) — Issue 392 DONE: the fabricated waveform is gone
 
 **The batch's only live honesty-constraint violation is fixed.** The long-form "Source timeline" drew

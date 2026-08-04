@@ -1,9 +1,9 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-03 (Lane **L25 Batch A** shipped to production)
-**Branch:** `main` @ `40a53d3` — **working tree clean**, `0 0` vs `origin/main`
+**Last updated:** 2026-08-03 (Lane **L25 Batch B** — 389, 392, 390 done; **391 remains**)
+**Branch:** `wave/l25-batch-b` — **working tree clean**, NOT pushed, 30 commits ahead of `main`
 **staging:** `0 0` vs `main` (a 314-commit drift was closed this session)
-**Prod DB head:** **`0050`** (was 0049 — `0050_poster_frames` applied by the deploy's staging gate)
+**Prod DB head:** **`0050`** · **repo head `0051_video_peaks`** (Issue 392 — applies on the next deploy)
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -11,44 +11,39 @@
 
 ## CURRENT FOCUS
 
-**Start Lane L25 Batch B (Issues 389–392) — "make it an application, not a webpage."**
-Batch A is merged, deployed and verified live; Batch B is unblocked and there is nothing left to
-finish behind it.
+**Batch B is 3 of 4.** #389 (tool-route app shell), #392 (real waveform peaks) and #390 (Timeline v2)
+are DONE on `wave/l25-batch-b`. **#391 (server-side edit document + undo/redo) is the only one left.**
 
 ### → NEXT ACTION
 
-1. **Read the queue first.** `docs/issues.md` → `# Batch B` (389–392). Each brief carries
-   what/why/in-repo-evidence/industry-standard-with-links; the evidence line numbers were accurate as
-   of 2026-08-03 but **Batch A moved a lot of frontend code — re-grep before trusting any `file:line`
-   in a Batch B brief.**
-2. **Respect the hard sequencing chain.** `docs/PROJECT_STATE.md` records it:
-   **#386 → #390 → #391 → #393.** #386 is DONE, so **#390 (Timeline v2) is next and can start now** —
-   it attaches to the `VideoPlayer` primitive shipped this session.
-   **#389 (app shell) is independent** and is the cheapest visible win in the batch.
-3. **Branch off `main`, not `staging`.** `docs/BRANCHING.md` documents `feature/* → staging → main`,
-   but the last three lanes (PRs #67, #68, #69) went **lane-branch → `main`** directly, and `staging`
-   is only kept in sync afterwards. Follow the practice, not the doc, unless you intend to fix the doc.
-   Suggested: `git checkout -b wave/l25-batch-b`.
-4. **Run local gates on Node 22**, not the system default (see CONSTRAINTS):
-   `export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH`
-5. **Before any `clip_engine/` change**, the eval harness must stay green:
-   `.venv/bin/python -m pytest tests/test_clip_engine.py -q`
+1. **Open the PR for 389 + 392 + 390 and merge it.** That is a coherent, self-contained deliverable:
+   the tool routes became an application, the fabricated waveform became real audio, and the timeline
+   became an editor. All gates green. **Merging to `main` deploys to production.**
+2. **Then build #391 as its own PR.** The plan is written and approved in detail — see
+   `/home/reese/.claude/plans/yes-but-ensure-a-agile-glacier.md` (Part 2), which carries the schema,
+   the atomic upsert, the command-stack and autosave designs, and the confirmed decisions:
+   - the render path READS the document via `base_revision` (time-boxed `segments` fallback)
+   - autosave takes any *structurally* valid document; the 5s-kept / 85%-removed caps stay at export
+   - a stale revision is an explicit user choice, **never** an auto-merge
+3. **Migration number:** re-check `alembic heads` before writing `0052` — head is currently `0051`.
+4. **Run local gates on Node 22** and from `frontend/` (see CONSTRAINTS).
 
-**No blocker.** Nothing is half-finished; there is no in-flight failure to resume.
-
----
+**Known red gate, pre-existing:** `pip_audit` reports 6 advisories (aiohttp / cryptography / pytest)
+published since the Batch A baseline. `git diff main -- requirements*.txt '*.py'` is empty, so nothing
+on this branch caused them. `cryptography` backs the Fernet token path, so this deserves its own
+issue. Logged in `docs/OFF_COURSE_BUGS.md`.
 
 ## WHAT WORKS NOW (verified this session — do not re-investigate)
 
 | Gate | Value |
 |---|---|
-| Backend pytest | **2516 passed**, 64 skipped, 173 deselected (2480 at W5) |
-| Frontend vitest | **409 passed / 64 files** (354/55 at W5) |
+| Backend pytest | **2544 passed**, 64 skipped, 173 deselected (2516 at Batch A) |
+| Frontend vitest | **549 passed / 78 files** (409/64 at Batch A close) |
 | ruff · ruff format · mypy | 0 · clean · 0 |
-| coverage | **83.2%** (floor 83.00) |
+| coverage | **83.08%** (floor 83.00) |
 | module floors | **clip_engine 92.72** (floor 91.0, up from 92.51) · preference 90.45 · crypto/limiter/auth 100.0 |
-| bandit · pip-audit | 0/0 · 0 |
-| Playwright | **52 passed** desktop+mobile; **axe 20/20** (10 routes × 2 projects) |
+| bandit · pip-audit | 0/0 · **6 — pre-existing, not from this branch** (see CURRENT FOCUS) |
+| Playwright | desktop+mobile green; **axe 11 routes** (long-form editor added in 389) |
 | CI on `b24aade` | **12/12 jobs**, incl. Visual regression + Integration tests |
 | Deploy | Docker publish ✓ → **Staging gate (data-bearing DB) ✓** → Deploy → autoclip.studio ✓ |
 | Live | `GET /health` **200** — postgres/redis/storage all `ok`; `/app/login` 200 |
@@ -110,7 +105,7 @@ Full detail in `docs/PROJECT_STATE.md` (top entry) and four `docs/DECISIONS.md` 
 | Python | `.venv/bin/python` (system `python3` lacks pydantic) |
 | Redis for unit lane | `redis-server --daemonize yes --save '' --appendonly no` |
 | Layer 0 | `.venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py` |
-| Alembic head | `0050_poster_frames` |
+| Alembic head | `0051_video_peaks` |
 | New R2 prefix | `posters/{creator_id}/…` — creator-scoped so `DELETE /auth/me` reaches it |
 | New Beat task | `backfill-video-posters-hourly` → `worker.tasks.backfill_video_posters` |
 | Secrets | `.env` on the VM; `TOKEN_ENCRYPTION_KEY` rotation in `docs/RUNBOOKS.md`. **Names only — never values.** |

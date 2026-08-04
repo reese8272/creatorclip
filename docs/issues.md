@@ -5,8 +5,9 @@ queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `d
 (2026-08-03). This file is the live queue.
 
 **Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
-2026-08-03). **Batch B is in progress: #389 and #392 are DONE** (the tool-route app shell; real
-waveform peaks) — see `docs/PROJECT_STATE.md`. **#390 (Timeline v2) is next.**
+2026-08-03). **Batch B is in progress: #389, #392 and #390 are DONE** (the tool-route app shell; real
+waveform peaks; Timeline v2) — see `docs/PROJECT_STATE.md`. **#391 (edit persistence) is the last
+one, and is planned as its own PR.**
 
 > **Batch B order was changed at build time to 389 → 392 → 390 → 391** (user decision, 2026-08-03).
 > #392 is the batch's only live honesty-constraint violation, it is pure backend (zero overlap with
@@ -39,7 +40,7 @@ changes the gut reaction to the product.
 | Batch | Theme | Issues | Size |
 |-------|-------|--------|------|
 | **A** ✅ | Visual credibility — stop reading as a prototype | 384–388, **400** — **ALL DONE 2026-08-03** | days |
-| **B** | Make it an application, not a webpage | **389 ✅ · 392 ✅** — next 390 → 391 | 1–2 weeks |
+| **B** | Make it an application, not a webpage | **389 ✅ · 392 ✅ · 390 ✅** — 391 remains | 1–2 weeks |
 | **C** | Close the capability gap | 393–397, **401** | multi-week |
 | **D** | Asset management | 398–399, **402** | ~1 week |
 | **E** | Breadth — scope-call cluster, do not start before D closes | **403–405** | multi-week |
@@ -489,7 +490,12 @@ simplified timeline with transcript editing inside a single sustained workspace
 ---
 
 ### Issue 390: Timeline v2
-- [ ] **Status:** open · **Batch:** B · **Size:** L · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** B · **Size:** L
+- **Scope extended at build time** (user decision, see `docs/DECISIONS.md`): the engine is shared by
+  BOTH timelines. The brief says "rebuild `Timeline.tsx`", but its own motivating evidence is the
+  22-minute long-form source, which was a separate hand-rolled bar with the same mouse-only defect.
+  Rebuilding only the short-form clip timeline would have left the surface the issue points at
+  unusable.
 
 **What we're doing.** Rebuilding `components/editor/Timeline.tsx`: pointer events, zoom and scroll,
 draggable cut edges with snapping, a real ruler, and standard editing keyboard shortcuts.
@@ -535,14 +541,42 @@ The component's own docstring (`Timeline.tsx:38-49`) already cites Descript/Opus
 reference — this issue closes the distance to that reference.
 
 **Acceptance**
-- [ ] Pointer events throughout; verified working with touch and trackpad
-- [ ] Zoom (scroll / pinch / keyboard) plus zoom-to-fit, with horizontal scroll; playhead stays in view
-- [ ] Existing cut regions expose draggable edges
-- [ ] Snap-to-word is **visible** (snap indicator + snapped-boundary highlight) and toggleable
-- [ ] Real time ruler with adaptive tick density at every zoom level
-- [ ] Keyboard: I/O set in/out, space, ←/→, delete removes selected cut
-- [ ] Clip-quality eval harness green — setup-start geometry unchanged
-- [ ] Component test covers zoom math and edge-drag at multiple zoom levels
+- [x] Pointer events throughout; works with touch and trackpad — both timelines on `TimelineRail`
+      with `setPointerCapture` and `touch-action: none`. The drag state is a ref and never consults
+      `hasPointerCapture`, which jsdom stubs to `false` (that is why the player's scrub drag has
+      never been testable). Removes the old `onMouseLeave` commit hack outright.
+- [x] Zoom (wheel / pinch / keyboard) plus zoom-to-fit, horizontal scroll, playhead stays in view —
+      `lib/timelineZoom.ts` + `useTimelineViewport`. Ctrl/Cmd+wheel zooms and **pinch arrives as the
+      same event** (MDN); the listener is `{ passive: false }` because React's `onWheel` is passive
+      and `preventDefault` there silently no-ops (react#14856), which would zoom the whole page.
+      Zoom is **anchored on the pointer** (Audacity's model) and fit is proven a fixed point.
+- [x] Existing cut regions expose draggable edges — 6px grab zone, and merging is deferred to
+      gesture completion so a neighbour cannot be absorbed (and the dragged id retired) mid-drag
+- [x] Snap-to-word is **visible** and toggleable — a line at the snapped instant, a `data-snapped`
+      ring on the thumb, the word named in the caption and in `aria-valuetext`, and a `Switch`
+      persisted at `editor:snap`. **Threshold is in PIXELS**, so it feels identical at every zoom
+      (~10s of tolerance at fit on a 22-minute source, ~4ms at 64×)
+- [x] Real time ruler with adaptive tick density — intervals drawn from a human-round table
+      (1s/5s/30s/2m…) constrained by minimum label spacing, never `duration / n`. DOM, not canvas
+- [x] Keyboard: I/O set in/out, space, ←/→, Delete removes the selected cut — plus `=`/`-`/`0` zoom
+      and `S` snap, all on one shortcut bus. **A bare arrow steps ONE PIXEL at the current zoom**;
+      Shift keeps the old 5s jump
+- [x] Clip-quality eval harness green — setup-start geometry unchanged. Verified structurally:
+      `git diff 73c3223..HEAD -- clip_engine worker routers models.py alembic ingestion tests` is
+      **empty**, so 390 is frontend-only by construction. `tests/test_clip_engine.py` 53 passed
+- [x] Component test covers zoom math and edge-drag at multiple zoom levels — 24 zoom-maths cases,
+      plus a `Timeline` test asserting the same 67px drag trims **4× fewer seconds at 4× zoom**
+
+**Also fixed** (defects found while building, not in the original brief)
+- [x] The container's `role="slider"` was **suppressing the waveform's `role="img"` and every
+      per-cut label in production** — MDN: a slider forces all descendants to `presentation`. Now a
+      `group` with the playhead and each cut edge as real thumbs (W3C APG multi-thumb)
+- [x] The scrub bar's arrow keys **had never worked**: an `onKeyDownCapture` calling
+      `stopPropagation` in the capture phase also prevented the element's own bubble handler
+- [x] `mergeAdjacent` mutated caller-owned objects, so single-level undo was already wrong for any
+      merged cut; cuts were index-addressed while the merge re-sorts, so an edge drag detached
+- [x] `clientXToTime` derived zoom from stale state width, mapping every pointer x to the end of
+      the clip before the first ResizeObserver
 
 ---
 
