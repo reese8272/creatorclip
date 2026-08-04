@@ -546,3 +546,72 @@ async def test_videos_upload_is_creator_scoped(db_session: AsyncSession, client,
             delete(Creator).where(Creator.id.in_([creator_a.id, creator_b.id]))
         )
         await db_session.commit()
+
+
+# ── Poster routes (Issue 387 — the deferred proof, delivered by Issue 411's wave) ─
+#
+# tests/test_poster_endpoints.py asserts isolation against a MOCKED session that
+# emulates the `get_owned` predicate; its own docstring defers the authoritative
+# RLS-backed proof to this matrix. These two tests are that proof: real Postgres,
+# real rows, real stored bytes (STORAGE_BACKEND=local in the lane).
+
+
+@pytest.mark.integration
+async def test_video_poster_is_creator_scoped(db_session: AsyncSession, client, tmp_path):
+    """GET /videos/{id}/poster: cross-creator → 404, owner with real bytes → 200."""
+    from worker.storage import delete_file, upload_file
+
+    creator_a = await _make_creator(db_session, suffix="a_vp")
+    creator_b = await _make_creator(db_session, suffix="b_vp")
+    video_b = await _make_video(db_session, creator_b)
+
+    src = tmp_path / "poster.jpg"
+    src.write_bytes(b"\xff\xd8\xff\xe0 not a real jpeg but real stored bytes")
+    poster_uri = upload_file(src, f"posters/{creator_b.id}/{video_b.id}.jpg")
+    video_b.poster_uri = poster_uri
+    await db_session.commit()
+
+    try:
+        cross = client.get(f"/videos/{video_b.id}/poster", cookies=_cookie(creator_a))
+        assert cross.status_code == 404, cross.text
+
+        own = client.get(f"/videos/{video_b.id}/poster", cookies=_cookie(creator_b))
+        assert own.status_code == 200, own.text
+        assert own.content.startswith(b"\xff\xd8")
+    finally:
+        delete_file(poster_uri)
+        await db_session.execute(
+            delete(Creator).where(Creator.id.in_([creator_a.id, creator_b.id]))
+        )
+        await db_session.commit()
+
+
+@pytest.mark.integration
+async def test_clip_poster_is_creator_scoped(db_session: AsyncSession, client, tmp_path):
+    """GET /clips/{id}/poster: cross-creator → 404, owner with real bytes → 200."""
+    from worker.storage import delete_file, upload_file
+
+    creator_a = await _make_creator(db_session, suffix="a_cp")
+    creator_b = await _make_creator(db_session, suffix="b_cp")
+    video_b = await _make_video(db_session, creator_b)
+    clip_b = await _make_clip(db_session, creator_b, video_b)
+
+    src = tmp_path / "clip_poster.jpg"
+    src.write_bytes(b"\xff\xd8\xff\xe0 clip poster bytes")
+    poster_uri = upload_file(src, f"posters/{creator_b.id}/clips/{clip_b.id}.jpg")
+    clip_b.poster_uri = poster_uri
+    await db_session.commit()
+
+    try:
+        cross = client.get(f"/clips/{clip_b.id}/poster", cookies=_cookie(creator_a))
+        assert cross.status_code == 404, cross.text
+
+        own = client.get(f"/clips/{clip_b.id}/poster", cookies=_cookie(creator_b))
+        assert own.status_code == 200, own.text
+        assert own.content.startswith(b"\xff\xd8")
+    finally:
+        delete_file(poster_uri)
+        await db_session.execute(
+            delete(Creator).where(Creator.id.in_([creator_a.id, creator_b.id]))
+        )
+        await db_session.commit()

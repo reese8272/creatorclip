@@ -583,13 +583,39 @@ def test_render_requires_a_base_revision(client):
 
 
 def test_render_no_longer_accepts_a_posted_cut_list(client):
-    """The legacy shape is REJECTED, not ignored. Leaving it working would keep a
-    second, unvalidated way to drive a paid render."""
+    """The legacy shape is REJECTED, not ignored — even beside a VALID
+    base_revision. Before Issue 408 this test omitted base_revision, so its 422
+    came from the missing required field and a body carrying both was silently
+    accepted with `segments` dropped: the server would render a different cut
+    list than the client posted. `extra="forbid"` is what makes this real."""
     creator = _mock_creator()
     clip = _render_clip(creator.id)
-    resp, mock_task = _post_cuts(creator, clip, {"segments": [{"start_s": 2.0, "end_s": 3.0}]})
+    resp, mock_task = _post_cuts(
+        creator,
+        clip,
+        {"base_revision": 0, "segments": [{"start_s": 2.0, "end_s": 3.0}]},
+    )
     assert resp.status_code == 422, resp.text
     mock_task.delay.assert_not_called()
+
+
+def test_put_rejects_unknown_fields(client):
+    """The save boundary forbids extras too: a client posting a field the
+    server does not understand must hear about it, not have it dropped."""
+    from main import app
+
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+    _install(creator, clip)
+    try:
+        resp = client.put(
+            f"/clips/{clip.id}/edit-document",
+            json={"base_revision": 0, "doc": {"version": 1, "cuts": []}, "cuts": []},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 422
 
 
 def test_clean_confirm_clears_the_document_and_returns_the_new_revision(client):

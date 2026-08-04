@@ -6,12 +6,13 @@ queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `d
 
 **Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
 2026-08-03). **Batch B: #389, #392 and #390 are DONE, MERGED and DEPLOYED** — PR #70 → `main`
-(`67fe4db`) and **#391 merged as PR #71** (`0b59a75`, migration `0052`), both deployed.
+(`67fe4db`) and **#391 across PR #71** (`0b59a75`, migration `0052`) **and PR #73** (`7b8f281`, the
+render path), all deployed.
 **BATCH B IS COMPLETE.** Issue **406** (dependency advisories) also closed, so Layer 0 is fully green.
 **Next: Batch C — close the capability gap (393–397, 401).** See `docs/PROJECT_STATE.md`.
 
-**Also open, outside the lane:** **#406** — clear the 6 `pip-audit` advisories (aiohttp,
-cryptography). Filed 2026-08-04 from the OFF_COURSE_BUGS log; see § Hygiene below.
+**Also closed, outside the lane:** **#406** ✅ — the 6 `pip-audit` advisories (aiohttp,
+cryptography), merged as PR #72. See § Hygiene below.
 
 > **Batch B order was changed at build time to 389 → 392 → 390 → 391** (user decision, 2026-08-03).
 > #392 is the batch's only live honesty-constraint violation, it is pure backend (zero overlap with
@@ -197,7 +198,9 @@ sync. Building the primitive once removes that duplication (DRY, per `CLAUDE.md`
 v2 something to attach to.
 
 **Evidence in this repo.**
-- **11 `<video ... controls>` call sites** across `frontend/src` (grep, excluding tests).
+- **11 `<video>` elements across `frontend/src`, 8 of them with `controls`** (git-verified at
+  `f298164`, the pre-Batch-A base; the original grep conflated the two — the 2026-08-04 assessment
+  reconciled this against `PROJECT_STATE.md`'s "replaces all 8").
 - `frontend/src/pages/Editor.tsx:476-487` — the short-form player, `controls`, at `w-[180px]`.
 - `frontend/src/pages/Editor.tsx:650-654` — the cleaned-preview player, `controls`, no shared code.
 - `frontend/src/components/editor/LongFormEditor.tsx:318-327` — the source player, `controls`.
@@ -585,8 +588,8 @@ reference — this issue closes the distance to that reference.
 ---
 
 ### Issue 391: Real edit persistence — undo/redo stack + server-side edit document
-- [x] **Status:** **DONE 2026-08-04** — PR A merged (#71, `0b59a75`, deployed with migration `0052`);
-      PR B on `feat/391-render-from-document` · **Batch:** B · **Size:** L · **Agent:** `python-senior-engineer`
+- [x] **Status:** **DONE 2026-08-04** — shipped across PR A (#71, `0b59a75`, migration `0052`) and
+      PR B (#73, `7b8f281`, the render path), both merged and deployed · **Batch:** B · **Size:** L · **Agent:** `python-senior-engineer`
 
 > **Split into two PRs at plan time.** `POST /clips/{id}/cuts` is paid, flag-gated and
 > budget-checked, and LEFT_OFF ranked it the SEV1 risk of this issue. **PR A is purely additive:**
@@ -1465,6 +1468,147 @@ API change** in 49.0.0 or 50.0.0 — the only surface this codebase uses. Every 
 change is in X.509 parsing, ChaCha20 nonce semantics, FFDH deprecation or OCSP version validation,
 none of which is imported here. The dropped platforms (x86_64 macOS wheels, 32-bit Windows) do not
 apply to `python:3.12-slim` on linux/amd64.
+
+---
+
+# Assessment 2026-08-04 — verified findings from the Batch A/B review
+
+Filed from the post-Batch-B assessment (all gates independently re-run and green: backend 2581,
+frontend 595/83, Playwright 76, Layer 0 clean). Every finding below was confirmed by code trace or
+direct repro before filing — none is speculative. 407–409 are Issue-391 hardening and should land
+**before or alongside #393**, which builds directly on the same editor state.
+
+### Issue 407: Conflict resolution is INVERTED in the resume-from-cache path
+- [x] **Status:** **DONE 2026-08-04** (close-out wave) · **Batch:** C (pre-393 hardening) · **Size:** S
+
+**What's wrong.** `deriveSeed` (`frontend/src/hooks/useEditDocument.ts:78-89`) handles "dirty
+offline cache at the same revision" by seeding `history` with the **server** document and stuffing
+the **local cached** document into `conflict.serverDoc` — the reverse of the 409-driven conflict
+path (`:223-235`), where the naming is correct. Every downstream consumer trusts the names, so in
+this branch both buttons do the opposite of their labels (`SaveStatus.tsx:47-57`):
+- **"Keep my edits"** (`keepMine`, `:416-425`) keeps the server's document and schedules a save of
+  it; the save's `writeCache` then overwrites the dirty cache — the creator's unsaved work is
+  **destroyed by the button that promises to keep it**.
+- **"Use the other version"** (`takeTheirs`, `:439-442` → `adoptServerDocument`) adopts the local
+  cached document but writes it `dirty: false` and sets state `idle` — the editor displays content
+  the server does not have while claiming it is synced, and never schedules the save.
+- The copy "This clip was edited somewhere else" is also false here: `cached.revision ===
+  data.revision` means the server has NOT moved on; the true situation is "you have unsaved work
+  from a previous session on this device."
+
+**Why it survived review:** `useEditDocument.test.tsx` covers `keepMine`/`takeTheirs` only via the
+409 path (`:140-205`), where the wiring is correct. No test seeds a dirty cache before mount.
+Reachable in production: any save that never lands (network loss, crash inside the debounce window,
+failed flush on unload) leaves `dirty: true` at the server's revision.
+
+**Acceptance criteria**
+- [x] The cache-resume branch presents the LOCAL dirty document as "mine" and the SERVER document
+      as "theirs", consistent with the 409 path — either by seeding `history` from the cache, or by
+      renaming/restructuring `ConflictInfo` so the fields cannot be crossed again
+- [x] "Use the other version" leaves the client in a state that is actually synced (or actually
+      saving) — never `idle` with divergent content
+- [x] Conflict copy distinguishes "edited somewhere else" from "unsaved work from your last session"
+- [x] A test mounts with a pre-seeded dirty cache and asserts which document each button keeps —
+      the test that was missing
+
+### Issue 408: `POST /clips/{id}/cuts` silently ignores a legacy `segments` body
+- [x] **Status:** **DONE 2026-08-04** (close-out wave) · **Batch:** C (pre-393 hardening) · **Size:** S
+
+**What's wrong.** `CutsIn` (`routers/clips.py:1075-1090`) has no `extra="forbid"`, and Pydantic v2
+defaults to ignoring unknown fields — verified by direct repro:
+`CutsIn.model_validate({'base_revision': 3, 'segments': [...]})` validates cleanly and drops
+`segments`. The pinning test (`tests/test_edit_document.py:585-592`, "the legacy shape is REJECTED,
+not ignored") posts `segments` **without** `base_revision`, so its 422 comes from the missing
+required field — it does not test what its docstring claims. A stale client posting
+`{base_revision, segments}` gets a 202 and a render of the server document, its posted cut list
+silently discarded — precisely the "hoping two copies agreed" failure mode the 391 design notes say
+was eliminated.
+
+**Acceptance criteria**
+- [x] `CutsIn` (and `EditDocumentIn`) get `model_config = ConfigDict(extra="forbid")`
+- [x] The rejection test posts a VALID `base_revision` plus `segments` and asserts 422
+- [x] A quick sweep of the other request models on paid/render routes for the same gap, with a
+      one-line note of the outcome
+
+### Issue 409: Persistence has zero e2e coverage — the mock API has no edit-document route
+- [x] **Status:** **DONE 2026-08-04** (close-out wave) · **Batch:** C (pre-393 hardening) · **Size:** S
+
+**What's wrong.** `frontend/e2e/fixtures/mock-api.ts` mocks peaks and transcript but has no
+`/clips/{id}/edit-document` route; the GET falls through the catch-all `json(route, {}, 200)`
+(`:521`). `useEditDocument` silently tolerates the malformed body — `initHistory(undefined)` seeds
+`present: undefined` and `doc` falls back to `EMPTY_DOC` (`useEditDocument.ts:205`) — so every
+Playwright editor test runs against a hook in a degraded state nobody designed, and hydration,
+autosave, save-status, and conflict UI have **zero** e2e coverage. This is how Issue 407 shipped:
+the one lane that renders real UI against realistic responses never exercised the branch.
+
+**Acceptance criteria**
+- [x] `mock-api.ts` serves a realistic `GET`/`PUT /clips/{id}/edit-document` (revision advancing on
+      PUT), and the catch-all logs or fails on unmatched API routes so the next missing mock is loud
+- [x] One e2e: make a cut in the editor, observe the save indicator reach "Saved"
+      *(shipped as: hydrate a stored cut via `editDocSeed`, commit through "Clear all", await
+      "Saved" — the same commit → autosave → Saved loop; authoring a cut via I/O needs playhead
+      movement against a stub `<video>`, which is exactly the kind of flake an e2e gate cannot
+      carry)*
+- [x] `useEditDocument` treats a body without a numeric `revision`/`doc` as an error state rather
+      than silently degrading
+
+### Issue 410: Short-form timeline's "waveform unavailable" state is invisible to sighted users
+- [x] **Status:** **DONE 2026-08-04** (close-out wave) · **Batch:** C or first polish pass · **Size:** S
+
+**What's wrong.** When peaks are absent, `MasterTimeline.tsx:175` renders a visible explanation
+("Waveform unavailable for this source — the audio is past its retention window") but the
+short-form `Timeline.tsx:173` only sets `ariaLabel` — a sighted creator sees an unexplained empty
+band (visible in `Editor.png`, 2026-08-04 screenshot) and reasonably concludes the timeline is
+broken. The honesty rule (real data or honestly absent) is met for screen readers and not for
+everyone else.
+
+**Acceptance criteria**
+- [x] The short-form timeline shows a visible unavailable message consistent with the master
+      timeline's, sized so it does not crowd the rail
+- [x] Both messages share one source string (DRY)
+
+### Issue 411: `/settings` contrast failures — promote from OFF_COURSE_BUGS and join the axe gate
+- [x] **Status:** **DONE 2026-08-04** (close-out wave) · **Batch:** hygiene · **Size:** S
+
+**What's wrong.** `docs/OFF_COURSE_BUGS.md:32` (2026-08-03) has carried "open — promote to an
+issue / not yet tracked" through two batch closes — a standing violation of the off-course rule in
+`CLAUDE.md`. The "Soon" preview rows (`80a7474`, 2026-06-23) sit at 2.14–2.54:1 contrast under
+`pointer-events-none opacity-50` while remaining in the accessibility tree, and `/settings` is
+consequently the one dense route excluded from `e2e/a11y.spec.ts`. Likely a one-attribute fix
+(`aria-hidden` on the decorative mock) plus restoring the route to the gate.
+
+**Acceptance criteria**
+- [x] The mock preview rows are `aria-hidden` (or restyled to pass), `/settings` is added to the
+      axe gate, and the gate is green
+- [x] The OFF_COURSE_BUGS row is flipped to fixed with this issue number
+
+### Issue 412: Presentation balance — the screens read emptier than the product is
+- [ ] **Status:** open · **Batch:** schedule against C/D (design pass, not a blocker) · **Size:** M
+
+**What's wrong.** From the 2026-08-04 screenshot review (`Review.png`, `Channel.png`,
+`Insights 1-3.png`, `Videos.png`, `Assistant.png`), judged against `docs/UI.md`:
+- **Review**: the left "Why this clip" column is ~60% empty dark canvas below the card at 1080p —
+  the screen's dominant region is void, which fights the "one dominant panel" hierarchy rule.
+- **Channel**: the Creator-DNA card wraps its copy every 3–4 words in a narrow column beside a
+  mostly-empty card interior; one lone "Sports" trait chip amplifies the imbalance.
+- **Insights**: opens on a ~350-word explainer card before any data; "VIDEOS ANALYSED 23" sits
+  beside "INGESTED 2" with no visible definition of either, reading as a contradiction.
+- **Videos**: two `UNTITLED` rows in monospace read as debug output on the primary library surface;
+  the review-queue tile shows the logged badge-count defect (10 = all rendered clips).
+- **Cross-cutting**: monospace is applied to prose meta ("based on 4 review notes", account name,
+  minute balance) beyond `docs/UI.md`'s timecodes/IDs rule; five of eight screens are dominated by
+  empty states with no forward affordance beyond a single button.
+None of this is a correctness defect; together it is the difference between "designed" and
+"assembled" on first contact, working against the Batch A/B investment.
+
+**Acceptance criteria**
+- [ ] Review/Channel: no primary column whose majority is empty canvas at 1080p — content reflows,
+      the column narrows, or the empty region earns its space (e.g. scoring detail moves up)
+- [ ] Insights: the explainer collapses to one line per panel (disclosure for the rest); paired
+      stats that use different denominators are labeled so they cannot read as contradictory
+- [ ] Untitled videos get a derived label (filename or date), never `UNTITLED`
+- [ ] Monospace audit: mono for timecodes/IDs/counts only, per `docs/UI.md`
+- [ ] Empty states name the next action in context (what unlocks this panel, and where)
 
 ---
 

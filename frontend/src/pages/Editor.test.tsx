@@ -98,6 +98,16 @@ function mockFetch() {
     if (url.includes('/videos/v1/clips')) return json({ clips: [BASE_CLIP], personalization: null })
     if (url.includes('/clips/c1/transcript')) return json(TRANSCRIPT)
     if (url.includes('/clips/c1/download')) return new Response(new ArrayBuffer(0), { status: 200 })
+    // A real edit-document body: the hook treats the catch-all `{}` as a load
+    // error by design (Issue 409), which is not the state these tests probe.
+    if (url.includes('/edit-document'))
+      return json({
+        clip_id: 'c1',
+        revision: 0,
+        doc: { version: 1, cuts: [], last_applied_at: null },
+        updated_at: null,
+        clip_duration_s: 20,
+      })
     return json({})
   })
 }
@@ -128,6 +138,15 @@ describe('Editor', () => {
     expect(screen.queryByRole('button', { name: /Go to Review/i })).toBeNull()
     await userEvent.click(await screen.findByRole('button', { name: 'Open in editor' }))
     expect(await screen.findByText('Suggested clips')).toBeInTheDocument()
+  })
+
+  it('says outright when the waveform is unavailable (Issue 410)', async () => {
+    // The peaks request falls through mockFetch's `{}` catch-all → no peaks.
+    // The long-form timeline always said so visibly; the short-form rail only
+    // said it via ariaLabel, leaving sighted users an unexplained empty band.
+    vi.stubGlobal('fetch', mockFetch())
+    renderEditor('/app/editor?video_id=v1&clip_id=c1')
+    expect(await screen.findByText(/Waveform unavailable for this source/i)).toBeInTheDocument()
   })
 
   it('renders the editor with clip meta and honesty disclaimer', async () => {

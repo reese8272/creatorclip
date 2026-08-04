@@ -39,9 +39,29 @@ const RATE_LIMIT_BACKOFF_MS = 15_000
 
 const EMPTY_DOC: EditDocument = { version: 1, cuts: [], last_applied_at: null }
 
+/**
+ * A body without a numeric revision and a cuts array is not an edit document.
+ * Treated as a LOAD FAILURE, not silently seeded as empty: editing on top of a
+ * malformed response and then autosaving would overwrite the real document
+ * (Issue 409 — the e2e mock's catch-all `{}` ran the editor in exactly that
+ * degraded state for a full batch without anything noticing).
+ */
+function isEditDocumentResponse(data: EditDocumentResponse): boolean {
+  return typeof data?.revision === 'number' && Array.isArray(data?.doc?.cuts)
+}
+
 export interface ConflictInfo {
+  /** ALWAYS the server's actual document — never the local copy. `keepMine`
+   * keeps `history.present` and `takeTheirs` adopts this field, so crossing
+   * them is the data-loss inversion Issue 407 fixed. */
   serverDoc: EditDocument
   serverRevision: number
+  /**
+   * 'remote'  — a save 409ed: the document moved on another device/tab.
+   * 'resumed' — a dirty offline cache from a previous session on THIS device,
+   *             with the server unmoved. Different situation, different copy.
+   */
+  kind: 'remote' | 'resumed'
 }
 
 interface Seed {
@@ -79,10 +99,13 @@ function deriveSeed(clipId: string, data: EditDocumentResponse): Seed {
   if (cached?.dirty && cached.revision === data.revision) {
     // Unsaved work from this device, and the server has not moved on. Offer it
     // as an explicit choice rather than merging it or silently dropping it.
+    // Same convention as the 409 path: `present` is MINE (the unsaved work),
+    // `conflict.serverDoc` is THEIRS (the server's document) — `keepMine` and
+    // `takeTheirs` trust those roles.
     return {
-      history: initHistory(data.doc),
+      history: initHistory(cached.doc),
       saveState: 'conflict',
-      conflict: { serverDoc: cached.doc, serverRevision: data.revision },
+      conflict: { serverDoc: data.doc, serverRevision: data.revision, kind: 'resumed' },
       revision: data.revision,
       importedLegacy: false,
     }
@@ -157,8 +180,9 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
   // Copying it into state via an effect would make a second source of truth for
   // the same value. The caller remounts this hook per clip (`key={clip.id}`), so
   // the overrides never have to be invalidated by clip id.
+  const malformed = query.data !== undefined && !isEditDocumentResponse(query.data)
   const seed = useMemo(
-    () => (query.data ? deriveSeed(clipId, query.data) : null),
+    () => (query.data && isEditDocumentResponse(query.data) ? deriveSeed(clipId, query.data) : null),
     [clipId, query.data],
   )
 
@@ -171,7 +195,9 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
   )
 
   const history = editedHistory ?? seed?.history ?? null
-  const saveState: SaveState = stateOverride ?? seed?.saveState ?? 'idle'
+  const saveState: SaveState = malformed
+    ? 'error'
+    : (stateOverride ?? seed?.saveState ?? 'idle')
   const conflict = conflictOverride === undefined ? (seed?.conflict ?? null) : conflictOverride
 
   // Everything the save path reads without wanting to re-create itself. The
@@ -186,6 +212,8 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const clipIdRef = useRef(clipId)
   const inFlightPromiseRef = useRef<Promise<void>>(Promise.resolve())
+  const malformedRef = useRef(false)
+  const queryRef = useRef(query)
 
   // Latest-value refs are written in an effect, never during render — a render
   // can be discarded, and a ref written during one would survive it.
@@ -193,6 +221,8 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
     historyRef.current = history
     conflictRef.current = conflict
     clipIdRef.current = clipId
+    malformedRef.current = malformed
+    queryRef.current = query
   })
 
   // The seed's revision is the base for the first save of this clip. Later
@@ -202,7 +232,10 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
     if (seed) revisionRef.current = seed.revision
   }, [seed])
 
-  const doc = history?.present ?? query.data?.doc ?? EMPTY_DOC
+  // With a valid response, `history` always exists; with a malformed one it
+  // never does — so this fallback renders an empty read-only editor under the
+  // error banner, never a spread of `undefined`.
+  const doc = history?.present ?? EMPTY_DOC
 
   // ── Save ───────────────────────────────────────────────────────────────────
 
@@ -228,6 +261,7 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
       setConflictOverride({
         serverDoc: detail?.doc ?? EMPTY_DOC,
         serverRevision: detail?.revision ?? 0,
+        kind: 'remote',
       })
       setStateOverride('conflict')
       // The server has spoken, so the legacy key can go — see clearLegacyCuts.
@@ -409,6 +443,11 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
   }, [applyHistory])
 
   const retry = useCallback(() => {
+    // A malformed load has nothing to re-save; retry means "fetch it again".
+    if (malformedRef.current) {
+      void queryRef.current.refetch()
+      return
+    }
     attemptRef.current = 0
     void saveRef.current()
   }, [])
@@ -445,7 +484,9 @@ export function useEditDocument(clipId: string): UseEditDocumentResult {
     doc,
     isLoading: query.isPending,
     saveState,
-    saveError,
+    saveError: malformed
+      ? 'Could not load this clip’s edit. Retry, or reload the page.'
+      : saveError,
     conflict,
     canUndo: history ? canUndoOf(history) : false,
     canRedo: history ? canRedoOf(history) : false,

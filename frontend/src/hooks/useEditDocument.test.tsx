@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useEditDocument } from './useEditDocument'
+import { writeCache } from '@/lib/editDocCache'
 import { SAVE_DEBOUNCE_MS } from '@/lib/saveScheduler'
 import type { EditDocument } from '@/types'
 
@@ -135,6 +136,13 @@ describe('useEditDocument', () => {
 
     act(() => result.current.redo())
     expect(result.current.doc.cuts).toHaveLength(1)
+
+    // Drain the debounced save before the test ends. Without this, unmount
+    // flushes a pending save AFTER afterEach restored the real `fetch`; the
+    // failed request schedules a REAL 1s retry timer that crosses the test
+    // boundary and fires a stray PUT into whichever test runs next.
+    await act(async () => void vi.advanceTimersByTime(SAVE_DEBOUNCE_MS))
+    await waitFor(() => expect(result.current.saveState).toBe('saved'))
   })
 
   it('surfaces a 409 as an explicit choice and never auto-merges', async () => {
@@ -159,6 +167,7 @@ describe('useEditDocument', () => {
     expect(result.current.doc.cuts.map((c) => c.id)).toEqual(['mine'])
     expect(result.current.conflict?.serverRevision).toBe(8)
     expect(result.current.conflict?.serverDoc.cuts.map((c) => c.id)).toEqual(['theirs'])
+    expect(result.current.conflict?.kind).toBe('remote')
   })
 
   it('takeTheirs replaces the document with the server copy', async () => {
@@ -201,6 +210,80 @@ describe('useEditDocument', () => {
 
     expect((putBodies[1] as { base_revision: number }).base_revision).toBe(8)
     expect(result.current.doc.cuts.map((c) => c.id)).toEqual(['mine'])
+  })
+
+  describe('resume-from-cache conflict (Issue 407)', () => {
+    // The branch that shipped inverted: a dirty offline cache at the server's
+    // revision means "unsaved work from a previous session on THIS device".
+    // The convention is the 409 path's: `present` is always MINE, and
+    // `conflict.serverDoc` is always the server's actual document.
+    const localDoc: EditDocument = {
+      version: 1,
+      cuts: [{ id: 'local-work', start_s: 1, end_s: 2 }],
+      last_applied_at: null,
+    }
+    const serverDoc: EditDocument = {
+      version: 1,
+      cuts: [{ id: 'server-state', start_s: 5, end_s: 6 }],
+      last_applied_at: null,
+    }
+
+    it('presents the LOCAL dirty work as mine and the SERVER doc as theirs', async () => {
+      writeCache(CLIP, localDoc, { dirty: true, revision: 3 })
+      const { result } = await renderReady({ get: () => okGet(3, serverDoc) })
+
+      await waitFor(() => expect(result.current.saveState).toBe('conflict'))
+      expect(result.current.doc.cuts.map((c) => c.id)).toEqual(['local-work'])
+      expect(result.current.conflict?.serverDoc.cuts.map((c) => c.id)).toEqual(['server-state'])
+      expect(result.current.conflict?.kind).toBe('resumed')
+    })
+
+    it('keepMine saves the local work, not the server copy', async () => {
+      writeCache(CLIP, localDoc, { dirty: true, revision: 3 })
+      const { result, putBodies } = await renderReady({
+        get: () => okGet(3, serverDoc),
+        put: () => okPut(4),
+      })
+      await waitFor(() => expect(result.current.saveState).toBe('conflict'))
+
+      act(() => result.current.keepMine())
+      await act(async () => void vi.advanceTimersByTime(SAVE_DEBOUNCE_MS))
+      await waitFor(() => expect(result.current.saveState).toBe('saved'))
+
+      expect(putBodies).toHaveLength(1)
+      const sent = putBodies[0] as { base_revision: number; doc: EditDocument }
+      expect(sent.doc.cuts.map((c) => c.id)).toEqual(['local-work'])
+      expect(sent.base_revision).toBe(3)
+      expect(result.current.doc.cuts.map((c) => c.id)).toEqual(['local-work'])
+    })
+
+    it('takeTheirs adopts the server document and is truthfully in sync', async () => {
+      writeCache(CLIP, localDoc, { dirty: true, revision: 3 })
+      const { result, putCount } = await renderReady({ get: () => okGet(3, serverDoc) })
+      await waitFor(() => expect(result.current.saveState).toBe('conflict'))
+
+      act(() => result.current.takeTheirs())
+      expect(result.current.doc.cuts.map((c) => c.id)).toEqual(['server-state'])
+      expect(result.current.conflict).toBeNull()
+      // Idle is truthful here: the displayed doc IS the server doc.
+      expect(result.current.saveState).toBe('idle')
+      await act(async () => void vi.advanceTimersByTime(60_000))
+      expect(putCount()).toBe(0)
+    })
+  })
+
+  it('treats a malformed GET body as a load error, not an empty document', async () => {
+    // The e2e mock's catch-all `{}` is exactly this shape (Issue 409). Editing
+    // on top of it and autosaving would overwrite the real server document.
+    const { result, putCount } = await renderReady({ get: () => ({ body: {} }) })
+
+    expect(result.current.saveState).toBe('error')
+    expect(result.current.saveError).toMatch(/could not load/i)
+    expect(result.current.doc.cuts).toEqual([])
+
+    act(() => result.current.commit(addCut('a')))
+    await act(async () => void vi.advanceTimersByTime(60_000))
+    expect(putCount()).toBe(0)
   })
 
   it('treats a 422 as terminal rather than retrying forever', async () => {

@@ -4,6 +4,7 @@ import { Waveform } from '@/components/editor/Waveform'
 import { fitTier } from '@/lib/fit'
 import type { FitTier } from '@/components/ui/fit-badge'
 import { fmtClock, parseClock } from '@/lib/timecode'
+import { WAVEFORM_UNAVAILABLE_MESSAGE } from '@/lib/peaks'
 import type { WaveformPeaks } from '@/lib/peaks'
 import type { Chapter, ReviewClip } from '@/types'
 
@@ -170,11 +171,7 @@ export function MasterTimeline({
       {/* Say it outright when there is no audio data. A silent flat line could be
           mistaken for a silent source; this distinguishes "we don't have it" from
           "your audio is quiet" (Issue 392). */}
-      {!peaks && (
-        <p className="mt-1 text-label text-subtle">
-          Waveform unavailable for this source — the audio is past its retention window.
-        </p>
-      )}
+      {!peaks && <p className="mt-1 text-label text-subtle">{WAVEFORM_UNAVAILABLE_MESSAGE}</p>}
     </div>
   )
 }

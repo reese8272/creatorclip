@@ -11,6 +11,15 @@
 // draw bars at `20 + ((i * 37) % 60)%` under a label saying "Source timeline".
 
 /** BBC audiowaveform data format, version 1 (mono). */
+/**
+ * The one user-facing explanation for an absent waveform, shared by BOTH
+ * timelines (Issue 410). The honesty rule is "real data or honestly absent" —
+ * an unlabeled flat band reads as a broken timeline to sighted users, which
+ * is absence without the honesty.
+ */
+export const WAVEFORM_UNAVAILABLE_MESSAGE =
+  'Waveform unavailable for this source — the audio is past its retention window.'
+
 export interface WaveformPeaks {
   version: number
   sample_rate: number

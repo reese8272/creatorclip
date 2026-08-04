@@ -44,8 +44,9 @@ export function SaveStatus({
         <p className="flex items-start gap-2 text-default">
           <TriangleAlert aria-hidden size={ICON_INLINE} className="mt-0.5 flex-shrink-0 text-warning" />
           <span>
-            This clip was edited somewhere else. Choose which version to keep — nothing is
-            merged automatically.
+            {conflict.kind === 'resumed'
+              ? 'You have unsaved edits from your last session on this device. Choose which version to keep — nothing is merged automatically.'
+              : 'This clip was edited somewhere else. Choose which version to keep — nothing is merged automatically.'}
           </span>
         </p>
         <div className="flex gap-2">

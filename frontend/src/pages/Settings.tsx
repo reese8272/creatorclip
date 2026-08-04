@@ -47,7 +47,14 @@ function ComingSoonRow({
         </div>
         <div className="mt-0.5 text-small text-subtle">{description}</div>
       </div>
-      <div className="pointer-events-none opacity-50">{mock}</div>
+      {/* aria-hidden: announcing controls that do not work is worse than
+          announcing nothing. NOT opacity-faded: WCAG contrast applies to all
+          VISIBLE text (aria-hidden or not — axe measured 2.3–2.5:1 under the
+          old `opacity-50`), so disabled-ness is carried by muted tokens at
+          full opacity plus the Soon badge instead (Issue 411). */}
+      <div aria-hidden="true" className="pointer-events-none">
+        {mock}
+      </div>
     </div>
   )
 }

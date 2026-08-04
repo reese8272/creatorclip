@@ -14,7 +14,7 @@ import math
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -114,6 +114,8 @@ class TrimRenderIn(BaseModel):
     the same timebase as ``GET /clips/{id}/transcript`` and
     ``POST /clips/{id}/cuts``.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     trim_start_s: float
     trim_end_s: float
