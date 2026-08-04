@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { act, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useTimelineViewport, type TimelineViewport } from './useTimelineViewport'
@@ -29,9 +30,14 @@ const WIDTH = 1100
 let latest: TimelineViewport
 
 function Probe({ duration = DURATION, followTime }: { duration?: number; followTime?: number }) {
-  const vp = useTimelineViewport({ duration, followTime })
-  latest = vp
-  return <div data-testid="rail" ref={vp.ref} style={{ width: WIDTH }} />
+  const railRef = useRef<HTMLDivElement>(null)
+  const vp = useTimelineViewport({ duration, followTime, containerRef: railRef })
+  // Published in an effect, not during render: writing to module scope while
+  // rendering is a side effect React is free to run more than once.
+  useEffect(() => {
+    latest = vp
+  })
+  return <div data-testid="rail" ref={railRef} style={{ width: WIDTH }} />
 }
 
 function mount(props: { duration?: number; followTime?: number } = {}) {

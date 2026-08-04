@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import {
   clampScrollLeft,
   fitPxPerSecond,
@@ -11,8 +11,6 @@ import {
 } from '@/lib/timelineZoom'
 
 export interface TimelineViewport extends Viewport {
-  /** Attach to the element whose width defines the visible timeline. */
-  ref: React.RefObject<HTMLDivElement | null>
   /** True while the user has zoomed in past fit — enables the "reset" affordance. */
   isZoomed: boolean
   zoomIn: (anchorX?: number) => void
@@ -44,12 +42,15 @@ export interface TimelineViewport extends Viewport {
 export function useTimelineViewport({
   duration,
   followTime,
+  containerRef: ref,
 }: {
   duration: number
   /** Playhead, in seconds. The viewport scrolls to keep it visible during playback. */
   followTime?: number
+  /** The element whose width defines the visible timeline. Owned by the caller,
+   *  which keeps this hook out of the business of holding DOM. */
+  containerRef: React.RefObject<HTMLDivElement | null>
 }): TimelineViewport {
-  const ref = useRef<HTMLDivElement>(null)
   const [viewportWidth, setViewportWidth] = useState(0)
   // `null` means "follow fit" — so a resize keeps a never-zoomed timeline fitted
   // instead of freezing it at the width it first measured.
@@ -67,17 +68,19 @@ export function useTimelineViewport({
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [ref])
 
   const fit = fitPxPerSecond(viewportWidth, duration)
   const pxPerSecond = pxPerSecondState ?? fit
-  const v: Viewport = { duration, pxPerSecond, scrollLeft, viewportWidth }
-
-  // Keep scroll legal when duration, zoom or width changes underneath us.
-  useEffect(() => {
-    setScrollLeft((prev) => clampScrollLeft(prev, v))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [duration, pxPerSecond, viewportWidth])
+  // Clamped on READ, not stored clamped. When duration, zoom or width changes
+  // underneath us the stored scroll can fall out of range; deriving it here keeps
+  // that correction inside the same render instead of triggering a second one.
+  const v: Viewport = {
+    duration,
+    pxPerSecond,
+    viewportWidth,
+    scrollLeft: clampScrollLeft(scrollLeft, { duration, pxPerSecond, viewportWidth }),
+  }
 
   const applyZoom = useCallback(
     (factor: number, anchorX?: number) => {
@@ -97,7 +100,7 @@ export function useTimelineViewport({
       setPxPerSecondState(next.pxPerSecond)
       setScrollLeft(next.scrollLeft)
     },
-    [duration, pxPerSecondState, scrollLeft],
+    [duration, pxPerSecondState, scrollLeft, ref],
   )
 
   const zoomIn = useCallback((anchorX?: number) => applyZoom(ZOOM_FACTOR, anchorX), [applyZoom])
@@ -123,7 +126,7 @@ export function useTimelineViewport({
         }),
       )
     },
-    [duration, pxPerSecondState],
+    [duration, pxPerSecondState, ref],
   )
 
   // Wheel: plain = scroll, Ctrl/Cmd = zoom. See the docstring for why this is not
@@ -153,18 +156,25 @@ export function useTimelineViewport({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [applyZoom, scrollByPx, duration, pxPerSecondState])
+  }, [applyZoom, scrollByPx, duration, pxPerSecondState, ref])
 
   // Follow the playhead, but only when it would otherwise leave the viewport.
+  //
+  // A genuine external-sync effect: the playhead is driven by <video> playback,
+  // which is outside React, and the scroll position is real state a user can also
+  // set by dragging. It cannot be derived during render — "where the user last
+  // scrolled to" is not a function of the current time. Same documented exception
+  // the editor's other media-synced effects take.
   useEffect(() => {
     if (followTime === undefined || viewportWidth <= 0) return
-    setScrollLeft((prev) => scrollToKeepVisible(followTime, { ...v, scrollLeft: prev }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setScrollLeft((prev) =>
+      scrollToKeepVisible(followTime, { duration, pxPerSecond, viewportWidth, scrollLeft: prev }),
+    )
   }, [followTime, pxPerSecond, viewportWidth, duration])
 
   return {
     ...v,
-    ref,
     isZoomed: pxPerSecondState !== null && pxPerSecondState > fit * 1.001,
     zoomIn,
     zoomOut,
