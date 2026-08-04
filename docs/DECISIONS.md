@@ -5,6 +5,71 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-03 — Issue 392: BBC's waveform FORMAT without BBC's waveform BINARY
+
+**What was decided.** Real audio peaks replace the fabricated long-form waveform. The artifact is the
+**BBC `audiowaveform` JSON data format** — min/max pairs, 8-bit, `samples_per_pixel` recorded in the
+file — computed by **ffmpeg + numpy**, both already dependencies. `audiowaveform` itself is NOT
+installed.
+
+**Why the format.** It is the de-facto interchange standard for waveform data and is readable by
+`waveform-data.js` / `peaks.js` if we ever adopt them, so this is not an invented shape.
+8-bit is BBC's own recommendation (smaller, and peaks.js does not read 16-bit).
+Sources: [DataFormat.md](https://github.com/bbc/audiowaveform/blob/master/doc/DataFormat.md),
+[bbc/audiowaveform](https://github.com/bbc/audiowaveform),
+[peaks.js](https://www.npmjs.com/package/peaks.js/v/3.0.0-beta.7).
+
+**Why not the binary.** `audiowaveform` is not in the Debian repositories, and our base image is
+`python:3.12-slim`. Shipping it means fetching a third-party `.deb` at image-build time — supply-chain
+surface plus image weight — to produce bytes numpy already produces from a WAV that ingest has
+already written to local disk ([issue #119](https://github.com/bbc/audiowaveform/issues/119)).
+
+**Why not `ffmpeg showwavespic`.** `ingestion/audio.py:143` already wraps it, is tested, and is the
+WRONG artifact: a raster can be stretched or squeezed but not re-bucketed, so it blurs zoomed in and
+aliases zoomed out. Issue 390 needs data at adaptive density. (Its only callers are 5 tests; whether
+to delete it is left to 390, which will know whether it wants the PNG path at all.)
+
+**The resolution number, and why it is not arbitrary.** `samples_per_pixel = 512` at the 16 kHz mono
+WAV gives **31.25 pairs/second**. The floor is set by zoom, not by looks: BBC data **cannot be zoomed
+in past the resolution it was generated at**, and Issue 390 zooms a ~40 s clip across a ~1100 px
+timeline (27.5 px/s). `MAX_PAIRS = 60_000` caps the artifact so a three-hour podcast coarsens rather
+than emitting megabytes — safe precisely because `samples_per_pixel` travels in the file. A 22-minute
+source is ~330 KB raw / ~90 KB gzipped; the cap first binds at ~32 minutes.
+
+**One artifact on `Video`, not per `Clip`.** A clip is a time window into its parent source, so the
+short-form timeline reads the same file windowed to `[setup_start_s ?? start_s, end_s]`. A per-clip
+copy would store the same samples N times and give #390 two render paths to maintain.
+
+**Scope extended at build time (approved).** The short-form editor moved onto this artifact too,
+deleting a client-side WebAudio decode that fetched the entire rendered mp4 with credentials on every
+clip switch and built an ~8 MB `Float32Array` in a main-thread loop while racing the `<video>` element
+for the same bytes. Leaving it would have meant #390 building its renderer against PCM and then
+rewriting it.
+
+**The honesty rule, made structural.** There is no synthetic fallback anywhere in the pipeline:
+`peakEnvelope` returns `null` rather than a zero-filled array (so "no data" and "measured silence"
+cannot be confused), `Waveform` draws a flat line, and the timeline says *"Waveform unavailable for
+this source"* in words. A new source-scanning gate forbids deriving a bar height from a loop index
+inside `components/editor/`. **A raw-text check for the old literal `(i * 37) % 60` was written and
+then deleted**: it failed on the three comments that quote the generator in order to explain its
+removal — exactly the false-positive mode `sourceScan.ts`'s own docstring warns about — and deleting
+an explanatory comment to satisfy a test is the wrong trade.
+
+**Accepted limitation, documented rather than worked around.** Peaks are computed from `audio_uri`,
+which `purge_stale_source_media` deletes at 72 h. A video whose audio is already purged can therefore
+NEVER get peaks; the backfill stops matching it and `has_peaks` stays false permanently. The
+alternative — retaining audio longer so the backfill can reach it — would weaken a retention promise
+to improve a navigation aid. See `docs/COMPLIANCE.md`.
+
+**Verification note.** The extractor was validated against real ffmpeg-generated audio, not only
+synthetic arrays. That caught a false alarm worth recording: ffmpeg's `sine` source runs at 0.125 full
+scale (−18 dBFS), so a "suspiciously quiet" 16/127 reading was correct rather than a normalisation
+bug. A genuinely full-scale file quantises to exactly 127/−128.
+
+**Date:** 2026-08-03
+
+---
+
 ## 2026-08-03 — Issue 389: the tool routes get their own chrome, and why the disclaimer moved
 
 **What was decided.** `/editor` and `/review` render under a new `ToolChrome` route layout — a

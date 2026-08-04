@@ -5,8 +5,8 @@ queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `d
 (2026-08-03). This file is the live queue.
 
 **Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
-2026-08-03). **Batch B is in progress: #389 is DONE** (the tool-route app shell) — see
-`docs/PROJECT_STATE.md`.
+2026-08-03). **Batch B is in progress: #389 and #392 are DONE** (the tool-route app shell; real
+waveform peaks) — see `docs/PROJECT_STATE.md`. **#390 (Timeline v2) is next.**
 
 > **Batch B order was changed at build time to 389 → 392 → 390 → 391** (user decision, 2026-08-03).
 > #392 is the batch's only live honesty-constraint violation, it is pure backend (zero overlap with
@@ -39,7 +39,7 @@ changes the gut reaction to the product.
 | Batch | Theme | Issues | Size |
 |-------|-------|--------|------|
 | **A** ✅ | Visual credibility — stop reading as a prototype | 384–388, **400** — **ALL DONE 2026-08-03** | days |
-| **B** | Make it an application, not a webpage | **389 DONE**, 392 → 390 → 391 | 1–2 weeks |
+| **B** | Make it an application, not a webpage | **389 ✅ · 392 ✅** — next 390 → 391 | 1–2 weeks |
 | **C** | Close the capability gap | 393–397, **401** | multi-week |
 | **D** | Asset management | 398–399, **402** | ~1 week |
 | **E** | Breadth — scope-call cluster, do not start before D closes | **403–405** | multi-week |
@@ -594,7 +594,12 @@ comments with mentions, notifications — which presumes a server-authoritative 
 ---
 
 ### Issue 392: Replace the fabricated long-form waveform
-- [ ] **Status:** open · **Batch:** B · **Size:** S · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** B · **Size:** S (backend turned out M)
+- **Scope extended at build time** (approved; see `docs/DECISIONS.md` 2026-08-03): the SHORT-form
+  timeline moved onto the same artifact too, deleting the client-side WebAudio decode that fetched
+  the whole rendered mp4 and built an ~8 MB `Float32Array` per clip switch, plus the dead
+  `waveformImageUrl` prop. Leaving it would have meant #390 building its renderer against PCM and
+  then rewriting it.
 
 **What we're doing.** Serving real audio peak data for the long-form source timeline, or rendering an
 honest neutral track when peaks are unavailable. Removing the synthetic amplitude generator.
@@ -628,11 +633,27 @@ own sibling docstring (`Timeline.tsx:38-49`) names Descript/Opus/Riverside wavef
 standard being targeted.
 
 **Acceptance**
-- [ ] Real peak data: precomputed peaks generated server-side (ffmpeg) and served for the source
-- [ ] When peaks are unavailable, render a flat neutral track or the low-opacity placeholder idiom —
-      **never synthetic amplitude**
-- [ ] Peak generation is incremental/cached, not recomputed per page load
-- [ ] Test asserts no synthetic amplitude generator remains in the component
+- [x] Real peak data: precomputed peaks generated server-side and served for the source —
+      `ingestion/peaks.py` emits the **BBC `audiowaveform` JSON format** (the interchange standard)
+      from the 16 kHz WAV ingest already extracts, via ffmpeg + numpy with **no new dependency**;
+      migration 0051 `videos.peaks_uri`, R2 `peaks/{creator_id}/…`, served by
+      `GET /videos/{id}/peaks` (authed byte proxy, `private, immutable`)
+- [x] When peaks are unavailable, render a flat neutral track — **never synthetic amplitude**.
+      Enforced at three layers: `peakEnvelope` returns `null` rather than a zero array (so "no data"
+      cannot be confused with "measured silence"), `Waveform` draws a flat line, and the timeline
+      says *"Waveform unavailable for this source"* in words
+- [x] Peak generation is incremental/cached, not recomputed per page load — computed **once at
+      ingest**, hourly `backfill_video_peaks` for older rows, `staleTime: Infinity` client-side, and
+      `has_peaks` gates the request so a video that will never have one costs zero fetches
+- [x] Test asserts no synthetic amplitude generator remains — `src/test/no-synthetic-waveform.test.ts`,
+      a source-scanning gate (bar height may not derive from a loop index in `components/editor/`;
+      `Waveform.tsx` must be the only painter). **Verified it fires** by reintroducing the old
+      generator
+
+**Known limitation, accepted and documented** (`docs/COMPLIANCE.md`)
+- Peaks derive from `audio_uri`, which is purged at 72h, so a video whose audio is already gone can
+  never get peaks — `has_peaks` stays false permanently and the flat track is shown. Retaining audio
+  longer to enable backfill would weaken a retention promise to improve a navigation aid.
 
 ---
 

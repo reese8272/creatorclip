@@ -4,6 +4,55 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-03 (L25 W2) — Issue 392 DONE: the fabricated waveform is gone
+
+**The batch's only live honesty-constraint violation is fixed.** The long-form "Source timeline" drew
+48 bars at `20 + ((i * 37) % 60)%` — a deterministic arithmetic pattern with no relationship to the
+audio — under a label telling the creator it was their source. It now draws their actual audio, and
+when there is none it draws a flat line and says so in words.
+
+| Layer | What landed |
+|---|---|
+| `ingestion/peaks.py` | BBC `audiowaveform` JSON from the 16 kHz WAV; 512 samples/pixel = 31.25 pairs/s, `MAX_PAIRS` cap; never raises |
+| Migration `0051` | `videos.peaks_uri` (one column on `videos`, none on `clips`) |
+| `worker/tasks.py` | Computed inside the existing WAV block at ingest; hourly `backfill_video_peaks` with advisory lock + Redis failure marker |
+| `routers/videos.py` | `GET /videos/{id}/peaks` byte proxy + `has_peaks` boolean on the list |
+| Frontend | `lib/peaks.ts`, `Waveform.tsx`, `useVideoPeaks`; both timelines on one artifact |
+| Gate | `no-synthetic-waveform.test.ts` — verified it fires |
+
+**Gates.** Backend **2544 passed** / 64 skipped (2516 at Batch A close). Frontend **441 passed / 71
+files** (430 after #389). `tsc -b` clean, lint 0 errors. Playwright **76 passed**; the three pixel
+baselines still pass. ruff · mypy · bandit clean.
+
+**Key decisions** (full reasoning in `docs/DECISIONS.md`):
+- **BBC's format, not BBC's binary.** `audiowaveform` is not in the Debian repos, so shipping it means
+  a third-party `.deb` at image-build time for bytes numpy already produces. numpy and ffmpeg were
+  already dependencies; this issue added none.
+- **Resolution is set by zoom, not by looks.** BBC data cannot be zoomed in past the resolution it was
+  built at, and #390 zooms a ~40 s clip at 27.5 px/s — so 31.25 pairs/s is a floor, not a preference.
+- **One artifact on `Video`.** The clip timeline reads it windowed by `setup_start_s`; a per-clip copy
+  would store the same samples N times and hand #390 two render paths.
+- **Approved scope extension:** the short-form editor moved onto it too, deleting a WebAudio decode
+  that fetched the entire rendered mp4 and built an ~8 MB `Float32Array` per clip switch.
+
+**Accepted limitation, documented not worked around.** Peaks come from `audio_uri`, purged at 72h, so
+a video whose audio is already gone can never get peaks. Retaining audio longer would weaken a
+retention promise to improve a navigation aid.
+
+**Two pre-existing brittle tests fixed** — both asserted on file layout rather than behaviour, and
+both broke on unrelated edits: `test_issue_110` sliced a fixed 6000-character window of
+`_ingest_async` (now `inspect.getsource`), and `test_static` read the Accessibility link out of
+`Footer.tsx`, which #389 had emptied via the `LegalLinks` extraction.
+
+**Verification worth remembering.** The extractor was validated against real ffmpeg audio, not only
+synthetic arrays — which caught a false alarm: ffmpeg's `sine` source runs at 0.125 full scale
+(−18 dBFS), so a "suspiciously quiet" reading was correct rather than a normalisation bug.
+
+**Next:** Issue **390** — Timeline v2, which now has its final waveform contract and a fireable
+`ResizeObserver` fake to test zoom math against.
+
+---
+
 ## 2026-08-03 (L25 W2) — Batch B opens: Issue 389 DONE (the tool routes become an application)
 
 **Editor and Review stopped being scrolling documents.** They now render under a new `ToolChrome`

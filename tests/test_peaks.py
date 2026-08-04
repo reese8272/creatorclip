@@ -93,6 +93,27 @@ def test_resolution_coarsens_instead_of_growing_without_bound() -> None:
     assert spp % DEFAULT_SAMPLES_PER_PIXEL == 0
 
 
+def test_zero_length_source_falls_back_to_the_default_resolution() -> None:
+    assert samples_per_pixel_for(0) == DEFAULT_SAMPLES_PER_PIXEL
+    assert samples_per_pixel_for(-1) == DEFAULT_SAMPLES_PER_PIXEL
+
+
+def test_non_16bit_audio_is_refused_rather_than_misread(tmp_path: Path) -> None:
+    """An 8-bit WAV read as int16 would produce garbage that LOOKS like a waveform.
+
+    `extract_audio_wav` always writes pcm_s16le today, but this is the guard that
+    keeps a future change to those ffmpeg flags from silently rendering noise over
+    the creator's audio instead of failing to a flat track.
+    """
+    path = tmp_path / "eight_bit.wav"
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(1)  # 8-bit
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(bytes(DEFAULT_SAMPLES_PER_PIXEL * 4))
+    assert compute_peaks(path) is None
+
+
 def test_default_resolution_supports_issue_390_zoom() -> None:
     """>=28 pairs/s, because BBC data cannot be zoomed in past its resolution.
 
