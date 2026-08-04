@@ -1643,8 +1643,13 @@ reading-proficiency research, whose width also works against the void-heavy layo
 - [x] Full unit suite green on node 22 (600/600), tsc + eslint clean (one pre-existing warning logged
       off-course), production build green
 - [x] `docs/UI.md` typography section + `docs/DECISIONS.md` updated
-- [ ] e2e visual snapshots regenerated on the CI runner (`--update-snapshots`) — every screen's text
-      changes, so the first CI run after merge must refresh baselines
+- [x] e2e visual snapshots regenerated on the CI runner — all six baselines committed (`5c6861d`)
+      and a plain CI dispatch (run 30960808300) is 12/12 green against them. Two process defects
+      were found and fixed en route: the captures raced webfont loading (fixed: force-load both
+      families + `document.fonts.ready` in `smoke.spec.ts`), and the regen dispatch used
+      changed-mode `--update-snapshots`, which silently keeps any stale baseline inside the 1%
+      diff tolerance (fixed: `--update-snapshots=all` in `ci.yml`) — a fallback-font
+      `login-desktop.png` had survived two "regenerations" that way
 
 ---
 
