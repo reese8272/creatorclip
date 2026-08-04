@@ -5,6 +5,43 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-04 — Issue 391 (PR B): the render reads the document, and `segments` is deleted
+
+**What was decided.** `POST /clips/{id}/cuts` takes `base_revision` and nothing else. The pre-391
+`segments` body — and the `CutSegmentIn` model behind it — is **removed**, not deprecated.
+
+**Why delete rather than keep both.** A compatibility branch on this endpoint is not free: it is a
+second, independently-validated route into a **paid, flag-gated, budget-checked** render. Two routes
+means two places for a validation gap, and the whole point of the change is that the rendered list
+and the saved document cannot disagree. Keeping `segments` would preserve exactly the divergence the
+issue exists to close. It was carried for one commit purely so the server could ship before the
+client, then removed in the next — the shortest window that still allows the two to land separately.
+
+**A 409 on export is the right answer, not a merge.** If the document has moved on since the client
+last read it, the server refuses rather than rendering the older list. Rendering it would spend a
+paid render slot on work the creator has already replaced in another tab, and they would have no
+signal that it happened.
+
+**Two races found while wiring the client, both fixed at the design level:**
+
+- **`flush()` had to become awaitable.** It was fire-and-forget, so export could post `base_revision`
+  while the matching PUT was still in flight — the server would then render the *previous* document,
+  with the creator's last edits silently missing from a paid render. It now drains (a save can
+  re-fire itself), bounded so a pathological retry cannot hang the export button.
+- **The revision had to be a getter, not a value.** Reading it off `query.data` looked natural but
+  that value never advances under `staleTime: Infinity` with no invalidation — every export after
+  the first save would have 409ed against a base the client itself had moved past. `getRevision()`
+  reads the live ref; every caller is an event handler, so there is nothing to re-render for.
+
+**`/clean/confirm` clears the document; `/clean/discard` does not.** Confirm bakes the edit into
+`render_uri`, so the cuts have been applied and leaving them would make the next export cut the same
+spans out of an already-shortened render. Discard means the creator *rejected* that render — their
+cuts still describe an edit that was never applied, and clearing would delete work they never got.
+The clear runs in the same transaction as the swap, and returns the new revision so the client
+adopts it rather than discovering the bump as a 409 on its own next autosave.
+
+---
+
 ## 2026-08-04 — Issue 391 (PR A): edit persistence — three deviations
 
 **What was built.** `clip_edit_documents` (one row per clip, JSONB `doc` + integer `revision`),

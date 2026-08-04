@@ -1,9 +1,8 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-04 (Lane **L25 Batch B** — **389, 392, 390 MERGED + DEPLOYED**; **391 remains**)
-**Branch:** `main` @ **`67fe4db`** — PR **#70** merged 2026-08-04. `main` and `staging` are both at `67fe4db`.
-`wave/l25-batch-b` is merged and kept at `6c53578`; nothing is left on it.
-**Prod DB head:** **`0051_video_peaks`** — `0050` → `0051` applied on the PR #70 deploy. Repo head is `0051`.
+**Last updated:** 2026-08-04 (Lane **L25 Batch B — COMPLETE**; Issue **406** closed)
+**Branch:** `feat/391-render-from-document` @ **`a2d898a`** — 2 code commits, **PR B not yet opened**
+**Trunk:** `main` and `staging` both at **`002473b`**. Prod DB head **`0052_clip_edit_documents`**.
 **Prod:** `GET https://autoclip.studio/health` → **200**, postgres/redis/storage `ok`.
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
@@ -12,169 +11,75 @@
 
 ## CURRENT FOCUS
 
-**Batch B part 1 is shipped.** #389 (tool-route app shell), #392 (real waveform peaks) and #390
-(Timeline v2) merged as **PR #70** and deployed to `autoclip.studio`. **#391 (server-side edit
-document + undo/redo) is the only Batch B issue left** — it was deliberately held out of that PR
-because it touches the **paid** render path and deserves its own review.
+**Batch B is finished.** 389 (app shell), 392 (real peaks), 390 (Timeline v2) shipped in PR #70;
+391 (edit persistence) shipped in PR #71 with migration `0052`. Issue **406** cleared the dependency
+advisories, so **Layer 0 is fully green for the first time in the lane**.
+
+What remains on this branch is **Issue 391 PR B** — the render path reading the edit document. It is
+built and green locally; it has not been pushed or opened.
 
 ### → NEXT ACTION
 
-1. **Build #391 as its own PR** off fresh `main` (`67fe4db`). The plan is written and approved in full
-   detail at `/home/reese/.claude/plans/yes-but-ensure-a-agile-glacier.md` (**Part 2**) — it carries the
-   table schema, the atomic `ON CONFLICT … WHERE revision = :base_revision` upsert, the snapshot
-   command stack, the 800ms-trailing / 2s-max-wait autosave state machine, and these confirmed
-   decisions:
-   - the render path **READS the document** via `base_revision` (time-boxed `segments` fallback,
-     deleted inside the same issue)
-   - autosave takes any **structurally** valid document; the 5s-kept / 85%-removed caps stay at export
-   - a stale revision is an **explicit user choice**, never an auto-merge
-   - `POST /clean/confirm` must **clear** the document; `/clean/discard` must **not**
-   - **Re-check `alembic heads` before writing `0052`** — head is **`0051`** as of this deploy.
-   - `0052` **must use the hardened GUC form**, not the bare `::uuid` cast that `0048`/`0049` still
-     carry (see OPEN, LOGGED, NOT FIXED #2).
+1. **Push and open PR B.**
+   ```bash
+   git push -u origin feat/391-render-from-document
+   gh pr create --base main --title "Issue 391 (PR B): render from the edit document"
+   ```
+   **No migration** — `0052` shipped in PR A, so this is code-only. Expect 12/12 green: the
+   `pip_audit` job that was red all lane is fixed.
 
-2. **Issue 406 — clear the 6 `pip-audit` advisories.** Small, unblocked, and it turns the one red CI
-   gate green. Bump `aiohttp` 3.14.1 → **3.14.3** and `cryptography` 48.0.1 → **50.0.0**.
-   Full per-CVE triage is in the issue; the short version is below.
+2. **Then Batch C — close the capability gap (393–397, 401).** **#393 (client-side cut preview) is
+   the natural first pick**: it is directly unblocked by 391, since a server-authoritative document
+   is exactly what lets preview be the fast path while the server keeps the truth used at export.
 
 3. **Before any local gate run:** `export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH`
-   and run every frontend command **from `frontend/`** (see CONSTRAINTS — both bit last session).
+   and run every frontend command **from `frontend/`**.
 
-**The one red gate: `pip_audit fail 6` — merged knowingly, NOT a regression.** The same
-`requirements.txt` pins were already on `main`, so PR #70 neither introduced nor worsened it. Now
-tracked as **Issue 406** (promoted out of `docs/OFF_COURSE_BUGS.md`). Triaged before merging:
-
-- It reads **6, not 7** — the pytest advisory is **already** justified in
-  `pyproject.toml [tool.pip-audit].ignore-vulns`. **Leave that entry alone.**
-- **None of the 6 has a live exposure path.** Both aiohttp WebSocket CVEs need a server or a live
-  socket; `ingestion/transcribe.py:130-150` uses Deepgram **prerecorded REST** and never constructs
-  the streaming client. All three cryptography CVEs are X.509 path validation / PKCS#7, and this
-  codebase imports **only** `Fernet`/`MultiFernet`.
-- The exception worth caring about is aiohttp **`CVE-2026-69244`** (OOB heap read while formatting an
-  error for a malformed response) — needs a hostile/faulty response from Deepgram or Voyage. Low, real.
-- **The fix is unconstrained.** `aiohttp` is transitive-only (`deepgram-sdk>=3.9.1`, `voyageai`
-  unpinned); `cryptography` shows `Required-by:` **nothing**. Issue 406 forbids adding to
-  `ignore-vulns` — both have a fix inside our compatible range, so neither qualifies as accepted risk.
+**Gates on `a2d898a`:** backend **2581** · frontend **595 / 83 files** · Playwright **76** ·
+coverage **83.31** · ruff/mypy/bandit/**pip_audit all 0**. Integration/RLS needs Docker, which this
+box lacks — **CI-verified only; say so rather than claiming it passed.**
 
 ---
 
-## WHAT WORKS NOW (verified on `67fe4db` — do not re-investigate)
+## WHAT ISSUE 391 ACTUALLY SHIPPED
 
-**PR #70 CI: 11 of 12 jobs green.** Unit, integration (postgres+redis), coverage floor, frontend,
-Playwright smoke+a11y, **visual regression**, Squawk migration lint, Docker build, clip eval, ruff,
-flake detection all passed. Static job reported `ruff 0 · mypy 0 · bandit {high:0, medium:0} ·
-freshness ok · pip_audit fail 6`. **The visual baselines did NOT need regenerating** — that was
-predicted and did not happen; they passed unchanged despite #389/#390 moving tool-route layout.
+**PR A (merged, #71).** `clip_edit_documents` — one row per clip, JSONB `doc` + integer `revision`,
+both FKs cascading. `GET`/`PUT /clips/{id}/edit-document` following the `PATCH /clips/{id}`
+precedent (no flag, no budget, no balance check — *a creator at zero must still be able to save*).
+Snapshot undo/redo. 800ms-trailing / **2s max-wait** autosave. localStorage demoted to a one-time
+import plus a paint cache.
 
-**Deploy chain green end to end:** preflight → migrations → roll out → smoke test (auto-rollback
-armed, not triggered) → old-image cleanup.
+**PR B (this branch).** The render posts only `base_revision`; the server renders its own document
+at that revision or 409s. `/clean/confirm` clears the document in the same transaction as the swap
+and reports the new revision; `/clean/discard` does not. The legacy `segments` body is **deleted**.
 
-The gate table below was measured on `59dd586`, the last pre-merge commit, and the two docs commits
-after it changed no code.
+### Facts worth not re-deriving
 
-| Gate | Value |
-|---|---|
-| Backend pytest | **2546 passed**, 64 skipped (2516 at Batch A close) |
-| Frontend vitest | **549 passed / 78 files** (409 / 64 at Batch A close) |
-| Playwright | **76 passed** — desktop **and** mobile, incl. axe on **both** editor routes |
-| `tsc -b` · `npm run lint` · `npm run build` | clean · **0 errors** (1 pre-existing warning in `useStageStream.ts`) · clean |
-| ruff · ruff format · mypy | 0 · clean · 0 |
-| coverage | **83.08%** (floor 83.00) |
-| module floors | **clip_engine 92.72** (floor 91.0) · preference 90.45 · crypto/limiter/auth 100.0 |
-| bandit · pip-audit | 0/0 · **FAIL 6 — pre-existing** (see CURRENT FOCUS) |
-| Clip-quality eval | **53 passed** — and green **by construction**: the 390 range touches no Python (`git diff 73c3223..HEAD -- clip_engine worker routers models.py alembic ingestion tests` is empty) |
-| PR #70 diff | **84 files, +7069 / −1653** of code, 29 commits total |
-| Live prod | `GET /health` **200** — postgres/redis/storage `ok`; **last deploy = PR #70 (Batch B part 1)** |
-
-### The 29 commits, by kind
-
-8 × `feat(390)` · 4 × `feat(392)` · 4 × `feat(389)` · 3 × `refactor(389)` · 2 × `fix(390)` ·
-1 each `test(389)`, `refactor(390)`, `docs(389)`, `docs(392)`, `docs(390)`, plus 2 docs commits at
-PR time (the handoff refresh and the Issue 406 filing).
-
----
-
-## WHAT EACH ISSUE ACTUALLY SHIPPED
-
-### #389 — the tool routes became an application
-
-`100dvh`, no page scroll, independently scrolling panels, one `<main>`, honesty statement docked.
-
-- **`components/ToolChrome.tsx`** — `flex min-h-dvh flex-col lg:h-dvh lg:overflow-hidden`, sets
-  `--app-bottom-inset`. **`components/layout/ToolShell.tsx`** owns the single `<main>` + status bar.
-- **The split is not stylistic.** `Editor.test.tsx:103-113` renders `<Editor/>` **standalone, with no
-  layout element**, and asserts the disclaimer — and an acceptance criterion required that stay green.
-  So the disclaimer lives in the **page tree** (`ToolShell`), not the route layout (`ToolChrome`).
-  There is a `// WHY` comment at the site. **Do not "simplify" it back into one component.**
-- **`lib/toolLayout.ts`** — three player-width constants derived from `100dvh`. Read the ⚠ comment:
-  **this project's root font-size is ~14.39px, NOT 16px.** A value derived at 16px/rem comes out ~10%
-  short and the viewer card silently overflows, clipping the meta row below the fold. All three were
-  **measured in Chromium at 1440×900**, not estimated. `EDITOR_PLAYER_W` was re-measured
-  30.5rem → **31.5rem** after #390's zoom toolbar + ruler cost the region grid ~13px.
-  They are **complete literal class strings on purpose** — Tailwind v4 scans `.ts` as plain text, so
-  a string built by concatenation emits no CSS at all.
-- **`components/LegalLinks.tsx`** — one href list consumed by both `Footer` and `ToolStatusBar`.
-- **`ShortFormEditor.tsx`** extracted from `Editor.tsx` (700 → 181 lines).
-- Gates: `pages/toolRoutes.shell.test.tsx` (table-driven over 9 route branches: exactly one `<main>`,
-  disclaimer exactly once, one legal-link set) + `e2e/tool-shell.spec.ts` (7 geometric assertions
-  incl. "chrome stays put while a panel scrolls").
-
-### #392 — the fabricated waveform is gone
-
-- **`ingestion/peaks.py`** — `compute_peaks(wav_path) -> dict | None`, **never raises**. BBC
-  `audiowaveform` JSON format (interleaved min/max pairs, 8-bit). `DEFAULT_SAMPLES_PER_PIXEL = 512`,
-  `MAX_PAIRS = 60_000`, block-reads at `1 << 20` samples so a 3-hour source never materialises ~345 MB.
-- **`alembic/0051_video_peaks`** — nullable `videos.peaks_uri`. No new RLS policy (existing table).
-- R2 prefix **`peaks/{creator_id}/{video_id}.json`** — creator-scoped so `DELETE /auth/me` reaches it.
-- **`lib/peaks.ts`** — `peakEnvelope` uses **max-of-bucket**, not mean, and returns **`null`** (not
-  zeros) with no data. **`components/editor/Waveform.tsx`** draws an honest flat line on `null`, and
-  both editors say *"Waveform unavailable — the audio is past its retention window"* in words.
-  `useVideoPeaks` is gated on `has_peaks`, `staleTime: Infinity`, `retry: false`.
-- **`src/test/no-synthetic-waveform.test.ts`** — a structural gate asserting `getContext('2d')`
-  appears in **exactly** `['/src/components/editor/Waveform.tsx']`. It is **AST-based** (TypeScript
-  AST over `import.meta.glob('?raw')`) because it false-positived on *comments* twice.
-  **Never weaken it to `toContain`** — that is how a fake waveform sneaks back.
-- Verified against real ffmpeg audio. (False alarm caught: ffmpeg's `sine` runs at 0.125 full scale
-  / −18 dBFS, so a measured peak of 16/127 was correct, not a bug.)
-
-### #390 — the timeline became an editor
-
-New pure modules (all in `lib/`, deliberately outside `components/editor/` so the waveform gate can't
-see them): **`timelineZoom.ts`** (24 tests; `ZOOM_FACTOR=2`, `MAX_PX_PER_SECOND=4000`,
-`zoomAtAnchor`, `niceTickInterval`) · **`timelineInteraction.ts`** (`EDGE_GRAB_PX=6`,
-`SNAP_THRESHOLD_PX=8`, binary-searched `snapTime`) · **`editorCuts.ts`** · **`keyboard.ts`**.
-Hooks: **`useTimelineViewport.ts`**, **`useEditorShortcuts.ts`**. Components:
-**`TimelineRail.tsx`** (the shared surface), **`TimelineRuler.tsx`** (DOM only, `aria-hidden`),
-**`MasterTimeline.tsx`** (promoted out of `LongFormEditor`).
-
-Load-bearing facts to not re-derive:
-
-- **`role="slider"` on the container was a live production defect.** MDN: `role="slider"` forces
-  **every descendant to `presentation`** — it was swallowing the waveform's `role="img"` and every
-  cut label. Now W3C APG multi-thumb: the rail is `role="group"`, each thumb its own `role="slider"`.
-- **The snap threshold is in PIXELS, converted at use.** That is what makes the feel identical at
-  every zoom — the acceptance criterion made structural.
-- **The shortcut bus is a module singleton on the CAPTURE phase**, with a LIFO scope stack.
-  Capture, not bubble, because `VideoPlayer` mounts before `Timeline` and would win ←/→ on
-  registration order alone. Handlers refresh in an **effect**, never during render.
-- **`onKeyDownCapture` on the ScrubBar had to be deleted.** `stopPropagation()` in the *capture*
-  phase also kills the target's own bubble handler — **ScrubBar arrow keys had never worked**. I wrote
-  a test expecting a *double* seek; it failed reporting *no* movement. Both layers now bail on
-  `e.defaultPrevented`.
-- **`mergeAdjacent` was mutating caller-owned objects** through a shallow `.slice()`, so today's
-  single-level undo was *already* wrong for merged cuts. Now pure; the merged survivor keeps the
-  **earlier** id. Pinned with `Object.freeze`.
-- **`EditorCut` gained `id: string`**; `indices` became optional. `key={idx}` → `key={c.id}`.
-- **`clientXToTime` read a stale state width.** Before any ResizeObserver fires, `fit` collapses to
-  `MIN_PX_PER_SECOND` and x=10 on a 300s source returned **300s instead of 30s**. It now reads the
-  **live rect**, like its siblings. Fixed *before* `MasterTimeline` adopted the hook.
-- **The measured element, the pointer handlers and `railTestId` must stay the SAME element** —
-  `Editor.test.tsx` spies on exactly one element's rect; no wrapper may come between them.
-- **`src/test/rect.ts`** — `rect()` / `stubRect()` (per-element) / `withMeasuredRender()`.
-  Natively dispatched `KeyboardEvent`s need an explicit `act()`; ruler assertions need
-  `flushResizeObservers` first. `vite.config.ts` gained `restoreMocks: true`.
-- Deleted **`components/review/TranscriptEditor.tsx`** — verified dead, and it carried a second copy
-  of the buggy `mergeAdjacent`.
+- **The compare-and-set is `ON CONFLICT DO UPDATE … WHERE revision = :base_revision`.** Per the
+  Postgres manual a row locked but not updated because that condition failed is **not returned**, so
+  zero rows back *is* the stale signal — no second read. Verified by compiling the statement.
+- **A stored row is always at `revision >= 1`**, which is what makes `revision: 0` a meaningful
+  "no document yet" sentinel — and what lets the PUT detect the INSERT branch firing under a
+  non-zero base (a vanished row) and 409 instead of resurrecting it under a new lineage.
+- **The save validator deliberately does NOT apply the render caps.** A work-in-progress edit is
+  routinely past 85%-removed; refusing to *save* it would destroy the work. A test pins that a
+  90%-removed document saves 200 while the same cuts fail at render. **Do not "fix" the split.**
+- **`indices` is derived and never persisted** — a pure function of (times, transcript), and the
+  transcript is server-owned and mutable. Recomputed on load. Only safe because #390 made committed
+  times land on snapped word boundaries.
+- **The query is the SEED, not the state.** `useEditDocument` does not invalidate on save, deviating
+  from TanStack's documented pattern and from `useApplyClipMetadata`: between a PUT leaving and its
+  200 arriving the creator has made more edits, so refetching would visibly revert them.
+- **`flush()` is awaited by export, and drains.** Fire-and-forget would render the previous document.
+- **`getRevision()` is a getter, not a value** — `query.data.revision` never advances under
+  `staleTime: Infinity`, so a snapshot would 409 every export after the first save.
+- **`pending_clean_or_edit` lives on the render POST and NOWHERE else.** It is a render-queue
+  invariant; putting it on the document PUT would block saves while a render is pending, which is
+  the exact failure this issue removes. An AST test pins both halves.
+- **The RLS clean-deny sweep used to hardcode `("clips","signals")`** instead of iterating the tenant
+  tables — which is why the `0048`/`0049` bare-`::uuid` regression survived. It now sweeps every
+  policied table, and every listed table is **seeded** (the assertion is vacuous on an empty table).
+  `0052` repairs both policies.
 
 ---
 
@@ -196,10 +101,16 @@ Load-bearing facts to not re-derive:
    PR a coherent, reviewable deliverable: the routes became an app, the waveform became real, and the
    timeline became an editor. Persistence is a distinct, riskier change — it touches the **paid**
    render path.
-7. **2026-08-04 — pushed, reviewed, merged, deployed.** CI ran on the branch for the first time and
-   came back 11/12 (the predicted visual-baseline regeneration turned out to be unnecessary). The one
-   red gate was triaged per-CVE rather than waved through, promoted to **Issue 406**, and merged past
-   on the grounds that `main` already carried the identical pins. `staging` fast-forwarded to match.
+7. **2026-08-04 — Batch B part 1 merged (PR #70) and deployed.** CI came back 11/12; the predicted
+   visual-baseline regeneration turned out to be unnecessary. The one red gate was triaged per-CVE
+   rather than waved through and promoted to **Issue 406**.
+8. **Issue 391 split into two PRs at plan time**, because the render path is paid, flag-gated and
+   budget-checked. PR A (additive, migration `0052`) merged as **#71** and deployed.
+9. **Issue 406 done before PR B, deliberately** — PR B is the SEV1 change of the lane, and reviewing
+   it against a matrix with a permanently-red job is how a real regression hides behind an expected
+   one. 12/12 green afterwards.
+10. **PR B built.** Two races on the paid path surfaced during the wiring — neither in the plan —
+   and both are mutation-checked. Batch B is complete.
 
 ---
 
@@ -209,8 +120,8 @@ Load-bearing facts to not re-derive:
 |---|---|
 | Repo | `github.com/reese8272/creatorclip` |
 | Production | `https://autoclip.studio` — VM + docker-compose + Cloudflare tunnel (**not** Render) |
-| Branches | `main`, `staging` — both at **`67fe4db`**; `wave/l25-batch-b` @ `6c53578` is merged and inert |
-| Last merged PR | **#70** — L25 Batch B part 1 (2026-08-04) |
+| Branches | `main`, `staging` — both at **`002473b`**. Merged branches were deleted 2026-08-04; only `feat/391-render-from-document` is live |
+| Last merged PR | **#72** — Issue 406 dependency advisories (2026-08-04). #71 = 391 PR A, #70 = Batch B part 1 |
 | Staging sync | after any merge to `main`: `git push origin origin/main:staging` (`docs/BRANCHING.md`) |
 | Deploy chain | push to `main` → `docker-publish.yml` → `deploy.yml` (staging gate → prod) |
 | Baseline regen | `gh workflow run ci.yml -f update_snapshots=true --ref <branch>` → `gh run download <id> -n visual-baselines-<sha>` |
@@ -218,10 +129,10 @@ Load-bearing facts to not re-derive:
 | Python | `.venv/bin/python` (system `python3` lacks pydantic) |
 | Redis for unit lane | `redis-server --daemonize yes --save '' --appendonly no` |
 | Layer 0 | `.venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py` |
-| Alembic head | **`0051_video_peaks`** — repo and prod DB are **in sync** as of the PR #70 deploy |
+| Alembic head | **`0052_clip_edit_documents`** — repo and prod DB **in sync** as of the PR #71 deploy |
 | R2 prefixes added | `posters/{creator_id}/…` (387) · **`peaks/{creator_id}/…`** (392) — both creator-scoped |
 | Beat tasks added | `backfill-video-posters-hourly` (387) · **`backfill-video-peaks-hourly`** (392) |
-| #391 plan | `~/.claude/plans/yes-but-ensure-a-agile-glacier.md` — **Part 2** |
+| #391 plan | `~/.claude/plans/the-final-issue-391-zippy-lampson.md` (supersedes the older `yes-but-...` Part 2, which predated #390 merging) |
 | Secrets | `.env` on the VM; `TOKEN_ENCRYPTION_KEY` rotation in `docs/RUNBOOKS.md`. **Names only — never values.** |
 
 ---
@@ -303,15 +214,15 @@ Load-bearing facts to not re-derive:
 
 Canonical list is `docs/OFF_COURSE_BUGS.md`. The ones most likely to matter next:
 
-1. ~~**`pip_audit` FAIL 6**~~ — **promoted to Issue 406** on 2026-08-04, with a per-CVE triage. Still
-   red in CI until 406 is built; see CURRENT FOCUS for why it was safe to merge past it.
+1. ~~**`pip_audit` FAIL 6**~~ — **RESOLVED 2026-08-04, Issue 406** (PR #72). aiohttp 3.14.3,
+   cryptography 50.0.0; nothing added to `ignore-vulns`, no baseline moved. Layer 0 is fully green.
 2. **The prod deploy runs migrations with NO safety dump.** PR #70's deploy annotated *"No
    `BACKUP_R2_BUCKET` configured — skipping pre-migration dump (**Issue 256** not yet activated).
    Migrating WITHOUT a safety dump."* `0051` was additive and nullable so the exposure was small, but
    **#391's `0052` is not that** — activate 256 before shipping a migration that can lose data.
-3. **`0048` / `0049` use the bare `::uuid` GUC cast** — the exact form `0045` replaced. A reused
-   pooled connection can 500 instead of cleanly denying. `0049` also grants nothing.
-   **#391's `0052` must not copy them.**
+3. ~~**`0048` / `0049` use the bare `::uuid` GUC cast**~~ — **RESOLVED 2026-08-04** by migration
+   `0052`, which also adds their missing `GRANT`s. The clean-deny sweep now iterates every policied
+   table instead of a hardcoded pair, which is what would have caught it.
 4. **`/settings` has pre-existing serious contrast failures** (2.14–2.54:1) from the 2026-06-23 "Soon"
    preview rows — decorative disabled mocks under `pointer-events-none opacity-50`, which halves
    contrast while leaving fake controls in the accessibility tree. **This is why `settings` is the one

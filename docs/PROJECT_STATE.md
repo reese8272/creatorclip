@@ -4,6 +4,63 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-04 — Issue 391 PR B: the render reads the document. **BATCH B IS COMPLETE.**
+
+**Branch `feat/391-render-from-document`, 2 code commits.** The last piece of Lane L25 Batch B.
+`POST /clips/{id}/cuts` now sends only `base_revision`; the server renders whatever its own document
+holds at that revision, or 409s. "What I exported" and "what I last saved" are the same thing by
+construction rather than by hoping two copies agreed.
+
+**Everything else on that endpoint is untouched** — 202, `require_flag("render_intake")`,
+`require_budget`, `check_positive_balance`, both rate limits, the `render_uri` 400, and the
+`pending_clean_or_edit` 409. That last guard stays on the render POST and *nowhere else*: it is a
+render-queue invariant, not an editing one, and blocking saves while a render is pending is the
+"work destroyed" class this issue removes. **Saving is always allowed; exporting is gated.** Both
+halves are now pinned by an AST test over the handler source.
+
+**Two races on the paid path were found while wiring it. Neither was in the plan.**
+
+1. **`flush()` was fire-and-forget.** Export posts `base_revision`, so returning while the matching
+   PUT was still in flight would have the server render the *previous* document — the creator's last
+   edits silently missing from a render they paid for. It now returns a promise and **drains**
+   (a save can re-fire itself via `pendingAfterFlight`), bounded at 8 iterations so a pathological
+   retry cannot hang the export button. Falling out early is safe: the server 409s on the stale
+   revision rather than rendering the wrong list.
+2. **The revision was going to be a value read off `query.data`.** That never advances under
+   `staleTime: Infinity` with no invalidation, so every export *after the first save* would have
+   409ed against a base the client itself had moved past. It is a `getRevision()` getter reading the
+   live ref — correct because every caller is an event handler.
+
+Both are mutation-checked, as is the `pending_clean_or_edit` guard.
+
+**`/clean/confirm` clears the document in the SAME transaction as the swap** — a crash between the
+two must not leave a render whose cuts are applied and a document that still describes them — and
+returns the new revision so the client adopts it instead of discovering the bump as a 409 on its own
+next autosave. `/clean/discard` deliberately does not clear; a test asserts the table is not
+mentioned at all.
+
+**The legacy `segments` body is deleted, not deprecated.** Leaving it would keep a second,
+unvalidated way to drive a paid render. `CutSegmentIn` went with it; the existing cuts tests were
+rewritten to drive their lists through the document.
+
+**Gates.** Backend **2581 passed**. Frontend **595 / 83 files**. Playwright **76**. Layer 0 **fully
+green** — coverage **83.31**, `pip_audit 0`, crypto 100.0. Integration/RLS needs Docker — CI only.
+
+### Batch B, closed
+
+| Issue | What it did |
+|---|---|
+| **389** | The tool routes became an application — `100dvh`, no page scroll, docked honesty statement |
+| **392** | The fabricated waveform became real audio, or honestly absent |
+| **390** | The timeline became an editor — zoom, drag, snap, keyboard |
+| **391** | The edit stopped being browser state — server document, unbounded undo, autosave |
+
+**Next: Batch C — close the capability gap (393–397, 401).** #393 (client-side cut preview) is
+directly unblocked by this issue: with the document authoritative server-side, preview can be the
+fast path while the server keeps the truth used at export.
+
+---
+
 ## 2026-08-04 — Issue 406 DONE: the `pip_audit` gate is green again
 
 `aiohttp` 3.14.1 → **3.14.3**, `cryptography` 48.0.1 → **50.0.0**. Layer 0 is now **fully green** —
