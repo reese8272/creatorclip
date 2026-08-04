@@ -5,6 +5,7 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { fitTier } from '@/lib/fit'
 import { EDITOR_PLAYER_W } from '@/lib/toolLayout'
+import { WAVEFORM_UNAVAILABLE_MESSAGE } from '@/lib/peaks'
 import { Timeline } from '@/components/editor/Timeline'
 import { FitBadge } from '@/components/ui/fit-badge'
 import { Button } from '@/components/ui/button'
@@ -553,6 +554,12 @@ export function ShortFormEditor({
             peaks={peaks}
             sourceStartS={sourceStartS}
           />
+          {/* The long-form timeline says this outright; before Issue 410 the
+              short-form rail only said it via ariaLabel, so sighted users saw
+              an unexplained empty band. */}
+          {!peaks && (
+            <p className="mt-1 text-label text-subtle">{WAVEFORM_UNAVAILABLE_MESSAGE}</p>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button variant="secondary" size="sm" disabled={!canUndo} onClick={undo}>
               Undo
