@@ -450,9 +450,68 @@ function json(route: Route, body: unknown, status = 200): Promise<void> {
   return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function dispatch(route: Route, seed: Seed): Promise<void> {
+/** Seed for the per-page edit-document state (Issue 409). */
+export interface EditDocSeed {
+  revision: number
+  doc: { version: number; cuts: { id: string; start_s: number; end_s: number }[]; last_applied_at: null }
+}
+
+/** Default mirrors the real server for an unedited clip: a synthesised empty
+ * document at revision 0. Deliberately visual-noop so every existing spec and
+ * pixel baseline renders exactly as before; specs that need a stored document
+ * override the `editDocSeed` option. */
+const EMPTY_EDIT_DOC: EditDocSeed = {
+  revision: 0,
+  doc: { version: 1, cuts: [], last_applied_at: null },
+}
+
+interface MockCtx {
+  editDoc: { revision: number; doc: unknown }
+  unmatchedGets: string[]
+}
+
+async function dispatch(route: Route, seed: Seed, ctx: MockCtx): Promise<void> {
   const { pathname } = new URL(route.request().url())
   const method = route.request().method()
+
+  // Server-side edit document (Issue 391): GET hydrates, PUT compare-and-sets
+  // and advances the revision — the same contract as routers/clips.py, so the
+  // autosave → Saved loop runs for real instead of against the catch-all `{}`.
+  if (/^\/clips\/[^/]+\/edit-document$/.test(pathname)) {
+    const clipId = pathname.split('/')[2]
+    if (method === 'PUT') {
+      const body = route.request().postDataJSON() as { base_revision: number; doc: unknown }
+      if (body.base_revision !== ctx.editDoc.revision) {
+        return json(
+          route,
+          {
+            detail: {
+              code: 'stale_revision',
+              revision: ctx.editDoc.revision,
+              doc: ctx.editDoc.doc,
+            },
+          },
+          409,
+        )
+      }
+      ctx.editDoc.revision += 1
+      ctx.editDoc.doc = body.doc
+      return json(route, {
+        clip_id: clipId,
+        revision: ctx.editDoc.revision,
+        doc: ctx.editDoc.doc,
+        updated_at: '2026-08-04T00:00:00+00:00',
+        clip_duration_s: 40,
+      })
+    }
+    return json(route, {
+      clip_id: clipId,
+      revision: ctx.editDoc.revision,
+      doc: ctx.editDoc.doc,
+      updated_at: null,
+      clip_duration_s: 40,
+    })
+  }
 
   // Waveform peaks (Issue 392). Only v1 has them; every other video 404s, which
   // is the normal terminal state the editor draws a labelled flat track for.
@@ -516,21 +575,47 @@ async function dispatch(route: Route, seed: Seed): Promise<void> {
   // Static GETs.
   if (method === 'GET' && pathname in GET_TABLE) return json(route, GET_TABLE[pathname])
 
-  // Anything else (POST actions, unmodeled GETs): benign 200 so initial render
-  // never throws. Interaction-driven flows get their own specs later.
+  // Anything else (POST actions): benign 200 so initial render never throws.
+  // Unmodeled GETs are RECORDED and surfaced at page teardown — a GET falling
+  // through here fed the editor `{}` for a whole batch before anything noticed
+  // (Issue 409). Specs can assert on the `unmatchedGets` fixture directly.
+  if (method === 'GET') ctx.unmatchedGets.push(pathname)
   return json(route, {}, 200)
 }
 
-// Extended test with an auto-applied API mock. `seed` is an overridable option.
-export const test = base.extend<{ seed: Seed }>({
+// Extended test with an auto-applied API mock. `seed` and `editDocSeed` are
+// overridable options; `unmatchedGets` exposes every GET the mock had no
+// modelled answer for.
+export const test = base.extend<{
+  seed: Seed
+  editDocSeed: EditDocSeed
+  unmatchedGets: string[]
+}>({
   seed: ['authed', { option: true }],
-  page: async ({ page, seed }, use) => {
+  editDocSeed: [EMPTY_EDIT_DOC, { option: true }],
+  // Playwright requires the object-destructuring pattern on fixture functions,
+  // including dependency-less ones — `{}` is its documented idiom, so the
+  // eslint rule loses this one.
+  // eslint-disable-next-line no-empty-pattern
+  unmatchedGets: async ({}, use) => {
+    await use([])
+  },
+  page: async ({ page, seed, editDocSeed, unmatchedGets }, use) => {
+    const ctx: MockCtx = {
+      editDoc: { revision: editDocSeed.revision, doc: structuredClone(editDocSeed.doc) },
+      unmatchedGets,
+    }
     await page.route(
       (url) =>
         API_PREFIXES.some((p) => url.pathname === p || url.pathname.startsWith(`${p}/`)),
-      (route) => dispatch(route, seed),
+      (route) => dispatch(route, seed, ctx),
     )
     await use(page)
+    if (unmatchedGets.length) {
+      console.error(
+        `[mock-api] unmodeled GETs fell through to the {} catch-all: ${[...new Set(unmatchedGets)].join(', ')}`,
+      )
+    }
   },
 })
 

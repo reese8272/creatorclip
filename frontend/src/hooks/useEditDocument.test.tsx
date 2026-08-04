@@ -272,6 +272,20 @@ describe('useEditDocument', () => {
     })
   })
 
+  it('treats a malformed GET body as a load error, not an empty document', async () => {
+    // The e2e mock's catch-all `{}` is exactly this shape (Issue 409). Editing
+    // on top of it and autosaving would overwrite the real server document.
+    const { result, putCount } = await renderReady({ get: () => ({ body: {} }) })
+
+    expect(result.current.saveState).toBe('error')
+    expect(result.current.saveError).toMatch(/could not load/i)
+    expect(result.current.doc.cuts).toEqual([])
+
+    act(() => result.current.commit(addCut('a')))
+    await act(async () => void vi.advanceTimersByTime(60_000))
+    expect(putCount()).toBe(0)
+  })
+
   it('treats a 422 as terminal rather than retrying forever', async () => {
     const { result, putCount } = await renderReady({
       get: () => okGet(1),
