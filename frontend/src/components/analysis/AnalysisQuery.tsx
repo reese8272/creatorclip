@@ -94,7 +94,7 @@ export function AnalysisQuery() {
 
         {balance?.low_balance && (
           <div className="mt-3 rounded-md border border-warning-border bg-[color:var(--color-warning-soft)] px-4 py-3 text-sm text-fg">
-            Low balance — <strong className="font-mono">{balance.minutes_balance} min</strong> left.{' '}
+            Low balance — <strong>{balance.minutes_balance} min</strong> left.{' '}
             <Link to="/pricing" className="text-accent-text hover:text-fg">
               Add minutes
             </Link>{' '}

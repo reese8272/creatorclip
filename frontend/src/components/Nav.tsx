@@ -188,7 +188,7 @@ export function Nav({ user, balance }: { user: CurrentUser | null; balance: Bala
         </div>
         <span className="flex-1" />
         {user && (
-          <span className="hidden font-mono text-xs text-subtle sm:inline">
+          <span className="hidden text-xs text-subtle sm:inline">
             {user.channel_title || user.email}
           </span>
         )}
@@ -223,7 +223,7 @@ export function Nav({ user, balance }: { user: CurrentUser | null; balance: Bala
           </div>
           <div className="mt-3 flex items-center justify-between border-t border-default pt-3">
             {user && (
-              <span className="font-mono text-xs text-subtle">
+              <span className="text-xs text-subtle">
                 {user.channel_title || user.email}
               </span>
             )}
