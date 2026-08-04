@@ -70,6 +70,23 @@ describe('VideoPlayer', () => {
     expect(video.currentTime).toBe(30)
   })
 
+  it('an arrow key on the focused scrub bar seeks exactly ±1s (Issue 390)', async () => {
+    // Regression pin for a pre-existing bug that was WORSE than it looked. The
+    // ScrubBar paired its own ±1s onKeyDown with an onKeyDownCapture that called
+    // stopPropagation — but stopping propagation in the CAPTURE phase also
+    // prevents the target's own bubble handler, so the scrub bar's arrows did
+    // nothing at all, and the event never reached the outer layers either.
+    // Now: the bar handles it and calls preventDefault, and both outer layers
+    // bail on defaultPrevented. Exactly one seek, of exactly 1s.
+    const user = userEvent.setup()
+    const { ref, video } = renderPlayer({ transport: true })
+    ref.current!.seek(30)
+
+    await user.click(screen.getByRole('slider', { name: 'Seek' }))
+    await user.keyboard('{ArrowRight}')
+    expect(video.currentTime).toBe(31)
+  })
+
   it('steps one frame on , and . — and pauses first', async () => {
     const { pause } = stubPlayback()
     const user = userEvent.setup()
