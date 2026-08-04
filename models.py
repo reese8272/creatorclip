@@ -341,6 +341,15 @@ class Video(Base):
     # lossy still reconstructs nothing and functions as an index entry, like
     # `title` and `duration_s`. See docs/COMPLIANCE.md. NULL = no poster.
     poster_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Waveform peaks — BBC audiowaveform JSON, ~31 min/max pairs per second
+    # (Issue 392, migration 0051). Computed at ingest from `audio_uri`'s WAV, so
+    # a video whose audio was already purged can NEVER get peaks: the backfill
+    # only reaches videos still inside SOURCE_MEDIA_RETENTION_HOURS. Like
+    # `poster_uri` and unlike `audio_uri` the artifact itself OUTLIVES the purge —
+    # an 8-bit amplitude envelope is strictly coarser than duration plus a
+    # loudness curve and reconstructs no speech or music. See docs/COMPLIANCE.md.
+    # NULL = no peaks; the UI draws a labelled flat track, never fake amplitude.
+    peaks_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     origin: Mapped[VideoOrigin] = mapped_column(
         sa.Enum(VideoOrigin, name="video_origin_enum"),
         nullable=False,
