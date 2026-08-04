@@ -8,7 +8,17 @@ the transcript pane and shapes them into a safe input for the same
 ``clip_engine.render.render_cleaned_clip_file`` pipeline that Issue 134
 already ships.
 
-Hard caps enforced (see ``docs/DECISIONS.md`` 2026-06-07):
+Two validators live here, and the split is deliberate (Issue 391):
+
+  - :func:`validate_user_cuts` is the RENDER boundary. It enforces the hard
+    caps below, because those describe an edit worth spending a render slot on.
+  - :func:`validate_document_structure` is the SAVE boundary. It enforces only
+    that the document is well-formed. A creator half-way through an edit will
+    routinely have removed 90% of the clip; refusing to SAVE that would destroy
+    the work in progress, which is the exact failure Issue 391 exists to remove.
+    Saving is always allowed; exporting is gated.
+
+Hard caps enforced at the render boundary (see ``docs/DECISIONS.md`` 2026-06-07):
   - ``kept_duration >= MIN_KEPT_DURATION_S`` (default 5.0 s). Clips trimmed
     below this floor fail every short-form upload validator we target.
   - ``percent_removed <= MAX_REMOVED_PCT`` (default 85 %). Above this the
@@ -42,6 +52,19 @@ MAX_REMOVED_PCT = 85.0
 # percent-removed warning so the two editors feel consistent.
 WARNING_REMOVED_PCT = 40.0
 
+# The edit-document schema version this build understands (Issue 391). A reader
+# REJECTS a document with a higher version rather than half-parsing one written
+# by a newer tab — silently dropping keys it does not recognise would hand the
+# creator back a document with their newer work deleted.
+SUPPORTED_DOC_VERSION = 1
+
+# Upper bound on cuts in one document. Not a UX limit — a clip is at most a
+# couple of minutes and MIN_CUT_S is 0.1s client-side, so 200 is far past any
+# real edit. It exists so a malformed or hostile body cannot make the server
+# validate an unbounded list, and so the JSONB payload stays small enough that
+# the "read and write the document whole" design holds.
+MAX_CUTS = 200
+
 
 class CutValidationError(ValueError):
     """Raised when a user-supplied cut list violates the safety invariants.
@@ -53,6 +76,12 @@ class CutValidationError(ValueError):
       - ``overlap``               — segments overlap each other
       - ``kept_too_short``        — would leave < MIN_KEPT_DURATION_S
       - ``removed_too_much``      — would remove > MAX_REMOVED_PCT
+      - ``unsupported_version``   — doc["version"] > SUPPORTED_DOC_VERSION
+      - ``too_many_cuts``         — more than MAX_CUTS entries
+      - ``duplicate_cut_id``      — two cuts share an id
+
+    The last three are structural (Issue 391) and are raised only by
+    :func:`validate_document_structure`.
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -163,6 +192,99 @@ def validate_user_cuts(
         kept_duration_s=kept_duration,
         percent_removed=percent_removed,
     )
+
+
+def validate_document_structure(doc: object, clip_duration_s: float) -> dict:
+    """Validate an edit document for SAVING, and return its canonical form.
+
+    Structural only — see the module docstring. This deliberately does NOT
+    apply ``MIN_KEPT_DURATION_S`` or ``MAX_REMOVED_PCT``: a work-in-progress
+    edit is routinely past both, and refusing the autosave would destroy the
+    creator's work, which is the defect Issue 391 exists to remove. Those caps
+    are applied by :func:`validate_user_cuts` at the render boundary.
+
+    An EMPTY cut list is valid here, unlike at render: clearing every cut is a
+    legitimate edit the creator must be able to persist (it is also what
+    ``/clean/confirm`` writes once the edit is baked into the render).
+
+    Raises :class:`CutValidationError`; returns the canonical document with
+    cuts sorted by ``start_s``.
+    """
+    if clip_duration_s <= 0:
+        raise CutValidationError("invalid_segment", "clip duration must be positive")
+    if not isinstance(doc, dict):
+        raise CutValidationError("invalid_segment", "document must be an object")
+
+    version = doc.get("version", SUPPORTED_DOC_VERSION)
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise CutValidationError("invalid_segment", "document version must be an integer")
+    if version > SUPPORTED_DOC_VERSION:
+        raise CutValidationError(
+            "unsupported_version",
+            f"document version {version} is newer than this server supports "
+            f"({SUPPORTED_DOC_VERSION}) — reload the page",
+        )
+
+    raw_cuts = doc.get("cuts", [])
+    if not isinstance(raw_cuts, list):
+        raise CutValidationError("invalid_segment", "document cuts must be a list")
+    if len(raw_cuts) > MAX_CUTS:
+        raise CutValidationError(
+            "too_many_cuts", f"document has {len(raw_cuts)} cuts (cap {MAX_CUTS})"
+        )
+
+    cuts: list[dict] = []
+    seen_ids: set[str] = set()
+    for raw in raw_cuts:
+        if not isinstance(raw, dict):
+            raise CutValidationError("invalid_segment", f"cut must be an object: {raw!r}")
+        cut_id = raw.get("id")
+        if not isinstance(cut_id, str) or not cut_id:
+            raise CutValidationError("invalid_segment", f"cut is missing a string id: {raw!r}")
+        # Ids address cuts in the client's command stack; two cuts sharing one
+        # would make undo target an arbitrary member of the pair.
+        if cut_id in seen_ids:
+            raise CutValidationError("duplicate_cut_id", f"duplicate cut id: {cut_id!r}")
+        seen_ids.add(cut_id)
+
+        try:
+            start = float(raw["start_s"])
+            end = float(raw["end_s"])
+        except (ValueError, TypeError, KeyError) as exc:
+            raise CutValidationError("invalid_segment", f"non-numeric cut bounds: {raw!r}") from exc
+        # isfinite rejects NaN and ±inf in one check; the render validator has
+        # to spell this out because it also accepts tuples.
+        if not math.isfinite(start) or not math.isfinite(end):
+            raise CutValidationError("invalid_segment", "non-finite cut bounds")
+        if end <= start:
+            raise CutValidationError(
+                "invalid_segment", f"cut end ({end}) must exceed start ({start})"
+            )
+        if start < 0 or end > clip_duration_s + MIN_KEEP_SEGMENT_S:
+            raise CutValidationError(
+                "out_of_bounds", f"cut ({start}, {end}) outside [0, {clip_duration_s}]"
+            )
+        cuts.append({"id": cut_id, "start_s": start, "end_s": min(end, clip_duration_s)})
+
+    cuts.sort(key=lambda c: c["start_s"])
+    for prev, nxt in zip(cuts, cuts[1:], strict=False):
+        if nxt["start_s"] < prev["end_s"]:
+            raise CutValidationError(
+                "overlap",
+                f"cuts ({prev['start_s']}, {prev['end_s']}) and "
+                f"({nxt['start_s']}, {nxt['end_s']}) overlap",
+            )
+
+    last_applied_at = doc.get("last_applied_at")
+    if last_applied_at is not None and not isinstance(last_applied_at, str):
+        raise CutValidationError("invalid_segment", "last_applied_at must be a string or null")
+
+    return {"version": SUPPORTED_DOC_VERSION, "cuts": cuts, "last_applied_at": last_applied_at}
+
+
+def empty_document() -> dict:
+    """The canonical empty edit document, used for a clip that has none yet."""
+    return {"version": SUPPORTED_DOC_VERSION, "cuts": [], "last_applied_at": None}
 
 
 def _invert_cuts(

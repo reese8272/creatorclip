@@ -420,7 +420,39 @@ export interface EditorCut {
   // Optional since Issue 390: ABSENT means the range covers no transcript word.
   // Previously this defaulted to `[0, 0]`, which struck through the first word of
   // the transcript on every drag over a gap.
+  //
+  // DERIVED, NEVER PERSISTED (Issue 391). It is a pure function of (times,
+  // transcript), and the transcript is server-owned and mutable — persisting it
+  // would create a second source of truth that goes stale silently and can index
+  // past the end of `words`. Recomputed on load via `timeRangeToIndices`.
   indices?: [number, number]
+}
+
+// One cut as it is stored server-side: no `indices`, because that is derived.
+export interface EditDocumentCut {
+  id: string
+  start_s: number
+  end_s: number
+}
+
+// The server-authoritative edit document for one clip (Issue 391).
+export interface EditDocument {
+  // Schema version. A client REJECTS a document newer than it understands
+  // rather than half-parsing one written by an updated tab.
+  version: number
+  cuts: EditDocumentCut[]
+  last_applied_at: string | null
+}
+
+// `GET`/`PUT /clips/{id}/edit-document`.
+export interface EditDocumentResponse {
+  clip_id: string
+  // A stored row is always at revision >= 1, so 0 means "no document yet" — the
+  // sentinel the PUT and the one-time localStorage import both key off.
+  revision: number
+  doc: EditDocument
+  updated_at: string | null
+  clip_duration_s: number
 }
 
 export interface DnaProfile {

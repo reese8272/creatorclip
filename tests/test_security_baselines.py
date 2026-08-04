@@ -332,6 +332,12 @@ _FLOOR_EXEMPT_HANDLERS = frozenset(
         "get_video_analysis",
         "get_hook_analysis",
         "get_chapters",
+        # Issue 391 — the edit document is a pure DB write that enqueues nothing
+        # and costs no minutes. The absent balance floor is the DESIGN: a creator
+        # whose balance hit zero must still be able to see and save their work.
+        # Saving is always allowed; exporting is gated, and POST /clips/{id}/cuts
+        # keeps its floor. Do not "fix" this by adding check_positive_balance.
+        "put_edit_document",
     }
 )
 

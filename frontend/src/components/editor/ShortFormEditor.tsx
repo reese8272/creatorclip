@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
@@ -17,11 +17,14 @@ import {
   cutFromRange,
   cutWordIndices,
   mergeAdjacent,
-  normalizeCut,
   MIN_CUT_S,
   removeCutById,
+  toDocumentCuts,
+  withIndices,
 } from '@/lib/editorCuts'
+import { SaveStatus } from '@/components/editor/SaveStatus'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
+import { useEditDocument } from '@/hooks/useEditDocument'
 import { useEditorShortcuts } from '@/hooks/useEditorShortcuts'
 import { useVideoPeaks } from '@/hooks/useVideoPeaks'
 import type { ClipTranscript, EditorCut, ReviewClip, TranscriptWord } from '@/types'
@@ -33,7 +36,6 @@ import { Card } from '@/components/ui/card'
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const WARNING_REMOVED_PCT = 40
-const storageKey = (clipId: string) => `clip:${clipId}:cuts`
 const SNAP_PREF_KEY = 'editor:snap'
 
 /** Snapping is on by default — it is what makes cuts land on word edges. */
@@ -42,26 +44,6 @@ function readSnapPreference(): boolean {
     return localStorage.getItem(SNAP_PREF_KEY) !== 'off'
   } catch {
     return true
-  }
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Read persisted cuts, repairing anything a previous version wrote.
- *
- * Every cut stored before Issue 390 lacks an `id`; `normalizeCut` backfills one
- * and drops entries that cannot be a cut at all, so one NaN in the blob cannot
- * brick the editor.
- */
-function loadCuts(clipId: string): EditorCut[] {
-  try {
-    const raw = localStorage.getItem(storageKey(clipId))
-    const parsed = raw ? JSON.parse(raw) : []
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(normalizeCut).filter((c): c is EditorCut => c !== null)
-  } catch {
-    return []
   }
 }
 
@@ -111,7 +93,10 @@ export function ShortFormEditor({
     queryFn: () => api<ClipTranscript>(`/clips/${clip.id}/transcript`),
   })
 
-  const words: TranscriptWord[] = transcriptData?.words ?? []
+  // Memoised because the `?? []` fallback would otherwise mint a new array
+  // every render, which would make the cut-span recomputation below re-run on
+  // every keystroke instead of only when the transcript or the cuts change.
+  const words: TranscriptWord[] = useMemo(() => transcriptData?.words ?? [], [transcriptData])
   const clipDuration = transcriptData?.clip_duration_s ?? clip.end_s - clip.start_s
 
   // ── Playhead state ───────────────────────────────────────────────────────
@@ -144,8 +129,26 @@ export function ShortFormEditor({
 
   // ── Cut state ────────────────────────────────────────────────────────────
 
-  const [cuts, setCuts] = useState<EditorCut[]>(() => loadCuts(clip.id))
-  const [undo, setUndo] = useState<EditorCut[] | null>(null)
+  // The document is server-authoritative (Issue 391). The parent keys this
+  // component on clip.id, so switching clips REMOUNTS rather than resetting
+  // state in an effect — which also fixes the cross-clip undo bug the old
+  // single slot had.
+  const {
+    doc,
+    saveState,
+    saveError,
+    conflict,
+    canUndo,
+    canRedo,
+    commit,
+    undo,
+    redo,
+    flush,
+    retry,
+    keepMine,
+    takeTheirs,
+  } = useEditDocument(clip.id)
+
   const [applying, setApplying] = useState(false)
   const [status, setStatus] = useState('')
   // Persisted per creator, not per clip: it is a working preference, and having
@@ -155,37 +158,25 @@ export function ShortFormEditor({
   // The in-point set by `I`, waiting for its `O`. Null means "no range open".
   const [inPoint, setInPoint] = useState<number | null>(null)
 
-  // Re-load cuts when the clip changes.
-  useEffect(() => {
-    // Intentional: reset local cut state to the newly-selected clip's persisted
-    // cuts. The canonical alternative is a `key` on this subtree (parent-owned);
-    // tracked for the lint sweep in OFF_COURSE_BUGS.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCuts(loadCuts(clip.id))
-  }, [clip.id])
+  // The word span is recomputed from the stored times rather than persisted —
+  // the transcript is server-owned and mutable, so a stored span would go stale
+  // silently and could index past the end of `words`.
+  const cuts: EditorCut[] = useMemo(() => withIndices(doc.cuts, words), [doc.cuts, words])
 
-  // Persist cuts so they survive a reload. Issue 391 replaces this with a
-  // server-side edit document; until then localStorage IS the source of truth,
-  // which is the defect that issue exists to fix.
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey(clip.id), JSON.stringify(cuts))
-    } catch {
-      /* quota — recoverable */
-    }
-  }, [cuts, clip.id])
+  /** Replace the cut list as one undoable step. */
+  function setCuts(next: EditorCut[]) {
+    commit((d) => ({ ...d, cuts: toDocumentCuts(next) }))
+  }
 
   const cleanedUri = useCleanedUriPoll(clip.video_id, clip.id, applying)
 
   // ── Cut management ───────────────────────────────────────────────────────
 
   function addTimeCut(start_s: number, end_s: number) {
-    setUndo(cuts)
     setCuts(mergeAdjacent([...cuts, cutFromRange(words, start_s, end_s)]))
   }
 
   function removeCut(id: string) {
-    setUndo(cuts)
     setCuts(removeCutById(cuts, id))
   }
 
@@ -231,6 +222,14 @@ export function ShortFormEditor({
     s: () => (toggleSnap(!snapEnabled), true),
     Delete: () => deleteSelected(),
     Backspace: () => deleteSelected(),
+    // Undo/redo bind on the SAME bus as the editing keys rather than adding a
+    // second document listener — two listeners racing is how one keypress
+    // undoes twice. `shortcutKey` already normalises Cmd/Ctrl to `mod` and
+    // lowercases the key, which is what makes Shift+Cmd+Z (where e.key is 'Z')
+    // match. Ctrl+Y is the Windows convention for redo.
+    'mod+z': () => (undo(), true),
+    'mod+shift+z': () => (redo(), true),
+    'mod+y': () => (redo(), true),
   })
 
   function deleteSelected(): boolean {
@@ -246,7 +245,6 @@ export function ShortFormEditor({
    * holding, and the drag would silently jump to a different cut.
    */
   function applyCutEdit(next: EditorCut[]) {
-    setUndo(cuts)
     setCuts(mergeAdjacent(next))
   }
 
@@ -267,7 +265,6 @@ export function ShortFormEditor({
     const start_s = words[i]?.start_s ?? 0
     const end_s = words[j]?.end_s ?? 0
     if (end_s <= start_s) return
-    setUndo(cuts)
     setCuts(mergeAdjacent([...cuts, cutFromRange(words, start_s, end_s)]))
   }
 
@@ -276,6 +273,9 @@ export function ShortFormEditor({
       setStatus('No cuts to apply.')
       return
     }
+    // Export is a flush point: the render must not be enqueued from a document
+    // the server has not seen yet.
+    flush()
     setStatus('Submitting cuts…')
     try {
       await api(`/clips/${clip.id}/cuts`, {
@@ -293,11 +293,10 @@ export function ShortFormEditor({
   async function confirmFinal() {
     try {
       await api(`/clips/${clip.id}/clean/confirm`, { method: 'POST' })
-      try {
-        localStorage.removeItem(storageKey(clip.id))
-      } catch {
-        /* ignore */
-      }
+      // Confirming BAKES the edit into the render, so the document must be
+      // cleared or the next export would cut the same spans a second time.
+      // (`clean/discard` deliberately does NOT clear it — the creator rejected
+      // the render, and their cuts still describe an unapplied edit.)
       setCuts([])
       setApplying(false)
       setStatus('Edited version is now the main render.')
@@ -527,24 +526,16 @@ export function ShortFormEditor({
             sourceStartS={sourceStartS}
           />
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!undo}
-              onClick={() => {
-                if (undo) {
-                  setCuts(undo)
-                  setUndo(null)
-                }
-              }}
-            >
+            <Button variant="secondary" size="sm" disabled={!canUndo} onClick={undo}>
               Undo
+            </Button>
+            <Button variant="secondary" size="sm" disabled={!canRedo} onClick={redo}>
+              Redo
             </Button>
             <Button
               variant="secondary"
               size="sm"
               onClick={() => {
-                setUndo(cuts)
                 setCuts([])
                 setStatus('Cleared all pending cuts.')
               }}
@@ -564,6 +555,15 @@ export function ShortFormEditor({
         </div>
 
         <div className="flex min-h-0 flex-col gap-1">
+          <SaveStatus
+            state={saveState}
+            error={saveError}
+            conflict={conflict}
+            onRetry={retry}
+            onKeepMine={keepMine}
+            onTakeTheirs={takeTheirs}
+            className="shrink-0"
+          />
           <div className="shrink-0 text-small text-muted">
             {cuts.length} cut(s) · {removedS.toFixed(2)}s removed ({pct.toFixed(0)}%)
           </div>

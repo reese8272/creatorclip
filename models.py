@@ -717,6 +717,78 @@ class Clip(Base):
     )
 
 
+class ClipEditDocument(Base):
+    """One row per edited clip: the server-authoritative edit document (Issue 391).
+
+    Replaces ``localStorage['clip:{clipId}:cuts']`` as the source of truth for a
+    creator's in-progress edit, so the work survives a cleared cache, a second
+    browser and a different machine.
+
+    ``doc`` is the whole document, always read and written as a unit::
+
+        {"version": 1,
+         "cuts": [{"id": "…", "start_s": 12.40, "end_s": 15.08}],
+         "last_applied_at": null}
+
+    Times are clip-relative seconds. ``indices`` (the transcript word span) is
+    DERIVED and deliberately never persisted: it is a pure function of (times,
+    transcript), and the transcript is server-owned and mutable, so storing it
+    would create a second source of truth that goes stale silently and can index
+    past the end of ``words``. It is recomputed on load.
+
+    ``revision`` is a COLUMN rather than a key inside ``doc`` because it
+    participates in the WHERE clause of the compare-and-set upsert in
+    ``routers/clips.py`` — that is what makes two tabs autosaving concurrently
+    safe. ``doc["version"]`` is the unrelated schema version; a reader rejects
+    ``version`` greater than it supports rather than half-parsing a newer
+    document written by another tab.
+
+    ``MutableDict.as_mutable`` follows ``CreatorStyle`` so in-place mutation is
+    tracked by the unit of work without a re-assign.
+    """
+
+    __tablename__ = "clip_edit_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    clip_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("clips.id", ondelete="CASCADE"), nullable=False
+    )
+    # Denormalised from `clips` so the RLS policy is a direct-column comparison
+    # rather than a subquery through the parent — the house pattern.
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
+    )
+    doc: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSONB()),
+        nullable=False,
+        default=dict,
+        server_default=sa.text("'{}'::jsonb"),
+    )
+    revision: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default=sa.text("0")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("clip_id", name="uq_clip_edit_documents_clip_id"),
+        # Postgres does not auto-index FK columns, and an unindexed FK makes the
+        # parent DELETE seq-scan this table. `clip_id` is covered by the unique
+        # constraint above; `creator_id` needs its own so right-to-erasure
+        # (DELETE FROM creators, which cascades here) stays cheap.
+        sa.Index("ix_clip_edit_documents_creator", "creator_id"),
+    )
+
+
 class ClipFeedback(Base):
     __tablename__ = "clip_feedback"
 

@@ -27,6 +27,7 @@ from models import (
     AudienceActivity,
     AuditLog,
     Clip,
+    ClipEditDocument,
     ClipFeedback,
     ClipFormat,
     ClipOutcome,
@@ -163,6 +164,17 @@ async def _seed_full_creator(session: AsyncSession) -> Creator:
             clip_id=clip_id,
             creator_id=cid,
             action=FeedbackAction.upvote,
+        )
+    )
+
+    # ClipEditDocument — the creator's in-progress edit (Issue 391). It carries
+    # the creator's own editorial decisions, so right-to-erasure must reach it.
+    session.add(
+        ClipEditDocument(
+            clip_id=clip_id,
+            creator_id=cid,
+            doc={"version": 1, "cuts": [{"id": "c1", "start_s": 1.0, "end_s": 2.0}]},
+            revision=1,
         )
     )
 
@@ -305,6 +317,7 @@ async def test_delete_account_cascades_all_dependent_tables(
         MinuteDeduction,
         Usage,
         ClipFeedback,
+        ClipEditDocument,
     ]
     for model in creator_keyed:
         count = await db_session.scalar(

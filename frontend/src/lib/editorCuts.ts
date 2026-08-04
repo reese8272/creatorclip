@@ -1,4 +1,4 @@
-import type { EditorCut, TranscriptWord } from '@/types'
+import type { EditDocumentCut, EditorCut, TranscriptWord } from '@/types'
 
 // The editor's cut list — identity, merging, and edge adjustment (Issue 390).
 //
@@ -171,6 +171,34 @@ export function cutFromRange(
 ): EditorCut {
   const indices = timeRangeToIndices(words, start_s, end_s)
   return { id: newCutId(), start_s, end_s, ...(indices ? { indices } : {}) }
+}
+
+/**
+ * Strip a cut list down to what is persisted (Issue 391).
+ *
+ * `indices` is DERIVED and never stored: it is a pure function of (times,
+ * transcript), and the transcript is server-owned and mutable, so persisting it
+ * would create a second source of truth that goes stale silently and can index
+ * past the end of `words`. The inverse is `withIndices`.
+ */
+export function toDocumentCuts(cuts: readonly EditorCut[]): EditDocumentCut[] {
+  return cuts.map(({ id, start_s, end_s }) => ({ id, start_s, end_s }))
+}
+
+/**
+ * Recompute the transcript word span for each stored cut.
+ *
+ * Safe only because Issue 390 made committed times land on snapped word
+ * boundaries; before that, recomputation could pick a neighbouring word.
+ */
+export function withIndices(
+  cuts: readonly EditDocumentCut[],
+  words: readonly TranscriptWord[],
+): EditorCut[] {
+  return cuts.map((c) => {
+    const indices = timeRangeToIndices(words, c.start_s, c.end_s)
+    return { ...c, ...(indices ? { indices } : {}) }
+  })
 }
 
 /** Word indices covered by any cut — drives the transcript strikethrough. */
