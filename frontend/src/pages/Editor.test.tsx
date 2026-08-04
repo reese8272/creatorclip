@@ -1,9 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Editor } from './Editor'
+import { stubRect } from '@/test/rect'
+import { flushResizeObservers } from '@/test/setup'
 
 // Stub AudioContext so WebAudio waveform decode does not throw in jsdom.
 ;(globalThis as unknown as Record<string, unknown>).AudioContext = undefined
@@ -228,7 +230,17 @@ describe('Editor', () => {
     vi.stubGlobal('fetch', mockFetch())
     renderEditor('/app/editor?video_id=v1')
     await screen.findByText('Suggested clips')
-    // BASE_VIDEO.duration_s = 300 → footer right edge reads 5:00 (clip ends at 20s).
+    // The ruler is adaptive and derives its labels from the MEASURED width, so
+    // the bar needs a box before it can emit any (Issue 390). 100px / 300s =
+    // 0.33 px/s → a 300s tick interval → labels 0:00 and 5:00.
+    const bar = screen.getByTestId('master-timeline-bar')
+    stubRect(bar, 100, 96)
+    // The layout effect already measured 0 (the stub lands after mount), so the
+    // ruler needs the ResizeObserver to fire before it has a width to work with.
+    await act(async () => {
+      flushResizeObservers(100)
+    })
+    // BASE_VIDEO.duration_s = 300 → the right-hand tick reads 5:00 (clip ends at 20s).
     expect(await screen.findByText('5:00')).toBeInTheDocument()
   })
 
@@ -241,15 +253,15 @@ describe('Editor', () => {
 
     // jsdom rects are zero-sized — pin the bar geometry so x→time works.
     const bar = screen.getByTestId('master-timeline-bar')
-    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
-      left: 0, width: 100, top: 0, height: 96, right: 100, bottom: 96, x: 0, y: 0,
-      toJSON: () => ({}),
-    } as DOMRect)
+    stubRect(bar, 100, 96)
 
-    // Drag 10% → 40% of a 300s source = 30s → 120s.
-    fireEvent.mouseDown(bar, { clientX: 10, button: 0 })
-    fireEvent.mouseMove(bar, { clientX: 40 })
-    fireEvent.mouseUp(bar, { clientX: 40 })
+    // Drag 10% → 40% of a 300s source = 30s → 120s. POINTER events, not mouse:
+    // Issue 390 moved both timelines onto pointer input so touch and pen work,
+    // and fireEvent.mouseDown does not trigger onPointerDown. Same coordinates,
+    // same assertions — this asserts behaviour, not the input mechanism.
+    fireEvent.pointerDown(bar, { clientX: 10, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(bar, { clientX: 40, pointerId: 1 })
+    fireEvent.pointerUp(bar, { clientX: 40, pointerId: 1 })
 
     expect(await screen.findByText(/0:30 → 2:00/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Create clip' }))

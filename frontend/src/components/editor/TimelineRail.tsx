@@ -98,6 +98,13 @@ export function TimelineRail({
     moved: boolean
   } | null>(null)
   const [cursor, setCursor] = useState<'crosshair' | 'ew-resize'>('crosshair')
+  // Set when a gesture completes as a DRAG. Interactive children (the long-form
+  // timeline paints a <button> per candidate clip over the waveform) would
+  // otherwise receive the trailing click and open a clip the user was only
+  // dragging across. A ref plus onClickCapture works regardless of z-order or
+  // DOM position — and, unlike relying on real pointer-capture retargeting, it
+  // also works in jsdom, where capture is a no-op stub.
+  const suppressClickRef = useRef(false)
 
   const hitAt = useCallback(
     (clientX: number): TimelineHit => {
@@ -137,8 +144,12 @@ export function TimelineRail({
     if (!drag) return
     dragRef.current = null
     const toTime = clientXToTime(e.clientX)
-    if (drag.moved) onDragEnd?.({ hit: drag.hit, fromTime: drag.fromTime, toTime, viewport })
-    else onClick?.(drag.hit, drag.fromTime)
+    if (drag.moved) {
+      suppressClickRef.current = true
+      onDragEnd?.({ hit: drag.hit, fromTime: drag.fromTime, toTime, viewport })
+    } else {
+      onClick?.(drag.hit, drag.fromTime)
+    }
   }
 
   const railStyle = { height: laneHeight, cursor }
@@ -179,6 +190,12 @@ export function TimelineRail({
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onClickCapture={(e) => {
+          if (!suppressClickRef.current) return
+          suppressClickRef.current = false
+          e.stopPropagation()
+          e.preventDefault()
+        }}
         onLostPointerCapture={() => {
           dragRef.current = null
         }}
