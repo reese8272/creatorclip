@@ -6,9 +6,8 @@ queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `d
 
 **Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
 2026-08-03). **Batch B: #389, #392 and #390 are DONE, MERGED and DEPLOYED** — PR #70 → `main`
-(`67fe4db`), 2026-08-04; prod DB now at `0051`. **#391 (edit persistence) is the last Batch B issue**,
-deliberately held out of that PR because it touches the paid render path, and is planned as its own
-PR off fresh `main`. See `docs/PROJECT_STATE.md`.
+(`67fe4db`), 2026-08-04; prod DB now at `0051`. **#391 (edit persistence) is the last Batch B issue;
+its PR A is built on `feat/391-edit-persistence` and PR B (the render path) remains.** See `docs/PROJECT_STATE.md`.
 
 **Also open, outside the lane:** **#406** — clear the 6 `pip-audit` advisories (aiohttp,
 cryptography). Filed 2026-08-04 from the OFF_COURSE_BUGS log; see § Hygiene below.
@@ -44,7 +43,7 @@ changes the gut reaction to the product.
 | Batch | Theme | Issues | Size |
 |-------|-------|--------|------|
 | **A** ✅ | Visual credibility — stop reading as a prototype | 384–388, **400** — **ALL DONE 2026-08-03** | days |
-| **B** | Make it an application, not a webpage | **389 ✅ · 392 ✅ · 390 ✅** — 391 remains | 1–2 weeks |
+| **B** | Make it an application, not a webpage | **389 ✅ · 392 ✅ · 390 ✅** (merged PR #70) — **391 PR A built, PR B remains** | 1–2 weeks |
 | **C** | Close the capability gap | 393–397, **401** | multi-week |
 | **D** | Asset management | 398–399, **402** | ~1 week |
 | **E** | Breadth — scope-call cluster, do not start before D closes | **403–405** | multi-week |
@@ -585,7 +584,15 @@ reference — this issue closes the distance to that reference.
 ---
 
 ### Issue 391: Real edit persistence — undo/redo stack + server-side edit document
-- [ ] **Status:** open · **Batch:** B · **Size:** L · **Agent:** `python-senior-engineer`
+- [ ] **Status:** **PR A BUILT** 2026-08-04 (`feat/391-edit-persistence`, 6 commits, unmerged) ·
+      **PR B open** — the render path · **Batch:** B · **Size:** L · **Agent:** `python-senior-engineer`
+
+> **Split into two PRs at plan time.** `POST /clips/{id}/cuts` is paid, flag-gated and
+> budget-checked, and LEFT_OFF ranked it the SEV1 risk of this issue. **PR A is purely additive:**
+> nothing reads the document at render time, and the client still POSTs `segments` from the same
+> in-memory state, so behaviour on the paid path is byte-identical. **PR B** flips the render path to
+> read the document via `base_revision`, makes `/clean/confirm` clear it, and deletes the legacy
+> branch. See `docs/PROJECT_STATE.md` 2026-08-04.
 
 **What we're doing.** Replacing single-level undo with a command stack, and moving edit state out of
 `localStorage` into a server-side, per-creator-isolated edit document with autosave.
@@ -608,12 +615,15 @@ but we do need the creator's work to survive a browser.
 This is also the prerequisite for #393: once the edit document is authoritative server-side,
 client-side preview can be the fast path while the server retains the truth used at export.
 
-**Evidence in this repo.**
-- `frontend/src/pages/Editor.tsx:218` — `const [undo, setUndo] = useState<EditorCut[] | null>(null)`.
-- `frontend/src/pages/Editor.tsx:252,258,278` — every mutation overwrites the single snapshot.
-- `frontend/src/pages/Editor.tsx:32` — `storageKey = (clipId) => \`clip:${clipId}:cuts\``.
-- `frontend/src/pages/Editor.tsx:232-239` — persistence to `localStorage`, quota failure swallowed.
-- `frontend/src/pages/Editor.tsx:36-44` — `loadCuts` reads from `localStorage` on mount.
+**Evidence in this repo.** (Line refs corrected 2026-08-04 — this code moved to
+`components/editor/ShortFormEditor.tsx` in #389; the brief still cited `pages/Editor.tsx`.)
+- `ShortFormEditor.tsx:148` — `const [undo, setUndo] = useState<EditorCut[] | null>(null)`.
+- `ShortFormEditor.tsx:183,188,249,270,547` — all five mutation sites overwrite the single snapshot.
+- `ShortFormEditor.tsx:36` — `storageKey = (clipId) => \`clip:${clipId}:cuts\``.
+- `ShortFormEditor.tsx:170-176` — persistence to `localStorage`, quota failure swallowed.
+- `ShortFormEditor.tsx:57-66` — `loadCuts` reads from `localStorage` on mount.
+- `ShortFormEditor.tsx:158-165` — the clip-change reload effect, carrying a
+  `react-hooks/set-state-in-effect` suppression whose comment names `key` as the real fix.
 
 **Industry standard checked.** Descript ships Google-Docs-style collaboration — multiplayer editing,
 comments with mentions, notifications — which presumes a server-authoritative document model
@@ -621,13 +631,25 @@ comments with mentions, notifications — which presumes a server-authoritative 
 [Descript Review 2026](https://filmora.wondershare.com/video-editor-review/descript-ai.html)).
 
 **Acceptance**
-- [ ] Command-stack undo/redo, unbounded within a session; Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z
-- [ ] Edit document persisted server-side per clip; RLS-enforced per-creator isolation
-- [ ] Debounced autosave with an explicit saved/saving indicator; save failures surfaced, not swallowed
-- [ ] Edits survive reload and follow the creator across devices
-- [ ] One-time migration: existing `localStorage` cuts imported on first load, then cleared
-- [ ] `localStorage` demoted to an offline cache, never the source of truth
-- [ ] Alembic migration + integration test under the real RLS role
+- [x] Command-stack undo/redo, unbounded within a session; Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z
+      (+ Ctrl+Y). Bound on #390's existing bus — a second document listener is how one keypress
+      undoes twice. `lib/editCommands.ts`, 9 tests.
+- [x] Edit document persisted server-side per clip; RLS-enforced per-creator isolation
+      (`clip_edit_documents`, migration `0052`, hardened `NULLIF` GUC form + `GRANT`)
+- [x] Debounced autosave with an explicit saved/saving indicator; save failures surfaced, not
+      swallowed. 800ms trailing / **2s max-wait** — the ceiling is not optional, a pure trailing
+      debounce fires zero times during continuous dragging. `SaveStatus` is persistent and
+      non-toast with a Retry, because a toast vanishes on a timer.
+- [x] Edits survive reload and follow the creator across devices
+- [x] One-time migration: existing `localStorage` cuts imported on first load, then cleared —
+      **only at `revision === 0`** (the anti-resurrection rule), and the key is removed only on a
+      200 or a 409, which makes a double import structurally impossible.
+- [x] `localStorage` demoted to an offline cache, never the source of truth — pinned by a new
+      structural gate, `src/test/no-local-cut-storage.test.ts` (mutation-checked).
+- [x] Alembic migration written; **RLS integration test extended but NOT run locally** — it needs
+      Docker, which this box lacks. CI-verified only; say so plainly rather than claiming it passed.
+- [ ] **(PR B)** Render path reads the document via `base_revision`; legacy `segments` branch deleted
+- [ ] **(PR B)** `POST /clean/confirm` clears the document server-side; `/clean/discard` does not
 
 ---
 

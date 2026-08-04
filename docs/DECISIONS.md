@@ -5,6 +5,71 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-04 — Issue 391 (PR A): edit persistence — three deviations
+
+**What was built.** `clip_edit_documents` (one row per clip, JSONB `doc` + integer `revision`),
+`GET`/`PUT /clips/{id}/edit-document`, a snapshot command stack, and a debounced autosave. The
+render path still reads `segments`; flipping it to the document is PR B.
+
+### 1. The autosave PUT is `120/minute`, not the `60/minute` write tier
+
+**What.** `PUT /clips/{id}/edit-document` carries `120/minute`, twice the tier its closest sibling
+`PATCH /clips/{id}` uses for a pure DB write.
+
+**Why.** Every other write endpoint in the app is driven by a button; this one is driven by a timer.
+The autosave's 2s max-wait means sustained editing emits up to **30 PUT/minute per tab**, and two
+tabs open on one clip is 60/minute — sitting exactly on a 60 cap and 429ing the creator mid-edit,
+which is the failure mode this whole issue exists to remove. 120 gives 2× headroom over the realistic
+worst case while still bounding a runaway client. The endpoint enqueues nothing and costs no minutes,
+so the limit is abuse control, not spend control.
+
+**Consequence.** `put_edit_document` is in `_FLOOR_EXEMPT_HANDLERS` in
+`tests/test_security_baselines.py`. The Issue-228 sweep correctly flags every write route in
+`routers/clips.py`; the absent balance floor here is deliberate — **a creator whose balance hit zero
+must still be able to see and save their work.** Saving is always allowed; exporting is gated, and
+`POST /clips/{id}/cuts` keeps its floor untouched.
+
+### 2. Autosave does NOT invalidate its query on success
+
+**What.** `useEditDocument` deviates from the documented TanStack pattern and from the in-repo
+precedent `useApplyClipMetadata` (`hooks/useApplyClipMetadata.ts:24-33`), which awaits
+`queryClient.invalidateQueries` inside `onSuccess`. The new hook stores the returned revision in a
+**ref** and never writes the server document back into the command stack's `present`.
+
+**Why.** [TanStack Query v5 — Invalidations from Mutations](https://tanstack.com/query/v5/docs/framework/react/guides/invalidations-from-mutations)
+recommends invalidate-on-success and does not address in-flight local state, because the pattern
+assumes a one-shot, user-committed write. Autosave is its inverse: between a PUT leaving and its 200
+arriving the creator has typically made two more edits, so refetching replaces the cache with the
+state as of the *previous* save and visibly reverts them. That is `localStorage`-as-source-of-truth
+reintroduced with a network round trip. **The query is the seed, not the state** — it hydrates once
+(`staleTime: Infinity`, refetch off, following the `useVideoPeaks` precedent) and the stack is live.
+
+### 3. Migration 0052 repairs 0048 and 0049
+
+**What.** Beyond creating its own table, `0052` runs `ALTER POLICY` on `video_feedback` and
+`creator_style_notes` to the hardened `NULLIF(current_setting('app.creator_id', true), '')::uuid`
+form, and adds their missing `GRANT`s.
+
+**Why now, rather than as a separate issue.** The two were written *after* `0045` but copied the
+pre-`0045` template, leaving them the only tenant tables still on the bare `::uuid` cast — which
+raises SQLSTATE 22P02 on a reused pooled connection instead of denying cleanly. The reason it went
+unnoticed for that long is the fourth change in the same commit:
+`test_reused_connection_guc_less_query_denies_cleanly` iterated a hardcoded `("clips", "signals")`
+rather than the tenant-table tuples, so **no test ever looked at those two tables**. Parameterising
+that sweep is part of registering the new table regardless, and once parameterised it goes red on
+those two. Fixing the test without fixing the tables would have meant shipping a knowingly red gate.
+Logged in `docs/OFF_COURSE_BUGS.md`; `downgrade()` restores the bare form so the migration is a true
+inverse.
+
+**Also worth recording:** `MAX_CUTS = 200` and `SUPPORTED_DOC_VERSION = 1` are new in
+`clip_engine/edits.py`, and the save validator (`validate_document_structure`) deliberately does
+**not** apply the 5s-kept / 85%-removed caps that `validate_user_cuts` enforces at render. A
+work-in-progress edit is routinely past both, and refusing the autosave would destroy the work. One
+test pins that a 90%-removed document saves 200 while the same cuts fail at render, so the split
+cannot be "tidied" away.
+
+---
+
 ## 2026-08-03 — Issue 390: Timeline v2 — the pixel is the unit
 
 **What was decided.** Both timelines are rebuilt on one shared `TimelineRail`: pointer events with

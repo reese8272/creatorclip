@@ -229,8 +229,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │       ├── index.css           # Tailwind v4 @theme — Issue 85 design system (warmer OKLCH; docs/UI.md)
 │       ├── types.ts            # API response shapes
 │       ├── test/setup.ts       # Vitest + RTL setup (jest-dom matchers, cleanup)
-│       ├── lib/                # api.ts (typed fetch) · queryClient.ts · brief.ts (+test) · taskStream.ts (SSE) · utils.ts · videosPoll.ts (shared ['videos'] refetch interval, Issue 369) · peaks.ts (+test — BBC audiowaveform decode + max-of-bucket envelope reduction, Issue 392) · timelineZoom.ts (+test — pixels-per-second zoom maths, pointer-anchored; Issue 390) · timelineInteraction.ts (+test — hit-testing + PIXEL-threshold snapping) · editorCuts.ts (+test — stable cut ids, non-mutating merge) · keyboard.ts (isTypingTarget/isModalOpen, one definition) · toolLayout.ts (tool-shell player widths, derived from viewport HEIGHT so a 9:16/16:9 player cannot crowd out its panel — Issue 389; note the ~14.39px root font-size trap documented there)
-│       ├── hooks/              # useTimelineViewport.ts (+test — measurement, zoom, non-passive wheel; Issue 390) · useEditorShortcuts.ts (+test — ONE capture-phase document listener; never add a second) · useAuth.ts (TanStack Query; 401→null) · useTaskStream.ts (SSE log hook +test) · useTaskResult.ts (token/step/done-payload SSE hook, Issue 85e) · useStreamAction.ts (POST→stream helper, 85e) · useCleanedUriPoll.ts (clean/edit ready-poll, 85f)
+│       ├── lib/                # api.ts (typed fetch) · queryClient.ts · brief.ts (+test) · taskStream.ts (SSE) · utils.ts · videosPoll.ts (shared ['videos'] refetch interval, Issue 369) · peaks.ts (+test — BBC audiowaveform decode + max-of-bucket envelope reduction, Issue 392) · timelineZoom.ts (+test — pixels-per-second zoom maths, pointer-anchored; Issue 390) · timelineInteraction.ts (+test — hit-testing + PIXEL-threshold snapping) · editorCuts.ts (+test — stable cut ids, non-mutating merge, toDocumentCuts/withIndices: the word span is DERIVED, never persisted — Issue 391) · editCommands.ts (+test — snapshot undo/redo history; unbounded within a session) · saveScheduler.ts (+test — 800ms trailing / 2s MAX-WAIT autosave cadence; the ceiling is what makes continuous dragging still save) · editDocCache.ts (+test — localStorage demoted to a one-time legacy import + paint cache, never the source of truth) · keyboard.ts (isTypingTarget/isModalOpen, one definition) · toolLayout.ts (tool-shell player widths, derived from viewport HEIGHT so a 9:16/16:9 player cannot crowd out its panel — Issue 389; note the ~14.39px root font-size trap documented there)
+│       ├── hooks/              # useTimelineViewport.ts (+test — measurement, zoom, non-passive wheel; Issue 390) · useEditorShortcuts.ts (+test — ONE capture-phase document listener; never add a second) · useAuth.ts (TanStack Query; 401→null) · useTaskStream.ts (SSE log hook +test) · useTaskResult.ts (token/step/done-payload SSE hook, Issue 85e) · useStreamAction.ts (POST→stream helper, 85e) · useCleanedUriPoll.ts (clean/edit ready-poll, 85f) · useEditDocument.ts (+test — server-authoritative edit document; the query is the SEED, not the state: it hydrates once and NEVER invalidates on save, or an in-flight autosave would revert the creator's newer edits — Issue 391)
 │       ├── components/         # AuthGate.tsx (+test, protects routes) · AppChrome.tsx (Nav/Footer shell) · ToolChrome.tsx (+test — full-height, non-scrolling shell for the TOOL routes, no marketing footer; Issue 389) · LegalLinks.tsx (+test — Terms/Privacy/Accessibility, shared by Footer and the tool status bar) · Nav.tsx (+test; Editor+Settings links, Issue 304) · Footer.tsx · DisclaimerBand.tsx · Chip.tsx (+test — decorative mascot, Issue 304) · QueryErrorState.tsx (+test — shared retry card, Issue 361) · EmptyStatePrompt.tsx (+test — shared empty state whose action is a REQUIRED discriminated union, so a prose-only dead-end empty state does not type-check; 13 call sites — Issue 355)
 │       ├── components/ask/     # AskSurfaceTabs — one row differentiating the three "ask" surfaces
 │       │                         (Assistant / Analyze one video / Insights) by SCOPE; mounted on all
@@ -423,6 +423,28 @@ clips
   applied_title, applied_description   -- creator-approved publish metadata
                                        -- (migration 0047; NULL = publish falls
                                        -- back to video.title / "#Shorts")
+
+clip_edit_documents                  -- the creator's in-progress edit (Issue 391, migration 0052)
+  id, clip_id (FK, UNIQUE, CASCADE), creator_id (FK, CASCADE, indexed),
+  doc (JSONB), revision (int), created_at, updated_at
+  -- ONE ROW PER CLIP, read and written WHOLE. Replaces
+  --   localStorage['clip:{id}:cuts'], which was the source of truth until now:
+  --   clearing site data or switching machines destroyed the creator's work.
+  -- doc = {version, cuts:[{id,start_s,end_s}], last_applied_at}. Times are
+  --   clip-relative to setup_start_s ?? start_s. The transcript word span
+  --   (`indices`) is DERIVED and deliberately NOT stored — it is a function of
+  --   (times, transcript), and the transcript is server-owned and mutable, so a
+  --   stored span goes stale silently and can index past the end of `words`.
+  -- revision is a COLUMN, not a JSON key, because it participates in the WHERE
+  --   of the compare-and-set upsert. Per the Postgres manual a row locked but
+  --   not updated because an ON CONFLICT DO UPDATE ... WHERE condition failed is
+  --   NOT returned, so zero rows back IS the stale-revision signal. A stored row
+  --   is always at revision >= 1, which makes revision 0 the "no document yet"
+  --   sentinel the PUT and the one-time localStorage import both key off.
+  -- creator_id is denormalised so RLS is a direct-column policy (house pattern).
+  -- NOT a JSONB column on `clips`: the artifact has its own lifecycle, and
+  --   list_clips selects all columns for up to 100 rows, so a doc there would be
+  --   detoasted on every library page load for a payload the list never renders.
 
 clip_feedback
   id, clip_id (FK), creator_id (FK),

@@ -4,6 +4,64 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-04 — Issue 391 PR A: the edit stops being browser state
+
+**Branch `feat/391-edit-persistence`, 6 commits, not yet merged.** The last issue in Batch B, split
+into two PRs at plan time because the render path is paid, flag-gated and budget-checked — LEFT_OFF
+ranked it the SEV1 risk of the whole issue. **PR A is purely additive: nothing reads the document at
+render time yet**, and the client still POSTs `segments` from the same in-memory state, so behaviour
+on the paid path is byte-identical. PR B is the flip.
+
+**The two defects it removes.** Undo was a single `useState` slot that each of five mutation sites
+overwrote and undo cleared — two cuts then two undos was impossible. And cuts lived in
+`localStorage['clip:{id}:cuts']`, written by an effect whose quota failure was swallowed by
+`catch { /* quota — recoverable */ }`, so clearing site data or switching machines destroyed the work
+with no warning.
+
+| Commit | What landed |
+|---|---|
+| `5195120` | `clip_edit_documents` + model + the four RLS registration edits |
+| `14c5c8e` | `GET`/`PUT /clips/{id}/edit-document` + `validate_document_structure` |
+| `a5b2d93` | Export collector entry + `COMPLIANCE.md` row |
+| `3fcb4a5` | `lib/editCommands.ts` — snapshot undo/redo |
+| `3043fe4` | `useEditDocument` + `saveScheduler` + `editDocCache` |
+| `68f1672` | Wired `ShortFormEditor`; undo/redo keys; `SaveStatus`; a structural gate |
+
+**Gates.** Backend **2572 passed** (2546 baseline). Frontend **592 passed / 83 files** (549/78).
+Playwright **76 passed** incl. axe on both editor routes. Coverage **83.28%**, *up* from 83.08;
+clip_engine 92.61 (floor 91.0). ruff/mypy/bandit clean, `tsc -b` + `npm run build` clean, lint
+0 errors. `pip_audit` still fails 6 — **Issue 406**, pre-existing, unrelated.
+Integration/RLS tests need Docker, which this box lacks — **CI-verified only**.
+
+**Three things worth not re-deriving.**
+
+1. **The plan said to add an empty-GUC RLS test; it already existed.** What it did *not* do was
+   iterate the tenant tables — it hardcoded `("clips", "signals")`. That is precisely why the
+   `0048`/`0049` bare-`::uuid` regression survived: no test ever looked at those two tables.
+   Parameterising it is part of registering any new table, and once parameterised it goes red on
+   them — so `0052` repairs both policies in the same migration. Fixing the test alone would have
+   meant shipping a knowingly red gate.
+2. **Compiling the upsert surfaced a gap the plan had not.** With a non-zero `base_revision` and no
+   existing row, the `ON CONFLICT` never fires and the INSERT silently creates a fresh document under
+   a new lineage. Since a stored row is always at revision >= 1, that case is detectable (returned
+   revision 1 with a non-zero base) and now rolls back to a 409 instead of resurrecting.
+3. **`_TENANT_TABLES` and `creator_keyed` are not registries.** The one in migration `0010` is a
+   frozen historical artifact — editing it does nothing and corrupts that migration's downgrade. The
+   live one is in `tests/test_rls_isolation_integration.py`; `creator_keyed` is a local variable
+   inside one test function. Registration is four unrelated edits.
+
+**Three deviations, all in `DECISIONS.md`:** the `120/minute` autosave tier (2s max-wait × two tabs
+would sit exactly on a 60 cap), not invalidating the query on save (TanStack's documented default is
+wrong for autosave — it would revert the creator's in-flight edits), and the `0048`/`0049` repair.
+
+**Still open in this issue:** PR B — the render path reading the document via `base_revision`,
+`clean/confirm` clearing it server-side, and deleting the legacy `segments` branch.
+**Before PR B merges, set `BACKUP_R2_BUCKET` on the VM** — prod migrations currently run with no
+pre-migration safety dump (Issue 256), which did not matter for additive `0051` but does for a table
+the render path reads.
+
+---
+
 ## 2026-08-04 — L25 Batch B (part 1) MERGED and DEPLOYED · Issue 406 filed
 
 **PR #70 `wave/l25-batch-b` → `main` (`67fe4db`), deployed to `autoclip.studio`.** 29 commits,
