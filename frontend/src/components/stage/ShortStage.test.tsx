@@ -1,9 +1,15 @@
+/**
+ * ShortStage (L26 Issues 424/425) — the shared stage. Migrates ClipPlayer's
+ * render-state coverage (the hook + placeholder ladder now live here for both
+ * pages) and pins the stage-specific contracts: the mediaKey remount, the
+ * muted-autoplay pairing, and the single-player cleaned-preview tab swap.
+ */
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ClipPlayer } from './ClipPlayer'
+import { ShortStage, type ShortStageProps } from './ShortStage'
 import type { ReviewClip } from '@/types'
 
 const BASE: ReviewClip = {
@@ -27,40 +33,32 @@ const BASE: ReviewClip = {
   shortlisted: true,
 }
 
-function playerUi(clip: ReviewClip, qc: QueryClient) {
+function stageUi(props: ShortStageProps, qc: QueryClient) {
   return (
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <ClipPlayer
-          clip={clip}
-          trimStart={0}
-          trimEnd={20}
-          onTrimChange={() => {}}
-          onNext={() => {}}
-        />
+        <ShortStage {...props} />
       </MemoryRouter>
     </QueryClientProvider>
   )
 }
 
-function renderPlayer(clip: ReviewClip) {
+function renderStage(props: ShortStageProps) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(playerUi(clip, qc))
+  return render(stageUi(props, qc))
 }
 
 afterEach(() => vi.unstubAllGlobals())
 
-describe('ClipPlayer render states', () => {
+describe('ShortStage render states', () => {
   it('plays the video when the clip is rendered', () => {
-    renderPlayer(BASE)
+    renderStage({ clip: BASE })
     expect(document.querySelector('video')).toBeInTheDocument()
     expect(screen.queryByText(/Render this clip/)).not.toBeInTheDocument()
   })
 
   it('autoplays muted with preload so Chrome does not block on a black frame (Issue 359d)', () => {
-    // Chrome blocks unmuted autoplay: the element would stay paused on a black
-    // first frame until a user gesture — the "black render" symptom.
-    renderPlayer(BASE)
+    renderStage({ clip: BASE, autoPlay: true })
     const video = document.querySelector('video')!
     expect(video).toHaveAttribute('autoplay')
     expect(video.muted).toBe(true)
@@ -68,40 +66,19 @@ describe('ClipPlayer render states', () => {
   })
 
   it('remounts the video element when render_uri changes (confirmed trim/clean swap)', () => {
-    // A confirmed swap changes render_uri server-side but the download src is
-    // identical, so only a key change forces the element to reload the new
-    // media. Marker survives a same-artifact rerender (same element) and must
-    // vanish when render_uri changes (fresh element).
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    const { rerender } = render(playerUi(BASE, qc))
+    const { rerender } = render(stageUi({ clip: BASE }, qc))
     document.querySelector('video')!.setAttribute('data-marker', 'old-element')
 
-    rerender(playerUi(BASE, qc))
+    rerender(stageUi({ clip: BASE }, qc))
     expect(document.querySelector('video')!.getAttribute('data-marker')).toBe('old-element')
 
-    rerender(playerUi({ ...BASE, render_uri: 'http://x/c1-trimmed.mp4' }, qc))
+    rerender(stageUi({ clip: { ...BASE, render_uri: 'http://x/c1-trimmed.mp4' } }, qc))
     expect(document.querySelector('video')!.getAttribute('data-marker')).toBeNull()
   })
 
-  it('scales the filmstrip to the setup-origin duration, not end_s - start_s', () => {
-    // Setup clips (the normal case) have setup_start_s < start_s. The backend
-    // validates and cuts trims against end_s - (setup_start_s ?? start_s), so
-    // the filmstrip's timebase must match or every drag submits compressed
-    // seconds and the last start_s - setup_start_s seconds are unreachable.
-    renderPlayer({ ...BASE, setup_start_s: 120, start_s: 125, end_s: 160 })
-    // 160 - 120 = 40s — never 160 - 125 = 35s.
-    expect(screen.getByRole('slider', { name: 'Trim start' })).toHaveAttribute(
-      'aria-valuemax',
-      '40',
-    )
-    expect(screen.getByRole('slider', { name: 'Trim end' })).toHaveAttribute('aria-valuemax', '40')
-    // Ruler max and the duration readout agree with the filmstrip scale.
-    expect(screen.getByText('0:40')).toBeInTheDocument()
-    expect(screen.getByText(/40\.0s$/)).toBeInTheDocument()
-  })
-
   it('shows a "Rendering…" status while a render is in flight (no manual button)', () => {
-    renderPlayer({ ...BASE, render_status: 'running', render_uri: null })
+    renderStage({ clip: { ...BASE, render_status: 'running', render_uri: null } })
     expect(screen.getByText(/Rendering your clip/)).toBeInTheDocument()
     expect(screen.queryByText(/Render this clip/)).not.toBeInTheDocument()
   })
@@ -115,10 +92,9 @@ describe('ClipPlayer render states', () => {
       }),
     )
     vi.stubGlobal('fetch', fetchMock)
-    renderPlayer({ ...BASE, render_status: 'pending', render_uri: null })
+    renderStage({ clip: { ...BASE, render_status: 'pending', render_uri: null } })
 
-    const btn = screen.getByText(/Render this clip/)
-    await userEvent.click(btn)
+    await userEvent.click(screen.getByText(/Render this clip/))
 
     await waitFor(() => {
       const called = fetchMock.mock.calls.some(
@@ -128,26 +104,14 @@ describe('ClipPlayer render states', () => {
     })
   })
 
-  it('offers a retry when a render failed', () => {
-    renderPlayer({ ...BASE, render_status: 'failed', render_uri: null })
-    expect(screen.getByText(/Render failed/)).toBeInTheDocument()
-    expect(screen.getByText(/Retry render/)).toBeInTheDocument()
-  })
-
   it('does not latch the spinner after a render request settles (the render-loop bug)', async () => {
-    // Regression: a render that can never produce a render_uri (e.g. source media
-    // purged → render_status stays 'failed') must NOT spin forever. Previously
-    // triggerRender set `requesting=true` and never reset it on the 202/409 path,
-    // so the "Rendering your clip…" spinner latched permanently.
     const fetchMock = vi.fn(async () => ({ status: 202, ok: true, json: async () => ({}) }))
     vi.stubGlobal('fetch', fetchMock)
     // Server truth for this clip is terminal-failed (source gone); render_uri never lands.
-    renderPlayer({ ...BASE, render_status: 'failed', render_uri: null })
+    renderStage({ clip: { ...BASE, render_status: 'failed', render_uri: null } })
 
     await userEvent.click(screen.getByText(/Retry render/))
 
-    // Once the request settles, the spinner clears and the server's failed state shows
-    // through again — not a perpetual "Rendering…".
     await waitFor(() => {
       expect(screen.queryByText(/Rendering your clip/)).not.toBeInTheDocument()
     })
@@ -155,9 +119,6 @@ describe('ClipPlayer render states', () => {
   })
 
   it('shows the source-expired card (not a spinner) on the structured 409', async () => {
-    // 409 {code: source_expired}: the retention purge removed the source, so a
-    // retry can never succeed — a dedicated card with a re-upload CTA replaces
-    // the invalidate-and-poll path.
     const fetchMock = vi.fn(async () => ({
       status: 409,
       ok: false,
@@ -170,7 +131,7 @@ describe('ClipPlayer render states', () => {
       }),
     }))
     vi.stubGlobal('fetch', fetchMock)
-    renderPlayer({ ...BASE, render_status: 'pending', render_uri: null })
+    renderStage({ clip: { ...BASE, render_status: 'pending', render_uri: null } })
 
     await userEvent.click(screen.getByText(/Render this clip/))
 
@@ -178,7 +139,6 @@ describe('ClipPlayer render states', () => {
     const cta = screen.getByRole('link', { name: /Upload again/ })
     expect(cta).toHaveAttribute('href', '/dashboard')
     expect(screen.queryByText(/Rendering your clip/)).not.toBeInTheDocument()
-    // Never the raw object rendering that bit the old ApiError.
     expect(document.body.textContent).not.toContain('[object Object]')
   })
 
@@ -189,15 +149,70 @@ describe('ClipPlayer render states', () => {
       json: async () => ({ detail: 'Render already in progress' }),
     }))
     vi.stubGlobal('fetch', fetchMock)
-    renderPlayer({ ...BASE, render_status: 'pending', render_uri: null })
+    renderStage({ clip: { ...BASE, render_status: 'pending', render_uri: null } })
 
     await userEvent.click(screen.getByText(/Render this clip/))
 
-    // Invalidate-and-poll path: no error text and no source-expired card.
     await waitFor(() => {
       expect(screen.queryByText(/Rendering your clip/)).not.toBeInTheDocument()
     })
     expect(screen.queryByText(/Render already in progress/)).not.toBeInTheDocument()
     expect(screen.queryByText('Source media expired')).not.toBeInTheDocument()
+  })
+})
+
+describe('ShortStage meta + honesty', () => {
+  it('shows the clip number, setup-origin duration and fit tier', () => {
+    renderStage({ clip: BASE })
+    // 20 - 2 = 18s — the setup origin, never end_s - start_s.
+    expect(screen.getByText(/Clip #1 · 18\.0s/)).toBeInTheDocument()
+    expect(screen.getByText(/Strong channel fit/)).toBeInTheDocument()
+  })
+
+  it('a creator selection gets honest provenance, never a fit tier (Issue 373)', () => {
+    renderStage({
+      clip: { ...BASE, origin: 'creator', rank: null, score: null, shortlisted: false },
+    })
+    expect(screen.getByText(/Your selection/)).toBeInTheDocument()
+    expect(screen.getByText('Not engine-scored')).toBeInTheDocument()
+    expect(screen.queryByText(/channel fit/i)).toBeNull()
+  })
+})
+
+describe('ShortStage cleaned-preview tab swap (Issue 425)', () => {
+  it('swaps ONE player to the edited preview when a cleaned render lands, and back', async () => {
+    const onConfirm = vi.fn()
+    const onDiscard = vi.fn()
+    renderStage({
+      clip: BASE,
+      cleanedUri: 's3://bucket/cleaned.mp4',
+      onConfirmCleaned: onConfirm,
+      onDiscardCleaned: onDiscard,
+    })
+
+    // One player, not a second stacked one.
+    expect(document.querySelectorAll('video')).toHaveLength(1)
+    // The cleaned render just landed — the stage shows it by default…
+    expect(document.querySelector('video')!.getAttribute('src')).toContain('variant=cleaned')
+    expect(screen.getByRole('tab', { name: 'Edited preview' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+
+    // …with the decision buttons wired through.
+    await userEvent.click(screen.getByRole('button', { name: 'Use edited version' }))
+    expect(onConfirm).toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Keep original' }))
+    expect(onDiscard).toHaveBeenCalled()
+
+    // Tabbing back plays the current render again.
+    await userEvent.click(screen.getByRole('tab', { name: 'Current' }))
+    expect(document.querySelector('video')!.getAttribute('src')).not.toContain('variant=cleaned')
+    expect(document.querySelectorAll('video')).toHaveLength(1)
+  })
+
+  it('renders no tabs when there is no pending cleaned render', () => {
+    renderStage({ clip: BASE })
+    expect(screen.queryByRole('tab')).toBeNull()
   })
 })

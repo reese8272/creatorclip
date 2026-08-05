@@ -59,22 +59,6 @@ export const STAGE_MEDIA_W =
   'w-[min(24rem,80vw)] lg:w-[min(34rem,100cqw,calc((100cqh_-_7rem)*0.5625))]'
 
 /**
- * Editor viewer width. X = 31.5rem ≈ 453px covers nav + header strip + timeline
- * dock + status bar + main/card padding + the compact meta row. Re-measured at
- * 1440×900 after Issue 390 gave the dock a zoom toolbar and a real ruler, which
- * cost the region grid ~13px; the e2e "card must fit its row" guard caught the
- * overflow rather than it shipping as a clipped meta row.
- */
-export const EDITOR_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_31.5rem)*0.5625))]'
-
-/**
- * Review player width. X = 29.5rem — no timeline dock, but ClipPlayer wraps the
- * video in 287px of its own chrome (trim filmstrip, fit badge, Next). Measured
- * at 1440×900: 773px row, so the player gets 486px of height.
- */
-export const REVIEW_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_29.5rem)*0.5625))]'
-
-/**
  * Long-form SOURCE player width. 1.7778 = 16/9, so this bounds a landscape
  * player's height the same way — X = 41rem leaves room for the Chip callout, the
  * master timeline and the clip lists below it.

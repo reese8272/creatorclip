@@ -185,6 +185,24 @@ describe('Review', () => {
     expect(screen.getByRole('button', { name: /Next clip/ })).toBeInTheDocument()
   })
 
+  it('scales the trim filmstrip to the setup-origin duration, not end_s - start_s', async () => {
+    // Setup clips have setup_start_s < start_s. The backend validates and cuts
+    // trims against end_s - (setup_start_s ?? start_s), so the filmstrip's
+    // timebase must match or every drag submits compressed seconds. (Migrated
+    // from ClipPlayer.test when the filmstrip moved to the stage's below slot.)
+    vi.stubGlobal('fetch', mockFetch())
+    renderReview('/app/review?video_id=v1')
+    await screen.findByText(/Clip #1/)
+    // BASE_CLIP: end 20, setup_start 2 → 18s, never 20s.
+    expect(screen.getByRole('slider', { name: 'Trim start' })).toHaveAttribute(
+      'aria-valuemax',
+      '18',
+    )
+    expect(screen.getByRole('slider', { name: 'Trim end' })).toHaveAttribute('aria-valuemax', '18')
+    // Both the meta row and the filmstrip readout agree on the timebase.
+    expect(screen.getAllByText(/18\.0s/).length).toBeGreaterThanOrEqual(2)
+  })
+
   it('keeps the personalization card inside the case column (#412 empty-canvas guard)', async () => {
     const personalization: PersonalizationStatus = {
       active: false, labels: 5, threshold: 20, weight: 0,

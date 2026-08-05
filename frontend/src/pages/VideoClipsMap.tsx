@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { GenerateClipsButton } from '@/components/landing/VideoPickerLanding'
-import { WhyThisClip } from '@/components/review/WhyThisClip'
+import { ClipCase } from '@/components/review/ClipCase'
 import { fitTier } from '@/lib/fit'
 import { FitBadge } from '@/components/ui/fit-badge'
 import type { ReviewClip, ReviewClipListResponse, Video, VideoListResponse } from '@/types'
@@ -273,7 +273,7 @@ export function VideoClipsMap() {
             <span className="ml-2">Click a marker to see why this clip was chosen.</span>
           </div>
 
-          {/* Inline detail panel — shows WhyThisClip for the selected clip */}
+          {/* Inline detail panel — the argued case for the selected clip (ClipCase) */}
           {selectedClip && (
             <section
               className="mb-6 rounded-md border border-default bg-surface p-4"
@@ -298,7 +298,7 @@ export function VideoClipsMap() {
                   </button>
                 </div>
               </div>
-              <WhyThisClip clip={selectedClip} />
+              <ClipCase clip={selectedClip} />
             </section>
           )}
 
