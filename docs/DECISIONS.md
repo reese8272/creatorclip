@@ -5,6 +5,38 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-05 (late night) — Fresh-upload review wave (Issues 434–436 + camera-region floor)
+
+Driven by the creator's review of video `b8505eb7` (8 rendered clips). Four rulings:
+
+**(1) Virtual-tripod hold replaces per-sample face following (Issue 436).** Evidence from the
+persisted live tracks: speaker_cut rank 1 made 276 micro-moves over 335 samples (median
+2–3 px, 67 direction flips); face_pan ranks 2–3 see-sawed 25–60 px per step. EMA α=0.2 is a
+low-pass, not a hold — detector wobble propagated at 20% amplitude 5×/second into a sendcmd
+STAIRCASE (one x per sample, held 200 ms), while the frontend preview lerps — so the render
+was visibly worse than the overlay. The fix is piecewise-constant paths: one windowed-median
+hold per speaker segment; pan holds with a continuously-sustained deadband breach
+(every sample in the window beyond 0.15×crop_w for 1.0 s — a majority-median vote would let a
+0.6 s spike flip it) and ONE explicit linear glide (600 px/s, 30 fps keyframes — lerp-exact,
+so preview == render). EMA/pan-clamp machinery deleted rather than kept "for glides": it IS
+the 5 Hz staircase failure mode. Track JSON stays v1; median (not mean) because a single
+outlier in a ~6-obs segment window moves a mean but not a median.
+
+**(2) Camera-region height floor 0.55 → 0.45.** The detector RAN on the produced layout and
+measured the camera band at 551/1080 = 0.51 — rejected by the 0.55 floor ("motion region too
+short"), so the source's SUBSCRIBE banner stayed in frame despite the 433 composition being
+live. The face-inside-region sanity check and the 0.30 area floor still guard correctness.
+
+**(3) Review audio: muted-autoplay stays (browser policy, Issue 359d) but muted became STATE
+with a chrome toggle + per-session persistence (Issue 434).** The static `muted={autoPlay}`
+prop made the only autoplaying surface permanently silent; the rendered files were verified
+to carry −16 dB loudnorm audio (ffprobe), so this was purely a player defect. `Volume` (not
+`Volume2`) because the no-glyph-icons allow-list regex rejects digits.
+
+**(4) Video titles seeded from the filename stem at upload + tri-state PATCH (Issue 435).**
+The multipart flow is stateless by design (Issue 395 ruling), so the filename rides the
+/complete call rather than adding server-side upload state.
+
 ## 2026-08-05 (night) — Issue 431: append-mode regeneration ("Generate more clips")
 
 Four rulings:

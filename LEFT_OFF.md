@@ -1,11 +1,13 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-05 (night) · **Branch:** `main` @ `e6d7334` + this docs close-out ·
-in sync with `origin/main` after push
+**Last updated:** 2026-08-05 (late night) · **Branch:** `main` — 433 (`433aaa6`), 431
+(`e6d7334`), docs (`058c3a1`) all pushed + deployed; the fresh-upload review wave (Issues
+434–436 + camera-region floor) is committed on top of this close-out.
 **Prod:** `https://autoclip.studio` — speaker cuts LIVE (422), serial render queue (432),
-**Issue 433 (region-aware reframe) DEPLOYED with `CAMERA_REGION_DETECT_ENABLED=true`** and
-**Issue 431 ("Generate more clips") DEPLOYED** (`e6d7334`, chain green). Both test videos were
-deleted (DB cascade + R2 verified) — **the creator re-uploads fresh to exercise everything**.
+region-aware reframe (433) + generate-more (431) DEPLOYED. The creator's fresh upload
+`b8505eb7` (27-min podcast) verified cuts/captions/audio-in-files live; their review drove
+Issues **434 (Review audio) / 435 (video titles) / 436 (virtual-tripod framing)** + the
+camera-region floor 0.45 — all built + gated this session.
 **Git note:** `stash@{0}` remains the owner's own "wip LEFT_OFF before research-branch checkout"
 stash — popping it onto this file WILL conflict; resolve by hand or drop deliberately.
 
@@ -15,28 +17,26 @@ stash — popping it onto this file WILL conflict; resolve by hand or drop delib
 
 ## CURRENT FOCUS
 
-**Everything for the fresh-upload verification round is built and deployed; the active work is
-LIVE VERIFICATION on the next upload** — Issues 433 (cuts + chrome removal composed), 427
-(captions), and 431 (generate-more smoke). Rulings: `docs/DECISIONS.md` two 2026-08-05 (night)
-entries; session log: `docs/PROJECT_STATE.md` top entry.
+**Deploy + live-verify the fresh-upload review wave (434/435/436 + floor)** on video
+`b8505eb7`. Rulings: `docs/DECISIONS.md` 2026-08-05 late-night entry; session log:
+`docs/PROJECT_STATE.md` top entry.
 
 ## → NEXT ACTIONS (in order)
 
-1. **When the user's fresh upload lands**, verify live:
-   - **433:** renders show speaker cuts AND no source chrome (SUBSCRIBE banner gone on
-     produced layouts); `GET /clips/{id}/crop-track` carries the additive `region` key when a
-     region was used; CropTrackOverlay still aligns. Frame spot-check via the clip-audit
-     method below.
-   - **427:** captions in the 70% band, off the face (Haar pass is now unconditional — works
-     under the reframe flag too).
-   - **431 smoke:** review clips → give feedback → "Generate more clips" (toolbar or the
-     all-reviewed state) → appended non-shortlisted clips, no window duplicates, NO minute
-     deduction (`minute_deductions` unchanged), metadata fills on the appended rows.
-2. **If the 431 deploy chain wasn't confirmed green** (watcher was still polling at close):
-   `gh run list --commit e6d7334` — a failed image build silently SKIPS deploy.
-3. **Watch for:** Opus 5 cache HITS (`cache_read_input_tokens > 0` on the 2nd+ call) ·
-   caption-position UX feedback · reframe floor behavior on new layouts.
-4. **Parked:** Issue-395 live drills (>2 GB, reload-resume, session-expiry) · operator
+1. **Watch the deploy chain** for the 434–436 commit (`gh run list` — a failed image build
+   silently SKIPS deploy), then health-check prod.
+2. **Live re-render verification (Issue 436 + floor):** reset `render_status='pending'` on
+   ranks 1 (`56746e18`, speaker_cut) and 2 (`154a517d`, face_pan) of `b8505eb7`, enqueue via
+   the celery-call drill, download, and check: steady frame between cuts (crop-track keyframe
+   count collapses from ~336 to cuts+1), no 25–60 px see-saw on rank 2, SUBSCRIBE banner GONE
+   (region log line should now read "cropping into …" instead of "too short (551px)").
+3. **UI live checks (need the creator or a session cookie):** Review page audio after one
+   click on the new speaker toggle · Dashboard rename of `b8505eb7` (currently blank title →
+   "Untitled") · 431 generate-more smoke (appended non-duplicates, no minute deduction).
+4. **Watch for:** Opus 5 cache HITS (`cache_read_input_tokens > 0`) · reframe floor behavior
+   on other layouts (`REFRAME_MIN_MAPPING_CONFIDENCE=0.2`; ranks 2–3 honestly fell to
+   face_pan at 0.11–0.12 on this picture-in-picture layout — expected).
+5. **Parked:** Issue-395 live drills (>2 GB, reload-resume, session-expiry) · operator
    punch-list (`docs/GO_LIVE.md`): #29 OAuth verification · #26/#28 friend beta · #282 uptime
    monitor · #255 key escrow.
 

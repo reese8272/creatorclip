@@ -404,7 +404,17 @@ class TestPlumbing:
         assert mapping.track_for(1, 1) is None
         assert mapping.track_for(2, 0) is None
 
-    def test_face_track_cx_at_tolerance(self) -> None:
+    def test_face_track_median_cx_windowed(self) -> None:
+        """Issue 436: the hold statistic. Windowed median; an empty window
+        falls back to the whole-track median; one outlier can't move it."""
         track = _track(0, 800.0, 0.0, 2.0)
-        assert track.cx_at(1.0, tolerance_s=0.3) == 800.0
-        assert track.cx_at(9.0, tolerance_s=0.3) is None
+        assert track.median_cx() == 800.0
+        assert track.median_cx(0.0, 1.0) == 800.0
+        # Window with no obs → whole-track median, never a crash.
+        assert track.median_cx(9.0, 10.0) == 800.0
+
+    def test_face_track_median_cx_outlier_robust(self) -> None:
+        obs = [FaceObs(t=0.2 * i, cx=400.0, cy=500.0, w=100.0, h=100.0) for i in range(5)]
+        obs[3] = FaceObs(t=0.6, cx=900.0, cy=500.0, w=100.0, h=100.0)
+        track = FaceTrack(track_id=0, shot_idx=0, obs=obs)
+        assert track.median_cx() == 400.0  # a mean would read 500

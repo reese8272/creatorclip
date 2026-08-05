@@ -153,6 +153,9 @@ export function multipartCallbacks() {
           parts: parts.map((p) => ({ part_number: p.PartNumber, etag: p.ETag })),
           youtube_video_id: meta.youtube_video_id || null,
           duration_s: meta.duration_s || null,
+          // Issue 435: the flow is stateless server-side, so the title seed
+          // (filename stem) travels with the completing call.
+          filename: file.name ?? null,
         },
       })
       // The returned object becomes upload-success's response.body; the plugin

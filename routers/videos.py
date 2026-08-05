@@ -74,6 +74,44 @@ class VideoListItemOut(BaseModel):
     has_peaks: bool = False
 
 
+_TITLE_MAX_CHARS = 200
+
+
+def _title_from_filename(filename: str | None) -> str | None:
+    """Default a new upload's title to the filename stem (Issue 435) — better
+    than the "Untitled" the dashboard fell back to, and freely editable after."""
+    if not filename:
+        return None
+    stem = Path(filename).stem.strip()
+    return stem[:_TITLE_MAX_CHARS] or None
+
+
+def _video_item(v: Video) -> dict:
+    """One VideoListItemOut payload (shared by the list and PATCH responses)."""
+    return {
+        "id": str(v.id),
+        "youtube_video_id": v.youtube_video_id,
+        "title": v.title,
+        "kind": v.kind.value,
+        "ingest_status": v.ingest_status.value,
+        "failure_reason": v.failure_reason,
+        "duration_s": v.duration_s,
+        "created_at": v.created_at.isoformat(),
+        "origin": v.origin.value,
+        # Only uploaded videos carry stored media and can run the pipeline.
+        "clippable": v.source_uri is not None,
+        "has_poster": v.poster_uri is not None,
+        "has_peaks": v.peaks_uri is not None,
+    }
+
+
+class VideoPatch(BaseModel):
+    """PATCH /videos/{id} body (Issue 435). Tri-state like ClipMetadataPatch:
+    omitted = untouched, null/blank = clear, string = set."""
+
+    title: str | None = Field(default=None, max_length=_TITLE_MAX_CHARS)
+
+
 class VideoListOut(BaseModel):
     """Envelope for the videos list (DECISIONS 2026-06-08).
 
@@ -179,6 +217,9 @@ class UploadCompleteIn(BaseModel):
     parts: list[UploadCompletePart] = Field(min_length=1, max_length=10_000)
     youtube_video_id: str | None = None
     duration_s: float | None = Field(default=None, gt=0)  # advisory only — never persisted
+    # Issue 435: the multipart flow is stateless (395 ruling), so the original
+    # filename rides the complete call to seed the video title.
+    filename: str | None = Field(default=None, max_length=255)
 
 
 class UploadAbortIn(BaseModel):
@@ -261,24 +302,7 @@ async def list_videos(
         .limit(_LIST_LIMIT)
     )
     videos = list(result.scalars())
-    items = [
-        {
-            "id": str(v.id),
-            "youtube_video_id": v.youtube_video_id,
-            "title": v.title,
-            "kind": v.kind.value,
-            "ingest_status": v.ingest_status.value,
-            "failure_reason": v.failure_reason,
-            "duration_s": v.duration_s,
-            "created_at": v.created_at.isoformat(),
-            "origin": v.origin.value,
-            # Only uploaded videos carry stored media and can run the pipeline.
-            "clippable": v.source_uri is not None,
-            "has_poster": v.poster_uri is not None,
-            "has_peaks": v.peaks_uri is not None,
-        }
-        for v in videos
-    ]
+    items = [_video_item(v) for v in videos]
     state = build_envelope_state(len(items))
     message: str | None = None
     next_action: NextActionOut | None = None
@@ -356,6 +380,27 @@ async def list_catalog(
         for v in videos
     ]
     return {"videos": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.patch("/{video_id}", response_model=VideoListItemOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def patch_video(
+    request: Request,
+    video_id: uuid.UUID,
+    body: VideoPatch,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Rename a video (Issue 435). Tri-state: an omitted field is untouched;
+    null or blank clears the title back to the dashboard's Untitled fallback."""
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    patch = body.model_dump(exclude_unset=True)
+    if "title" in patch:
+        title = (patch["title"] or "").strip()
+        video.title = title[:_TITLE_MAX_CHARS] or None
+    await session.commit()
+    await session.refresh(video)
+    return _video_item(video)
 
 
 @router.post("/link", response_model=VideoLinkedOut)
@@ -576,6 +621,7 @@ async def upload_video(
     video = Video(
         creator_id=creator.id,
         youtube_video_id=youtube_video_id,
+        title=_title_from_filename(file.filename),
         kind=kind,
         duration_s=duration_s,
         source_uri=source_uri,
@@ -839,6 +885,7 @@ async def complete_upload(
     video = Video(
         creator_id=creator.id,
         youtube_video_id=body.youtube_video_id,
+        title=_title_from_filename(body.filename),
         kind=kind,
         duration_s=None,
         source_uri=source_uri,

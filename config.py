@@ -409,6 +409,24 @@ class Settings(BaseSettings):
     # across the seam and looks broken). Tunable so staging evidence calibrates
     # the floor per fixture; below it the ladder degrades to face_pan as before.
     REFRAME_MIN_MAPPING_CONFIDENCE: float = 0.3
+    # ── Virtual-tripod hold (Issue 436) ─────────────────────────────────────
+    # The crop HOLDS a fixed position (per speaker segment / pan hold) instead
+    # of following the raw 5 Hz face center — measured live: ~4 micro-moves/s
+    # in speaker_cut, 25–60 px see-saw steps in face_pan. face_pan re-frames
+    # only when the sliding-window median face position deviates more than this
+    # fraction of CROP width (crop-relative: tolerance for off-center framing
+    # scales with the visible window)…
+    REFRAME_PAN_DEADBAND_FRAC: float = 0.15
+    # …sustained for this long (outlasts detector flicker; a real repositioning
+    # is acknowledged within ~a second, like a human operator)…
+    REFRAME_PAN_RETARGET_S: float = 1.0
+    # …then glides once to the new hold at this speed. The old 300 px/s clamp
+    # was a continuous-follow ceiling; a deliberate one-shot re-center reads
+    # better brisk (200–400 px completes in 0.3–0.7 s).
+    REFRAME_PAN_GLIDE_PX_PER_S: float = 600.0
+    # Keyframe/sendcmd densification DURING glides only (≈20 px per step at
+    # 600 px/s — sub-perceptual in motion). Holds emit no keyframes at all.
+    REFRAME_GLIDE_SAMPLE_FPS: float = 30.0
 
     # ── Caption placement (Issue 427) ───────────────────────────────────────────
     # Karaoke captions were burned dead-center — on the speaker's face. The new
@@ -446,8 +464,10 @@ class Settings(BaseSettings):
     CAMERA_REGION_MOTION_THRESH: float = 6.0
     # Gates: region must cover ≥ this fraction of the frame area…
     CAMERA_REGION_MIN_AREA_FRAC: float = 0.30
-    # …and ≥ this fraction of the frame height…
-    CAMERA_REGION_MIN_HEIGHT_FRAC: float = 0.55
+    # …and ≥ this fraction of the frame height. 0.55 → 0.45 (2026-08-05): the
+    # first live produced layout measured a 551/1080 = 0.51 camera band and was
+    # wrongly rejected; the face-inside-region check still guards correctness.
+    CAMERA_REGION_MIN_HEIGHT_FRAC: float = 0.45
     # …and ≤ this fraction (near-full frame ⇒ no chrome ⇒ skip the no-op crop).
     CAMERA_REGION_FULL_FRAME_FRAC: float = 0.92
     # Padding added around the detected region, per side, as a frame fraction.

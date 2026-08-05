@@ -3,7 +3,7 @@ import type { Ref } from 'react'
 
 import { cn } from '@/lib/utils'
 import { isModalOpen, isTypingTarget } from '@/lib/keyboard'
-import { Play, RectangleHorizontal, RotateCcw } from '@/components/ui/icon'
+import { Play, RectangleHorizontal, RotateCcw, Volume, VolumeX } from '@/components/ui/icon'
 import { ICON_SIZE } from '@/components/ui/iconSizes'
 import { Tooltip } from '@/components/ui/tooltip'
 
@@ -29,6 +29,11 @@ import { Tooltip } from '@/components/ui/tooltip'
 
 const SEEK_STEP_S = 5
 const SHUTTLE_RATES = [1, 1.5, 2, 4] as const
+// The unmute choice outlives one mount (Issue 434): Review remounts the player
+// per clip (`key={clip.id}`), and re-muting on every advance made the queue
+// effectively silent. Session-scoped on purpose — a fresh tab starts muted
+// again, which is what the autoplay policy expects.
+const MUTED_STORAGE_KEY = 'cc-player-muted'
 /** Standard rates a measured fps is snapped to, when it can be measured at all. */
 const COMMON_FPS = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60]
 
@@ -113,6 +118,33 @@ export function VideoPlayer({
   // State, not a ref: the transport tooltip renders this number, and reading a
   // ref during render is unsafe. It settles at most once per source.
   const [effectiveFps, setEffectiveFps] = useState(fps)
+  // Muted is STATE seeded from autoPlay (Issue 434) — the old static
+  // `muted={autoPlay}` could never be undone, so autoplaying surfaces (Review)
+  // were permanently silent. Autoplay still starts muted (browser policy,
+  // Issue 359d) unless this session already chose sound.
+  const [muted, setMuted] = useState(() => {
+    if (!autoPlay) return false
+    try {
+      return sessionStorage.getItem(MUTED_STORAGE_KEY) !== 'false'
+    } catch {
+      return true
+    }
+  })
+
+  const toggleMuted = useCallback(() => {
+    setMuted((m) => {
+      const next = !m
+      // The element property, not just the React prop: the prop only applies on
+      // mount for a playing element in some browsers.
+      if (videoRef.current) videoRef.current.muted = next
+      try {
+        sessionStorage.setItem(MUTED_STORAGE_KEY, String(next))
+      } catch {
+        // Storage unavailable (private mode) — the toggle still works this mount.
+      }
+      return next
+    })
+  }, [])
 
   const emit = useCallback(() => {
     for (const cb of subscribersRef.current) cb()
@@ -357,10 +389,11 @@ export function VideoPlayer({
         src={src}
         poster={poster}
         playsInline
-        // autoPlay implies muted: browsers block unmuted autoplay, and the
+        // autoPlay starts muted: browsers block unmuted autoplay, and the
         // element then sits paused with no visible transport (Issue 359d).
+        // The chrome's audio toggle (Issue 434) is the way back to sound.
         autoPlay={autoPlay}
-        muted={autoPlay}
+        muted={muted}
         preload={autoPlay ? 'auto' : 'metadata'}
         onTimeUpdate={(e) => {
           const t = e.currentTarget.currentTime
@@ -418,6 +451,21 @@ export function VideoPlayer({
         <span className="shrink-0 font-mono text-mono text-muted tabular-nums" aria-hidden="true">
           {formatTime(displayTime)} / {formatTime(duration)}
         </span>
+
+        {/* In BOTH densities: Review's compact player is exactly where the
+            missing sound was reported (Issue 434). */}
+        <button
+          type="button"
+          onClick={toggleMuted}
+          aria-label={muted ? 'Unmute' : 'Mute'}
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm text-muted hover:bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-border"
+        >
+          {muted ? (
+            <VolumeX className={ICON_SIZE.sm} aria-hidden="true" />
+          ) : (
+            <Volume className={ICON_SIZE.sm} aria-hidden="true" />
+          )}
+        </button>
 
         {!compact && (
           <>

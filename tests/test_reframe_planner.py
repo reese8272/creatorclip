@@ -15,11 +15,12 @@ import pytest
 
 from clip_engine.reframe import (
     CropCenterPoint,
+    CropSegment,
+    _hold_points_from_segments,
     build_sendcmd_script,
     compute_dynamic_crop,
     plan_crop_directives,
-    smooth_crop_track,
-    smooth_crop_track_segmented,
+    plan_pan_holds,
 )
 from clip_engine.speaker_map import FaceObs, FaceTrack, SpeakerMapping, Turn
 
@@ -217,52 +218,132 @@ class TestPlanCropDirectives:
 
 
 # ---------------------------------------------------------------------------
-# Segmented smoothing — a cut is an unsmoothed value jump
+# Virtual tripod (Issue 436) — speaker_cut holds
 # ---------------------------------------------------------------------------
 
 
-class TestSmoothCropTrackSegmented:
-    def test_no_cuts_equals_plain_smoothing(self) -> None:
-        raw = _make_track(400, 420, 440, 460, 480)
-        plain = smooth_crop_track(raw)
-        segmented = smooth_crop_track_segmented(raw, [])
-        assert [(p.timestamp_s, p.center_x) for p in plain] == [
-            (p.timestamp_s, p.center_x) for p in segmented
-        ]
+def _wobble_track(track_id: int, base: float, t0: float, t1: float, *, shot_idx: int = 0):
+    """A face track wobbling ±10px around ``base`` — real detector behavior."""
+    obs = []
+    i = 0
+    t = t0
+    while t <= t1 + 1e-9:
+        obs.append(FaceObs(t=t, cx=base + (10.0 if i % 2 else -10.0), cy=500.0, w=100.0, h=100.0))
+        i += 1
+        t = t0 + i * 0.2
+    return FaceTrack(track_id=track_id, shot_idx=shot_idx, obs=obs)
 
-    def test_ema_state_resets_at_cut(self) -> None:
-        """The first sample at/after a cut takes the NEW segment's raw value —
-        no EMA lag, no pan clamp across the cut: an unsmoothed jump."""
-        raw = _make_track(*([400] * 5 + [1500] * 5))
-        cut_t = raw[5].timestamp_s
-        segmented = smooth_crop_track_segmented(raw, [cut_t])
-        assert segmented[5].center_x == 1500  # raw value, not a lagged EMA
-        # Without the cut the EMA + pan clamp would lag far behind.
-        plain = smooth_crop_track(raw)
-        assert plain[5].center_x < 1500
 
-    def test_jump_lands_in_sendcmd_values(self) -> None:
-        """The cut shows up as a hard value jump between consecutive sendcmd
-        lines (Issue 420: cuts are sendcmd value jumps, no new filters)."""
-        raw = _make_track(*([400] * 5 + [1500] * 5))
-        cut_t = raw[5].timestamp_s
-        segmented = smooth_crop_track_segmented(raw, [cut_t])
-        script = build_sendcmd_script(segmented, crop_w=607, frame_w=1920, start_s=0.0)
+class TestHoldPointsFromSegments:
+    def test_wobble_collapses_to_one_constant_per_segment(self) -> None:
+        """The pre-436 live failure: detector wobble became ~4 crop moves/s.
+        Now: sendcmd line count == segment count, and the only inter-line
+        delta is the full cut jump."""
+        tracks = [_wobble_track(1, 400.0, 0.0, 2.0), _wobble_track(2, 1500.0, 2.0, 4.0)]
+        segments = [CropSegment(0.0, 2.0, 1), CropSegment(2.0, 4.0, 2)]
+        pts = _hold_points_from_segments(segments, tracks, 1920)
+
+        assert [(p.timestamp_s) for p in pts] == [0.0, 2.0]
+        assert pts[0].center_x == 400  # median of ±10px wobble = the base
+        assert pts[1].center_x == 1500
+        script = build_sendcmd_script(pts, crop_w=607, frame_w=1920, start_s=0.0)
         xs = [int(line.rstrip(";").split()[-1]) for line in script.splitlines()]
-        deltas = [abs(b - a) for a, b in zip(xs, xs[1:], strict=False)]
-        assert max(deltas) == abs((1500 - 607 // 2) - (400 - 607 // 2)), (
+        assert len(xs) == len(segments)
+        assert abs(xs[1] - xs[0]) == abs((1500 - 607 // 2) - (400 - 607 // 2)), (
             "the cut must be a full-distance jump between consecutive lines"
         )
 
-    def test_multiple_cuts_multiple_resets(self) -> None:
-        raw = _make_track(*([400] * 4 + [1500] * 4 + [800] * 4))
-        cuts = [raw[4].timestamp_s, raw[8].timestamp_s]
-        segmented = smooth_crop_track_segmented(raw, cuts)
-        assert segmented[4].center_x == 1500
-        assert segmented[8].center_x == 800
+    def test_median_ignores_detector_outlier(self) -> None:
+        """One 900px outlier among 400px obs: the hold stays at 400 (a mean
+        would drift and shift the emitted x)."""
+        obs = [FaceObs(t=0.2 * i, cx=400.0, cy=500.0, w=100.0, h=100.0) for i in range(5)]
+        obs[2] = FaceObs(t=0.4, cx=900.0, cy=500.0, w=100.0, h=100.0)
+        track = FaceTrack(track_id=1, shot_idx=0, obs=obs)
+        pts = _hold_points_from_segments([CropSegment(0.0, 1.0, 1)], [track], 1920)
+        assert pts[0].center_x == 400
+
+    def test_offscreen_segment_holds_previous(self) -> None:
+        tracks = [_wobble_track(1, 400.0, 0.0, 2.0)]
+        segments = [CropSegment(0.0, 2.0, 1), CropSegment(2.0, 4.0, None)]
+        pts = _hold_points_from_segments(segments, tracks, 1920)
+        assert pts[1].center_x == pts[0].center_x
+        assert pts[1].is_fallback is False  # deliberate framing, not a fallback
+
+    def test_no_signal_at_all_is_center_fallback(self) -> None:
+        pts = _hold_points_from_segments([CropSegment(0.0, 2.0, None)], [], 1920)
+        assert len(pts) == 1
+        assert pts[0].center_x == 960
+        assert pts[0].is_fallback is True
+
+
+# ---------------------------------------------------------------------------
+# Virtual tripod (Issue 436) — pan-rung deadband holds
+# ---------------------------------------------------------------------------
+
+
+def _plan(raw, cuts=()):
+    return plan_pan_holds(
+        list(raw),
+        list(cuts),
+        sample_fps=5.0,
+        deadband_px=91.0,  # 0.15 × 607 — the shipped default at 1080p
+        retarget_s=1.0,
+        glide_px_per_s=600.0,
+        glide_sample_fps=30.0,
+    )
+
+
+class TestPlanPanHolds:
+    def test_oscillation_inside_deadband_holds_forever(self) -> None:
+        """The measured live failure: ±40px see-saw 5×/s. Inside the deadband
+        the whole 4s span collapses to ONE hold keyframe (→ static render)."""
+        raw = _make_track(*([760, 840] * 10))
+        out = _plan(raw)
+        assert len(out) == 1
+        assert abs(out[0].center_x - 800) <= 40
+
+    def test_transient_spike_never_retargets(self) -> None:
+        """A 0.6s excursion (3 samples < the 1.0s window) returns before the
+        deviation is continuously sustained — the tripod holds."""
+        centers = [800] * 10 + [1200] * 3 + [800] * 10
+        out = _plan(_make_track(*centers))
+        assert len(out) == 1
+
+    def test_sustained_move_earns_exactly_one_glide(self) -> None:
+        raw = _make_track(*([800] * 10 + [1400] * 20))
+        out = _plan(raw)
+        assert out[0].center_x == 800
+        xs = [p.center_x for p in out]
+        assert xs == sorted(xs)  # monotonic — one glide, no see-saw
+        assert out[-1].center_x == 1400
+        # Glide duration ≈ 600px / 600px/s = 1s at 30fps ≈ 31 ramp points.
+        glide = out[1:]
+        assert 25 <= len(glide) <= 35
+        # After the glide the hold emits NOTHING (sendcmd holds the last value).
+        assert out[-1].timestamp_s < raw[-1].timestamp_s
+
+    def test_fallback_samples_never_trigger(self) -> None:
+        """Detection loss must not move the tripod — fallbacks don't vote."""
+        raw = _make_track(*([800] * 5))
+        raw += [CropCenterPoint(1.0 + 0.2 * i, 960, is_fallback=True) for i in range(15)]
+        out = _plan(raw)
+        assert len(out) == 1
+        assert out[0].center_x == 800
+
+    def test_shot_cut_splits_spans_and_lands_a_boundary_keyframe(self) -> None:
+        """Holds re-derive per shot; the cut jump lands exactly ON the boundary
+        time (cut entries + the frontend snap key off that alignment)."""
+        raw = _make_track(*([400] * 10 + [1400] * 10))
+        cut_t = raw[10].timestamp_s
+        out = _plan(raw, cuts=[cut_t])
+        assert [p.timestamp_s for p in out] == [0.0, cut_t]
+        assert [p.center_x for p in out] == [400, 1400]
+        # No glide may cross the boundary — everything is a hold here.
+        script = build_sendcmd_script(out, crop_w=607, frame_w=1920, start_s=0.0)
+        assert len(script.splitlines()) == 2
 
     def test_empty_track(self) -> None:
-        assert smooth_crop_track_segmented([], [1.0]) == []
+        assert _plan([]) == []
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +436,9 @@ class TestComputeDynamicCrop:
         assert cut["speaker"] == 1
         assert cut["from_x"] != cut["to_x"]
         assert result.sendcmd_text  # multi-point script present
+        # Issue 436 virtual tripod: one hold keyframe per segment — a 1-cut
+        # clip is exactly 2 keyframes, not one per 5 Hz sample.
+        assert len(result.track_json["keyframes"]) == 2
 
     def test_cuts_flag_off_caps_at_face_pan(self, tmp_path) -> None:
         result = self._run(tmp_path, transcript=_dialogue_segments(), cuts_enabled=False)

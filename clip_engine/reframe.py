@@ -21,11 +21,14 @@ Architecture:
      to shot boundaries, spaced ≥ REFRAME_MIN_SHOT_S), ALWAYS cut at source
      shot changes, hold framing for off-screen speakers, suppress cuts inside
      the punch-in pulse.
-  5. Smooth the center-x track with an exponential moving average PER
-     INTER-CUT SEGMENT (state resets at every cut) and clamp pan speed.
-  6. Emit an ffmpeg ``sendcmd`` script whose lines adjust the crop ``x``
-     offset once per sample. A cut is just an UNSMOOTHED value jump between
-     consecutive sendcmd lines — no new filter machinery.
+  5. Build the VIRTUAL-TRIPOD crop path (Issue 436): one constant hold per
+     speaker segment (the owning track's windowed median); the pan rung holds
+     a median position and re-frames only after a sustained deadband breach,
+     via one explicit linear glide. No per-sample following anywhere — the
+     measured live failure was detector wobble re-emitted 5×/s.
+  6. Emit an ffmpeg ``sendcmd`` script with one line per keyframe (holds and
+     glide ramps — typically tens of lines, not hundreds). A cut is just a
+     value jump between consecutive sendcmd lines — no new filter machinery.
 
 The heavy path is intentionally designed to be:
   - LAZY: mediapipe and cv2 are imported inside functions, not at module level,
@@ -37,8 +40,8 @@ The heavy path is intentionally designed to be:
     (byte-compatible with the legacy path).
 
 Verify scope:
-  Unit-testable: geometry, tracks, turns, mapping, ladder, planner, segmented
-  smoothing, sendcmd text, track JSON — all verified with synthetic inputs.
+  Unit-testable: geometry, tracks, turns, mapping, ladder, planner, hold/glide
+  planning, sendcmd text, track JSON — all verified with synthetic inputs.
   render-env/staging-pending: actual ffmpeg crop output on real multi-speaker
   media (Issue 422 staging checklist / Issue 189 unlock criteria).
 
@@ -51,6 +54,8 @@ from __future__ import annotations
 
 import logging
 import math
+import statistics
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -72,19 +77,10 @@ logger = logging.getLogger(__name__)
 # proportional to clip duration without decoding every frame.
 _DEFAULT_SAMPLE_FPS: float = 5.0
 
-# EMA smoothing coefficient α: how fast the smoothed track follows the raw
-# detection. α=0.2 gives roughly a 4-frame lag (τ = 1/(1-α)), which removes
-# jitter while still reacting to real speaker switches within ~1 second.
-# Industry-standard for live camera pan smoothing (one-euro filter is the
-# 2026 gold standard for interactive latency, but EMA is sufficient for
-# offline post-processing on pre-recorded clips).
-_EMA_ALPHA: float = 0.2
-
-# Maximum crop-center pan speed (pixels/second of source resolution) applied
-# after EMA to prevent whip-pan artefacts on rapid speaker switches.
-# 300 px/s on a 1920px-wide frame = ~15% of frame width per second — a
-# comfortable "pan feels intentional" limit (BBC camera operator guidelines).
-_MAX_PAN_PX_PER_S: float = 300.0
+# A pan-hold retarget glide shorter than about a quarter second reads as a
+# jump, not a camera move (Issue 436 virtual tripod). Module constant, not
+# config: it is a perceptual floor, not a tuning knob.
+_GLIDE_MIN_S: float = 0.25
 
 # Minimum detection confidence for MediaPipe BlazeFace to be counted as a
 # real face detection rather than noise.
@@ -529,104 +525,97 @@ def build_crop_center_track(
     return raw_points
 
 
-def smooth_crop_track(
-    raw_track: list[CropCenterPoint],
-    *,
-    ema_alpha: float = _EMA_ALPHA,
-    max_pan_px_per_s: float = _MAX_PAN_PX_PER_S,
-) -> list[CropCenterPoint]:
-    """Apply EMA smoothing + pan-speed clamping to a raw detection track.
-
-    Two-stage post-processing:
-      1. Exponential Moving Average: smoothed[i] = α·raw[i] + (1−α)·smoothed[i-1]
-         where ``ema_alpha`` controls how fast the track follows new detections.
-      2. Pan-speed clamp: cap the frame-to-frame delta to
-         ``max_pan_px_per_s × Δt`` so the crop never whips faster than an
-         intentional-looking camera pan.
-
-    Args:
-        raw_track: Ordered list of raw :class:`CropCenterPoint` records.
-        ema_alpha: EMA smoothing coefficient ∈ (0, 1].  1.0 = no smoothing.
-        max_pan_px_per_s: Maximum allowed pan speed in pixels per second.
-
-    Returns:
-        New list of :class:`CropCenterPoint` records with smoothed centers.
-        Timestamps and ``is_fallback`` flags are preserved unchanged.
-    """
-    if not raw_track:
-        return []
-    if len(raw_track) == 1:
-        return [
-            CropCenterPoint(
-                raw_track[0].timestamp_s,
-                raw_track[0].center_x,
-                is_fallback=raw_track[0].is_fallback,
-            )
-        ]
-
-    smoothed: list[CropCenterPoint] = []
-    prev_cx = float(raw_track[0].center_x)
-    prev_ts = raw_track[0].timestamp_s
-
-    for point in raw_track:
-        # EMA step.
-        raw_cx = float(point.center_x)
-        ema_cx = ema_alpha * raw_cx + (1.0 - ema_alpha) * prev_cx
-
-        # Pan-speed clamp step.
-        dt = point.timestamp_s - prev_ts
-        if dt > 0:
-            max_delta = max_pan_px_per_s * dt
-            delta = ema_cx - prev_cx
-            if abs(delta) > max_delta:
-                ema_cx = prev_cx + math.copysign(max_delta, delta)
-
-        cx_int = int(round(ema_cx))
-        smoothed.append(CropCenterPoint(point.timestamp_s, cx_int, is_fallback=point.is_fallback))
-        prev_cx = ema_cx
-        prev_ts = point.timestamp_s
-
-    return smoothed
-
-
-def smooth_crop_track_segmented(
+def _split_at_boundaries(
     raw_track: list[CropCenterPoint],
     cut_times: list[float],
-    *,
-    ema_alpha: float = _EMA_ALPHA,
-    max_pan_px_per_s: float = _MAX_PAN_PX_PER_S,
-) -> list[CropCenterPoint]:
-    """EMA-smooth per inter-cut segment; smoothing state RESETS at every cut.
+) -> list[tuple[float, list[CropCenterPoint]]]:
+    """Split a raw track into ``(span_start_time, points)`` spans at cut times.
 
-    The existing :func:`smooth_crop_track` runs unchanged inside each
-    segment; because its first point passes through un-lagged, the first
-    sample at/after a cut takes the new segment's raw value — a cut is an
-    UNSMOOTHED value jump between consecutive sendcmd lines (no new filter
-    machinery, Issue 420). Also enforces the shots.py contract: the crop
-    never pans across a source cut (each shot boundary is a cut time).
+    ``span_start_time`` is the raw first point's time for the opening span and
+    the BOUNDARY time itself for every later span, so each span's hold keyframe
+    lands exactly on the cut (cut entries and the frontend snap key off it).
     """
     if not raw_track:
         return []
-    boundaries = sorted(cut_times)
-    segments: list[list[CropCenterPoint]] = []
+    boundaries = sorted(t for t in cut_times)
+    spans: list[tuple[float, list[CropCenterPoint]]] = []
     current: list[CropCenterPoint] = []
+    current_start = raw_track[0].timestamp_s
     bi = 0
     for point in raw_track:
         while bi < len(boundaries) and point.timestamp_s >= boundaries[bi]:
             if current:
-                segments.append(current)
+                spans.append((current_start, current))
                 current = []
+            current_start = boundaries[bi]
             bi += 1
         current.append(point)
     if current:
-        segments.append(current)
+        spans.append((current_start, current))
+    return spans
 
-    smoothed: list[CropCenterPoint] = []
-    for segment in segments:
-        smoothed.extend(
-            smooth_crop_track(segment, ema_alpha=ema_alpha, max_pan_px_per_s=max_pan_px_per_s)
+
+def plan_pan_holds(
+    raw: list[CropCenterPoint],
+    shot_cut_times: list[float],
+    *,
+    sample_fps: float,
+    deadband_px: float,
+    retarget_s: float,
+    glide_px_per_s: float,
+    glide_sample_fps: float,
+) -> list[CropCenterPoint]:
+    """Virtual-tripod planner for the pan rung (Issue 436).
+
+    Replaces continuous face-following (the measured live failure: 25–60 px
+    see-saw steps 5×/s) with hold-and-retarget: each shot-bounded span opens
+    on the MEDIAN of its first ``retarget_s`` of detections and HOLDS it.
+    A retarget fires only when EVERY real detection in the last ``retarget_s``
+    sits beyond ``deadband_px`` from the hold (a spike shorter than the window
+    can never flip it — sustained means continuously sustained) — then the
+    crop glides ONCE (an explicit linear keyframe ramp at ``glide_sample_fps``;
+    lerp-exact, so the frontend preview and the sendcmd render agree) to the
+    window's median and holds again. Fallback (no-detection) samples never
+    trigger anything — the tripod just holds. Glides never cross a shot cut
+    (spans are split at the boundaries).
+    """
+    out: list[CropCenterPoint] = []
+    window_n = max(1, math.ceil(retarget_s * sample_fps))
+
+    for span_start, points in _split_at_boundaries(raw, shot_cut_times):
+        first_window = [p for p in points if p.timestamp_s < points[0].timestamp_s + retarget_s]
+        real_first = [p for p in first_window if not p.is_fallback]
+        hold = float(
+            statistics.median([p.center_x for p in (real_first or first_window)])
         )
-    return smoothed
+        out.append(
+            CropCenterPoint(span_start, int(round(hold)), is_fallback=not real_first)
+        )
+
+        span_end = points[-1].timestamp_s
+        window: deque[CropCenterPoint] = deque(maxlen=window_n)
+        glide_end_t = -math.inf
+        for p in points:
+            if p.timestamp_s < glide_end_t or p.is_fallback:
+                continue  # mid-glide samples are consumed; fallbacks never vote
+            window.append(p)
+            if len(window) < window_n:
+                continue
+            if any(abs(w.center_x - hold) <= deadband_px for w in window):
+                continue  # not continuously sustained — the tripod holds
+            target = float(statistics.median([w.center_x for w in window]))
+            t0 = p.timestamp_s
+            d = min(max(abs(target - hold) / glide_px_per_s, _GLIDE_MIN_S), span_end - t0)
+            if d <= 0:
+                continue  # no room left in the span for a visible move
+            steps = max(1, math.ceil(d * glide_sample_fps))
+            for i in range(steps + 1):
+                f = i / steps
+                out.append(CropCenterPoint(t0 + f * d, int(round(hold + f * (target - hold)))))
+            hold = target
+            glide_end_t = t0 + d
+            window.clear()
+    return out
 
 
 def clamp_crop_x(center_x: int, crop_w: int, frame_w: int) -> int:
@@ -671,7 +660,7 @@ def build_sendcmd_script(
     timestamp — suitable for our once-per-sample update rate.
 
     Args:
-        track: Ordered crop-center timeline (from :func:`smooth_crop_track`).
+        track: Ordered crop-center timeline (the planned hold/glide points).
         crop_w: Crop window width in source pixels.
         frame_w: Source frame width in pixels.
         start_s: Clip start time (source-relative seconds); subtracted to
@@ -855,43 +844,36 @@ def plan_crop_directives(
     return cuts, segments
 
 
-def _raw_track_from_segments(
-    sample_times: list[float],
+def _hold_points_from_segments(
     segments: list[CropSegment],
     tracks: list[_sm.FaceTrack],
     frame_w: int,
-    sample_fps: float,
 ) -> list[CropCenterPoint]:
-    """Per-sample raw crop centers following each segment's owning track.
+    """Virtual tripod for ``speaker_cut`` (Issue 436): ONE constant crop center
+    per segment — the owning track's median position over the segment window.
 
-    Off-screen/undetected moments HOLD the previous value (deliberate framing,
-    not a fallback); only a total absence of any signal yields frame-center
-    fallback points.
+    The per-sample predecessor followed the face continuously WITHIN a turn,
+    so detector wobble became ~4 crop micro-moves/second (measured live).
+    A speaker turn is framed like a locked-off camera: position changes happen
+    ONLY at cuts, which is where the next segment's point lands. Off-screen
+    segments (``track_id`` None) HOLD the previous position — deliberate
+    framing, not a fallback; only a total absence of signal yields the
+    frame-center fallback point.
     """
     tracks_by_id = {t.track_id: t for t in tracks}
-    tolerance_s = 1.5 / sample_fps
     out: list[CropCenterPoint] = []
     prev_cx: float | None = None
-    si = 0
-    for ts in sample_times:
-        while si < len(segments) - 1 and ts >= segments[si].end:
-            si += 1
-        track = None
-        if segments:
-            track_id = segments[si].track_id
-            track = tracks_by_id.get(track_id) if track_id is not None else None
-        cx = track.cx_at(ts, tolerance_s=tolerance_s) if track is not None else None
-        if cx is None and track is not None and prev_cx is None:
-            cx = track.mean_cx  # segment opens before its track's first obs
-        if cx is None:
-            if prev_cx is not None:
-                out.append(CropCenterPoint(ts, int(round(prev_cx))))
-            else:
-                out.append(CropCenterPoint(ts, frame_w // 2, is_fallback=True))
-                prev_cx = float(frame_w // 2)
-            continue
-        out.append(CropCenterPoint(ts, int(round(cx))))
-        prev_cx = float(cx)
+    for seg in segments:
+        track = tracks_by_id.get(seg.track_id) if seg.track_id is not None else None
+        if track is not None:
+            cx = track.median_cx(seg.start, seg.end)
+            out.append(CropCenterPoint(seg.start, int(round(cx))))
+            prev_cx = cx
+        elif prev_cx is not None:
+            out.append(CropCenterPoint(seg.start, int(round(prev_cx))))
+        else:
+            out.append(CropCenterPoint(seg.start, frame_w // 2, is_fallback=True))
+            prev_cx = float(frame_w // 2)
     return out
 
 
@@ -1013,7 +995,7 @@ def compute_dynamic_crop(
     region: tuple[int, int, int, int] | None = None,
 ) -> ReframeResult:
     """Compute the full dynamic crop: detection → shots → mapping → plan →
-    segmented smoothing → sendcmd + wire-contract track JSON.
+    virtual-tripod hold track → sendcmd + wire-contract track JSON.
 
     The ladder (``speaker_cut → face_pan → static``) is applied via
     :func:`clip_engine.speaker_map.choose_reframe_mode`; each stage degrades
@@ -1101,7 +1083,7 @@ def compute_dynamic_crop(
             min_mapping_confidence=settings.REFRAME_MIN_MAPPING_CONFIDENCE,
         )
 
-        # ── Plan + smooth per mode ────────────────────────────────────────
+        # ── Plan the virtual-tripod hold track per mode (Issue 436) ───────
         cuts: list[CropCut] = []
         if mode == "speaker_cut":
             cuts, plan_segments = plan_crop_directives(
@@ -1117,30 +1099,40 @@ def compute_dynamic_crop(
                 min_shot_s=settings.REFRAME_MIN_SHOT_S,
                 punch_in_peak_s=punch_in_peak_s,
             )
-            raw = _raw_track_from_segments(
-                timestamps, plan_segments, tracks, frame_width, sample_fps
-            )
+            planned = _hold_points_from_segments(plan_segments, tracks, frame_width)
         elif mode == "face_pan":
-            # Pan rung — largest-face EMA pan (today's designed behavior),
-            # improved: mandatory cuts + smoothing resets at source cuts.
+            # Pan rung — largest face, held on a virtual tripod: deadband +
+            # sustained-deviation retarget glides; mandatory cuts at source
+            # shot changes (never pan across a source cut).
             raw = _raw_track_largest_face(obs_frames, frame_width)
             cuts = [
                 CropCut(t=t, speaker=None, from_track=None, to_track=None)
                 for t in shot_changes
                 if start_s < t < end_s
             ]
+            planned = plan_pan_holds(
+                raw,
+                [c.t for c in cuts],
+                sample_fps=sample_fps,
+                deadband_px=settings.REFRAME_PAN_DEADBAND_FRAC * crop_w,
+                retarget_s=settings.REFRAME_PAN_RETARGET_S,
+                glide_px_per_s=settings.REFRAME_PAN_GLIDE_PX_PER_S,
+                glide_sample_fps=settings.REFRAME_GLIDE_SAMPLE_FPS,
+            )
         else:  # static
             mid = start_s + duration / 2.0
-            raw = [CropCenterPoint(mid, frame_width // 2, is_fallback=True)]
+            planned = [CropCenterPoint(mid, frame_width // 2, is_fallback=True)]
 
-        smoothed = smooth_crop_track_segmented(raw, [c.t for c in cuts])
+        # A single point (zero-cut clip, or a hold with no retargets) emits an
+        # EMPTY script → render.py's static-crop branch: a true locked-off
+        # crop with no sendcmd file at all.
         script = (
-            build_sendcmd_script(smoothed, crop_w, frame_width, start_s)
-            if len(smoothed) > 1
+            build_sendcmd_script(planned, crop_w, frame_width, start_s)
+            if len(planned) > 1
             else ""
         )
         track_json = _build_track_json(
-            smoothed,
+            planned,
             cuts,
             shot_changes,
             mode,
@@ -1163,28 +1155,28 @@ def compute_dynamic_crop(
             reframe_detect_ms=reframe_detect_ms,
             reframe_shots_ms=reframe_shots_ms,
             reframe_plan_ms=int(now_ms() - _t_plan),
-            samples=len(smoothed),
+            keyframes=len(planned),
             cuts=len(cuts),
             shots=len(shot_changes),
             clip_duration_s=round(duration, 3),
         )
         logger.info(
-            "Dynamic crop: mode=%s samples=%d cuts=%d shots=%d speakers=%d "
+            "Dynamic crop: mode=%s keyframes=%d cuts=%d shots=%d speakers=%d "
             "confidence=%.2f coverage=%.2f fallback_pct=%.0f%% for %s [%.2f–%.2f]",
             mode,
-            len(smoothed),
+            len(planned),
             len(cuts),
             len(shot_changes),
             speaker_count,
             mapping.confidence,
             coverage,
-            100.0 * sum(1 for p in smoothed if p.is_fallback) / max(1, len(smoothed)),
+            100.0 * sum(1 for p in planned if p.is_fallback) / max(1, len(planned)),
             source_path.name,
             start_s,
             end_s,
         )
         return ReframeResult(
-            track_points=smoothed, sendcmd_text=script, track_json=track_json, mode=mode
+            track_points=planned, sendcmd_text=script, track_json=track_json, mode=mode
         )
     except Exception as exc:
         logger.warning(

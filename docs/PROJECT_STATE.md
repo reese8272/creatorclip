@@ -4,6 +4,32 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-05 (late night) — Fresh-upload review wave: Issues 434–436 + camera-region floor (BUILT, deploying)
+
+The creator's fresh upload (`b8505eb7`, 27-min podcast, 12 clips / top-8 rendered) live-verified
+the 433/427 pipeline (speaker cuts firing, captions in band, sentence-clean opens, loudnorm
+audio in every file) and their review surfaced four defects — all root-caused with live
+evidence and fixed same session (DECISIONS late-night entry):
+
+- **Issue 434 — Review was silent:** `muted={autoPlay}` was a static prop with no volume
+  control; muted is now state + a chrome audio toggle + per-session persistence. The files
+  themselves were verified fine (−16.2 dB mean).
+- **Issue 435 — "Untitled" dead end:** title now seeded from the filename stem at upload
+  (multipart sends `filename` at /complete — stateless flow preserved), `PATCH /videos/{id}`
+  tri-state rename, inline `VideoTitleCell` on the Dashboard.
+- **Issue 436 — jittery framing:** virtual-tripod hold. Measured live: ~4 crop micro-moves/s
+  (speaker_cut) and 25–60 px see-saw (face_pan). Now: one windowed-median hold per speaker
+  segment (`FaceTrack.median_cx`), pan rung holds with a continuously-sustained deadband
+  (0.15×crop_w for 1.0 s) + single 600 px/s linear glides; EMA machinery deleted; sendcmd
+  drops from ~335 lines to cuts+1; track JSON stays v1; render.py untouched.
+- **Camera-region floor 0.55→0.45:** the detector measured this real layout's camera band at
+  551/1080 = 0.51 and wrongly rejected it — the SUBSCRIBE banner stayed in frame. Floor
+  lowered on that evidence; the face-inside-region check still guards.
+- **Gates:** backend **2877/0**, frontend **646/646** (node 22) + tsc + build + eslint 0
+  errors, Layer 0 green.
+- **Next:** deploy → re-render ranks 1+2 of `b8505eb7` → verify steady framing + banner gone;
+  unmute/rename/generate-more live checks ride the creator's next session.
+
 ## 2026-08-05 (night) — Issues 433 + 431 BUILT & DEPLOYED; test videos deleted; camera-region flag ON in prod
 
 Ran the approved two-issue plan after deleting both test uploads (DB cascade + 88 R2

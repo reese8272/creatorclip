@@ -31,13 +31,11 @@ except ImportError:
     _CV2_AVAILABLE = False
 
 from clip_engine.reframe import (
-    _EMA_ALPHA,
     CropCenterPoint,
     build_crop_center_track,
     build_sendcmd_script,
     clamp_crop_x,
     compute_reframe_crop,
-    smooth_crop_track,
 )
 
 # ---------------------------------------------------------------------------
@@ -124,84 +122,6 @@ class TestClampCropX:
         # x + crop_w must not exceed frame_w
         assert x + crop_w <= frame_w
         assert x >= 0
-
-
-# ---------------------------------------------------------------------------
-# smooth_crop_track
-# ---------------------------------------------------------------------------
-
-
-class TestSmoothCropTrack:
-    def test_empty_returns_empty(self) -> None:
-        assert smooth_crop_track([]) == []
-
-    def test_single_point_unchanged(self) -> None:
-        track = [CropCenterPoint(0.5, 300)]
-        result = smooth_crop_track(track)
-        assert len(result) == 1
-        assert result[0].center_x == 300
-        assert result[0].timestamp_s == 0.5
-
-    def test_ema_alpha_1_is_no_smoothing(self) -> None:
-        """α=1.0: smoothed value equals raw value at every step."""
-        raw = _make_track(100, 200, 300, 900)
-        smoothed = smooth_crop_track(raw, ema_alpha=1.0, max_pan_px_per_s=1e9)
-        for orig, sm in zip(raw, smoothed, strict=True):
-            assert sm.center_x == orig.center_x
-
-    def test_ema_alpha_0_is_frozen(self) -> None:
-        """α=0.0: smoothed value is always the initial value (frozen)."""
-        raw = _make_track(500, 200, 300)
-        smoothed = smooth_crop_track(raw, ema_alpha=0.0, max_pan_px_per_s=1e9)
-        # Every smoothed value converges to the first raw value
-        for sm in smoothed:
-            assert sm.center_x == 500
-
-    def test_ema_converges_toward_target(self) -> None:
-        """After enough steps with constant input, EMA should approach that value."""
-        # 20 points at 200, starting from 500.
-        raw = [CropCenterPoint(float(i) * 0.2, 200) for i in range(20)]
-        # Seed with high initial value by using first point = 500.
-        raw[0] = CropCenterPoint(0.0, 500)
-        smoothed = smooth_crop_track(raw, ema_alpha=_EMA_ALPHA, max_pan_px_per_s=1e9)
-        # After 20 steps, smoothed value should be much closer to 200 than 500.
-        final_cx = smoothed[-1].center_x
-        assert abs(final_cx - 200) < abs(500 - 200)
-
-    def test_pan_clamp_limits_delta(self) -> None:
-        """Pan speed must not exceed max_pan_px_per_s."""
-        # Two points 0.2s apart; raw delta = 900px; max = 300 * 0.2 = 60px.
-        interval = 0.2  # seconds
-        raw = [
-            CropCenterPoint(0.0, 100),
-            CropCenterPoint(interval, 1000),  # +900px in 0.2s = 4500 px/s
-        ]
-        max_pan = 300.0  # px/s
-        smoothed = smooth_crop_track(raw, ema_alpha=1.0, max_pan_px_per_s=max_pan)
-        delta = abs(smoothed[1].center_x - smoothed[0].center_x)
-        assert delta <= max_pan * interval + 1  # +1 for rounding
-
-    def test_pan_clamp_direction_preserved(self) -> None:
-        """Pan clamp must preserve the direction of movement."""
-        raw = [
-            CropCenterPoint(0.0, 100),
-            CropCenterPoint(0.2, 1000),  # moves right
-        ]
-        smoothed = smooth_crop_track(raw, ema_alpha=1.0, max_pan_px_per_s=300.0)
-        assert smoothed[1].center_x > smoothed[0].center_x  # direction preserved
-
-    def test_fallback_flag_preserved(self) -> None:
-        """is_fallback must be preserved through smoothing."""
-        raw = [CropCenterPoint(0.0, 960, is_fallback=True)]
-        smoothed = smooth_crop_track(raw)
-        assert smoothed[0].is_fallback is True
-
-    def test_preserves_timestamps(self) -> None:
-        raw = _make_track(100, 200, 300, start_s=5.0, fps=2.0)
-        smoothed = smooth_crop_track(raw)
-        assert len(smoothed) == len(raw)
-        for orig, sm in zip(raw, smoothed, strict=True):
-            assert sm.timestamp_s == pytest.approx(orig.timestamp_s)
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +295,7 @@ class TestComputeReframeCrop:
         tmp_path: Path,
         *,
         detected_centers: list[int] | None = None,
+        centers_for_ts=None,
         duration: float = 2.0,
         sample_fps: float = 5.0,
     ) -> tuple[list[CropCenterPoint], str]:
@@ -388,7 +309,8 @@ class TestComputeReframeCrop:
         centers = detected_centers if detected_centers is not None else [800]
 
         def _fake_obs(frame, detector, ts):
-            return [FaceObs(t=ts, cx=float(c), cy=500.0, w=100.0, h=100.0) for c in centers]
+            cs = centers_for_ts(ts) if centers_for_ts is not None else centers
+            return [FaceObs(t=ts, cx=float(c), cy=500.0, w=100.0, h=100.0) for c in cs]
 
         # compute_reframe_crop delegates to compute_dynamic_crop (Issue 420):
         # the detection seam is _detect_face_obs and shot detection is mocked
@@ -409,16 +331,27 @@ class TestComputeReframeCrop:
                 sample_fps=sample_fps,
             )
 
-    def test_returns_smoothed_track_and_script_for_multi_point(self, tmp_path: Path) -> None:
+    def test_constant_face_collapses_to_single_hold(self, tmp_path: Path) -> None:
+        """Issue 436 virtual tripod: a steady face is a LOCKED-OFF crop — one
+        hold keyframe, empty script → render.py's static branch (no sendcmd)."""
         track, script = self._run(tmp_path, duration=2.0, sample_fps=5.0)
-        # 2s * 5fps = 10 points → multi-point → script non-empty
-        assert len(track) > 1
-        assert len(script) > 0
+        assert len(track) == 1
+        assert script == ""
+        assert track[0].center_x == 800
 
-    def test_script_contains_sendcmd_lines(self, tmp_path: Path) -> None:
-        _, script = self._run(tmp_path, duration=1.0, sample_fps=5.0)
+    def test_sustained_move_earns_glide_sendcmd_lines(self, tmp_path: Path) -> None:
+        """A real repositioning (past deadband, sustained past retarget_s)
+        produces exactly one glide — monotonic sendcmd x values, no see-saw."""
+        _, script = self._run(
+            tmp_path,
+            centers_for_ts=lambda ts: [300] if ts < 11.0 else [1500],
+            duration=4.0,
+            sample_fps=5.0,
+        )
         assert "[enter]" in script
         assert "crop@spk x" in script
+        xs = [int(line.strip().rstrip(";").split()[-1]) for line in script.splitlines()]
+        assert xs == sorted(xs)  # one monotonic glide, never a back-and-forth
 
     def test_single_sample_returns_empty_script(self, tmp_path: Path) -> None:
         # duration=0.19s at 5fps → only 1 sample (0 * 0.2 = 0.0s is the only ts < 0.19)
@@ -454,8 +387,13 @@ class TestComputeReframeCrop:
 
     def test_x_in_script_is_within_frame(self, tmp_path: Path) -> None:
         """Every crop x value in the sendcmd script must be within [0, frame_w - crop_w]."""
-        # Face at far right edge — should be clamped.
-        track, script = self._run(tmp_path, detected_centers=[1919], duration=2.0)
+        # A sustained move to the far right edge — the glide must stay clamped.
+        _, script = self._run(
+            tmp_path,
+            centers_for_ts=lambda ts: [100] if ts < 11.0 else [1919],
+            duration=4.0,
+        )
+        assert script  # the move produced glide lines to check
         for line in script.splitlines():
             # Line format: "0.200 [enter] crop@spk x 1313;"
             parts = line.strip().rstrip(";").split()
@@ -651,21 +589,6 @@ class TestIterSampledFramesSequentialCapture:
         assert results[0][1] is not None
         assert results[1][1] is None
         assert results[2][1] is None
-
-
-class TestSmoothCropTrackEdges:
-    """Pins: non-monotonic timestamps must not crash smooth_crop_track."""
-
-    def test_non_monotonic_timestamps_no_crash(self) -> None:
-        """dt <= 0 (duplicate or reversed timestamps) — pan-clamp is skipped but
-        EMA still runs; function must not raise."""
-        raw = [
-            CropCenterPoint(1.0, 500),
-            CropCenterPoint(1.0, 700),  # same timestamp → dt=0
-            CropCenterPoint(0.8, 300),  # earlier → dt<0
-        ]
-        result = smooth_crop_track(raw)
-        assert len(result) == 3  # every point is returned
 
 
 class TestBuildCropCenterTrackEdges:

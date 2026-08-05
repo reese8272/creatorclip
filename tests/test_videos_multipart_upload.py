@@ -244,6 +244,7 @@ def _complete_body(**overrides):
         "key": _own_key(),
         "parts": [{"part_number": 2, "etag": "e2"}, {"part_number": 1, "etag": "e1"}],
         "duration_s": 30.0,
+        "filename": "My Podcast Ep 12.mp4",
     }
     body.update(overrides)
     return body
@@ -305,6 +306,8 @@ def test_complete_happy_path(mp_client, monkeypatch):
     assert video.duration_s is None
     assert video.kind.value == "short"  # provisional, from the 30 s advisory duration
     assert video.source_uri == f"s3://test-bucket/{_own_key()}"
+    # Issue 435: the filename stem seeds the title (no more "Untitled" rows).
+    assert video.title == "My Podcast Ep 12"
     assert order == ["stamp", "start"], "stamp_stream_owner must run before start_pipeline"
     delete.assert_not_called()
 

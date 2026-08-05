@@ -155,11 +155,36 @@ describe('VideoPlayer', () => {
 
   // Ported from ClipPlayer.test.tsx — the Issue 359d autoplay-block fix.
   it('mutes when autoPlay is set, so the browser does not block it', () => {
+    sessionStorage.clear()
     const { container } = render(<VideoPlayer src="/x" label="Clip" autoPlay />)
     const video = container.querySelector('video')!
     expect(video).toHaveAttribute('autoplay')
     expect(video).toHaveAttribute('preload', 'auto')
     expect(video.muted).toBe(true)
+  })
+
+  // Issue 434: muted autoplay must be escapable — Review was permanently silent.
+  it('unmutes via the audio toggle and remembers the choice across remounts', async () => {
+    sessionStorage.clear()
+    const user = userEvent.setup()
+    const { container, unmount } = render(<VideoPlayer src="/x" label="Clip" autoPlay />)
+    expect(container.querySelector('video')!.muted).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Unmute' }))
+    expect(container.querySelector('video')!.muted).toBe(false)
+    expect(screen.getByRole('button', { name: 'Mute' })).toBeInTheDocument()
+
+    // Review advances by remounting the player per clip — sound must survive.
+    unmount()
+    const next = render(<VideoPlayer src="/y" label="Clip" autoPlay />)
+    expect(next.container.querySelector('video')!.muted).toBe(false)
+  })
+
+  it('starts unmuted without autoPlay, ignoring any stored muted choice', () => {
+    sessionStorage.setItem('cc-player-muted', 'true')
+    const { container } = render(<VideoPlayer src="/x" label="Clip" />)
+    expect(container.querySelector('video')!.muted).toBe(false)
+    sessionStorage.clear()
   })
 
   // Ported from ClipPlayer.test.tsx — a re-render must not keep stale media when

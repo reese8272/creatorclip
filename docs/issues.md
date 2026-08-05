@@ -2078,6 +2078,78 @@ in the toolbar + the all-reviewed terminal state (redirect held open while in fl
 - [x] Button in Review; honest "No new distinct moments" message when a pass finds nothing new
 - [ ] Live smoke on the next fresh upload: review → generate more → appended non-duplicate clips, metadata fills, no minute deduction
 
+### Issue 434: Review page is silent — muted autoplay with no unmute control
+
+- [x] **Status:** DONE 2026-08-05 (night) — filed+fixed from the fresh-upload review (`b8505eb7`) · **Size:** S
+
+The rendered MP4s carry healthy audio (aac, −16.2 dB mean loudnorm); Review is the only
+surface passing `autoPlay` to VideoPlayer, and `muted={autoPlay}` was a static prop with no
+volume control in the custom chrome (controls deliberately not exposed — Issue 386), so the
+queue was permanently silent while the Editor had sound.
+
+**Shipped:** `muted` is state seeded from `autoPlay` (browser autoplay policy still starts
+muted — Issue 359d); an audio toggle in the player chrome (both densities; `Volume`/`VolumeX`
+via the icon seam — digits rejected by the no-glyph allow-list, so not `Volume2`); the choice
+persists per session (`sessionStorage` `cc-player-muted`) so advancing the Review queue
+(player remounts per clip) keeps sound on.
+
+**Acceptance**
+- [x] Unmute toggle in the chrome; autoplay still starts muted (`video-player.test.tsx`)
+- [x] Choice survives the per-clip remount (sessionStorage pin)
+- [x] Non-autoplay surfaces unaffected (start unmuted, ignore the stored choice)
+- [ ] Live: sound audible in Review after one click on the next upload
+
+### Issue 435: Video titles — filename seed + inline rename ("Untitled" dead end)
+
+- [x] **Status:** DONE 2026-08-05 (night) — filed+fixed from the fresh-upload review · **Size:** M
+
+`Video.title` was never written anywhere (upload endpoints ignored the filename they already
+receive) and no update endpoint existed — every upload showed "Untitled · date" forever.
+
+**Shipped:** uploads seed `title` from the filename stem (proxy path from `file.filename`;
+the stateless multipart flow sends `filename` with the complete call — `uploader.ts`);
+`PATCH /videos/{video_id}` with the `ClipMetadataPatch` tri-state idiom (omitted = untouched,
+null/blank = clear, string = set, 200-char clamp, `get_owned` isolation); Dashboard title cell
+is now `VideoTitleCell` — inline Rename → input (Enter/Escape) → PATCH → `['videos']`
+invalidation, so the review/editor pickers pick the rename up for free.
+
+**Acceptance**
+- [x] Upload seeds title from filename (`test_videos_multipart_upload.py` happy path)
+- [x] Tri-state PATCH + isolation (`tests/test_video_title.py`: set/clear/untouched/404)
+- [x] Inline rename on the Dashboard (`VideoTitleCell.test.tsx`)
+- [ ] Live: rename the fresh upload on the Dashboard and see it in the Review picker
+
+### Issue 436: Jittery AI framing — virtual-tripod hold (stop chasing the raw face center)
+
+- [x] **Status:** DONE 2026-08-05 (night) — filed+fixed from the fresh-upload review · **Size:** M
+
+Measured on the live crop tracks: speaker_cut clips made ~4 crop micro-moves/second (median
+2–3 px, 67 direction flips in 67 s) because the crop followed the per-sample face center
+WITHIN a turn; face_pan see-sawed in 25–60 px steps. The only smoothing was EMA α=0.2 + a
+300 px/s clamp — a low-pass, not a hold — and sendcmd emitted one x per 5 Hz sample
+(staircase), while the frontend preview lerps (preview looked better than the render).
+
+**Shipped:** piecewise-constant crop paths ("pick a spot and hold it").
+- `speaker_cut`: ONE hold per segment = the owning track's windowed **median** position
+  (`FaceTrack.median_cx`; `cx_at` deleted); position changes only at cuts. Zero-cut clips
+  emit an empty sendcmd → render.py's static branch (a true locked-off crop).
+- `face_pan`: `plan_pan_holds` — hold the opening median; retarget ONLY when every real
+  detection in the last `REFRAME_PAN_RETARGET_S` (1.0 s) sits beyond
+  `REFRAME_PAN_DEADBAND_FRAC` (0.15 × crop width ≈ 91 px) from the hold, then ONE linear
+  glide at `REFRAME_PAN_GLIDE_PX_PER_S` (600) densified at `REFRAME_GLIDE_SAMPLE_FPS` (30);
+  fallback samples never vote; glides never cross a shot cut.
+- EMA machinery deleted (`smooth_crop_track`, `_EMA_ALPHA`, pan clamp) — holds have nothing
+  to smooth, and the glide has its own speed knob.
+- Wire contract stays **v1** (keyframes are now sparse breakpoints; lerp/snap trivially
+  exact; JSON shrinks ~10–100×); `render.py` untouched.
+
+**Acceptance**
+- [x] Wobbling detections within a turn → constant x; sendcmd lines == segments, only delta = the cut jump (`test_reframe_planner.py::TestHoldPointsFromSegments`)
+- [x] Deadband oscillation/transient spike/detection loss never move the tripod; sustained move → exactly one monotonic glide (`TestPlanPanHolds`)
+- [x] Median outlier robustness pinned (speaker_map + planner tests)
+- [x] `test_render.py` and punch-in pins pass unmodified (consumer contract intact)
+- [ ] Live: re-render ranks 1 (speaker_cut) + 2 (face_pan) of `b8505eb7` — steady frame, no micro-wobble
+
 ---
 
 ## Source index

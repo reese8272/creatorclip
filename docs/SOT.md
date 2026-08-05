@@ -73,6 +73,10 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `REFRAME_MIN_SHOT_S` | No | Default `1.2`. Minimum seconds between consecutive crop cuts (Issue 420). |
 | `REFRAME_CUT_MIN_TURN_S` | No | Default `0.8`. Minimum speaker-turn length to earn a cut (Issue 420). |
 | `REFRAME_CUT_MIN_DISTANCE_FRAC` | No | Default `0.25`. Minimum framing move for a cut, as a fraction of frame width (Issue 420). |
+| `REFRAME_PAN_DEADBAND_FRAC` | No | Default `0.15`. Virtual-tripod pan deadband as a fraction of CROP width (Issue 436) — the pan rung re-frames only past it. |
+| `REFRAME_PAN_RETARGET_S` | No | Default `1.0`. The deadband breach must be continuously sustained this long before a re-frame (Issue 436). |
+| `REFRAME_PAN_GLIDE_PX_PER_S` | No | Default `600.0`. One-shot re-center glide speed (Issue 436). |
+| `REFRAME_GLIDE_SAMPLE_FPS` | No | Default `30.0`. Keyframe/sendcmd density during glides only; holds emit no keyframes (Issue 436). |
 | `ENV` | No | `development` \| `production`; gates `/docs`, error verbosity |
 | `ALLOWED_ORIGINS` | Yes (prod) | Comma-separated origins; never `*` in production |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Yes (prod) | Token for the `cloudflared` service in `docker-compose.prod.yml`; routes `autoclip.studio` → `app:8000` with no open inbound ports |
@@ -141,7 +145,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── merge.py                # Hybrid candidate merge — LLM moments ∪ signal peaks under signal-priority NMS (Issue 416); sentence-snap + 90s clamp on LLM windows (Issue 428)
 │   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex; flag-gated per-frame reframe (Issue 189) COMPOSED with the camera-region pre-crop (Issues 430+433: region-space analysis, `crop@spk`-labeled sendcmd target, CAMERA_REGION_DETECT_ENABLED); unconditional Haar face BOX feeds caption avoidance (Issues 427/433)
 │   ├── camera_region.py        # (NEW Issue 430) cv2 temporal-variance camera-region detection for produced layouts (static chrome vs moving camera); fail-open gates keep plain sources byte-identical
-│   ├── reframe.py              # (Issue 189, extended Issue 420/421) speaker-aware dynamic crop: single-VideoCapture detection pass (BlazeFace boxes + keypoints + mouth patches) → shots/turns/mapping → plan_crop_directives (J-cut, snap, punch-in suppression) → segmented-EMA sendcmd + unified wire-contract track JSON (compute_dynamic_crop); lazy imports; gated by ACTIVE_SPEAKER_REFRAME_ENABLED (default False — staging pending, Issue 422)
+│   ├── reframe.py              # (Issue 189, extended 420/421/436) speaker-aware dynamic crop: single-VideoCapture detection pass (BlazeFace boxes + keypoints + mouth patches) → shots/turns/mapping → plan_crop_directives (J-cut, snap, punch-in suppression) → VIRTUAL-TRIPOD hold track (Issue 436: one median hold per segment via _hold_points_from_segments; pan rung = plan_pan_holds deadband-hold + single linear glides; EMA machinery removed) → sparse sendcmd + unified wire-contract track JSON (compute_dynamic_crop); lazy imports; gated by ACTIVE_SPEAKER_REFRAME_ENABLED
 │   ├── shots.py                # (NEW Issue 419) shot-change detection: ffmpeg scdet pass (lavfi.scd.time from stderr) + numpy histogram-diff fallback over the 5fps samples; total failure → [] = one shot
 │   ├── speaker_map.py          # (NEW Issue 420) PURE speaker→face mapping: per-shot greedy-NN face tracks, diarized turns (gap-merge/backchannel absorb), mouth-motion energy, weighted-vote mapping w/ margin-ratio confidence, fallback ladder speaker_cut→face_pan→static
 │   ├── captions.py             # Animated word-level ASS subtitles (Issue 133; Issue 427: 70%-band karaoke default, face avoidance, 3-word groups, caption_position top|middle|bottom via style_preset/brand kit)
@@ -194,7 +198,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── chat.py                 # /api/chat/* — Pro chatbot: gated+quota'd message → SSE stream, list/get/regenerate (Issue 152)
 │   ├── auth.py                 # OAuth login/callback, session
 │   ├── creators.py             # Creator profile, DNA, onboarding state
-│   ├── videos.py               # Link/upload video, ingestion status; /videos/uploads/* presigned-multipart endpoints (Issue 395)
+│   ├── videos.py               # Link/upload video, ingestion status; /videos/uploads/* presigned-multipart endpoints (Issue 395); PATCH /videos/{id} rename (tri-state title, Issue 435 — title seeded from filename stem at upload)
 │   ├── clips.py                # List candidate clips, get clip, render status; POST /clips/{id}/title-suggestions, /caption-hooks, /explanation (Issues 322/323/325); GET /clips/{id}/crop-track — persisted reframe track, 404 no_crop_track (Issue 421). ClipOut carries origin + suggested_title/description/hook + has_crop_track (L26). POST /videos/{id}/clips/generate-more — append-mode regeneration, excludes persisted windows, caps CLIP_REGEN_BATCH_MAX/TOTAL_CAP (Issue 431)
 │   ├── review.py               # Feedback: upvote/downvote/skip/trim/format
 │   ├── upload_intel.py         # GET timing recommendation

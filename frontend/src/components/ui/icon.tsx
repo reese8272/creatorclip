@@ -46,6 +46,11 @@ export {
   RotateCcw,
   RefreshCw,
 
+  // Player audio toggle (Issue 434). `Volume` not `Volume2`: the
+  // no-glyph-icons allow-list regex rejects digits in icon names.
+  Volume,
+  VolumeX,
+
   // Aspect-mode toggles (short-form 9:16 vs long-form 16:9).
   RectangleVertical,
   RectangleHorizontal,

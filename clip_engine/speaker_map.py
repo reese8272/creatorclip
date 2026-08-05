@@ -31,6 +31,7 @@ Principle 11 (Audience-fit — per-creator craft, not a generic auto-crop).
 
 from __future__ import annotations
 
+import statistics
 from bisect import bisect_right
 from dataclasses import dataclass, field
 
@@ -116,16 +117,20 @@ class FaceTrack:
     def mean_area(self) -> float:
         return sum(o.area for o in self.obs) / len(self.obs)
 
-    def cx_at(self, t: float, *, tolerance_s: float) -> float | None:
-        """Center-x of the nearest observation within ``tolerance_s``, else None
-        (the face is off-screen / undetected at ``t`` — callers hold framing)."""
-        best: FaceObs | None = None
-        best_dt = tolerance_s
-        for o in self.obs:
-            dt = abs(o.t - t)
-            if dt <= best_dt:
-                best, best_dt = o, dt
-        return best.cx if best is not None else None
+    def median_cx(self, start_t: float | None = None, end_t: float | None = None) -> float:
+        """Median center-x over observations in ``[start_t, end_t)`` — the
+        virtual-tripod hold position (Issue 436). Median, not mean: a single
+        detector outlier in a ~6-obs segment window would drag a mean but
+        leaves the median untouched. An empty window falls back to the
+        whole-track median (a segment can open before its track's first obs)."""
+        xs = [
+            o.cx
+            for o in self.obs
+            if (start_t is None or o.t >= start_t) and (end_t is None or o.t < end_t)
+        ]
+        if not xs:
+            xs = [o.cx for o in self.obs]
+        return float(statistics.median(xs))
 
 
 @dataclass(frozen=True)

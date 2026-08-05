@@ -7,8 +7,9 @@ import { StageStepper } from '@/components/dashboard/StageStepper'
 import { SOURCE_NEEDED_HELP, STATUS_VARIANT } from '@/components/dashboard/videoStatus'
 import { useStageStream } from '@/hooks/useStageStream'
 import type { AnalysisMode, IngestStatus, Video } from '@/types'
-import { untitledLabel, videoMetaLine } from '@/lib/videoMeta'
+import { videoMetaLine } from '@/lib/videoMeta'
 import { PosterThumb } from '@/components/media/PosterThumb'
+import { VideoTitleCell } from '@/components/dashboard/VideoTitleCell'
 
 export interface ClipInfo {
   total: number
@@ -104,12 +105,7 @@ function VideoRow({
             className="w-16"
           />
           <div className="min-w-0">
-            <div
-              className="max-w-[220px] truncate text-fg"
-              title={video.youtube_video_id ?? undefined}
-            >
-              {video.title || <span className="italic text-muted">{untitledLabel(video)}</span>}
-            </div>
+            <VideoTitleCell video={video} />
             <div className="text-small text-muted">{videoMetaLine(video)}</div>
           </div>
         </div>
