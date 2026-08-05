@@ -480,6 +480,39 @@ class Signals(Base):
     video: Mapped["Video"] = relationship("Video", back_populates="signals")
 
 
+class VideoContext(Base):
+    """1:1 whole-video LLM context analysis (Issue 415, migration 0053).
+
+    Written by the ``analyze_video_context`` chain member between transcribe and
+    build_signals. ``context_jsonb`` holds the validated payload::
+
+        {"version": 1, "summary": ..., "structure": [{start_s, end_s, label}],
+         "narrative_arcs": [...], "tone": ..., "audience_relevance": ...,
+         "moments": [{start_s, end_s, reason, principle, confidence}]}
+
+    ``moments`` are the LLM-proposed clip candidates (≤ LLM_CANDIDATES_MAX,
+    bounds-clamped, principle ∈ the 12 named principles) consumed by the hybrid
+    candidate merge (Issue 416). A separate table (not a column on the hot
+    ``videos`` row) because most reads of ``videos`` never need this payload.
+    The PK doubles as the check-then-insert idempotency key: a Celery
+    redelivery sees the existing row and never re-spends the LLM call.
+    """
+
+    __tablename__ = "video_context"
+
+    video_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("videos.id", ondelete="CASCADE"), primary_key=True
+    )
+    context_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    model: Mapped[str] = mapped_column(sa.String(100), nullable=False)
+    prompt_version: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
 # ── Creator DNA ───────────────────────────────────────────────────────────────
 
 

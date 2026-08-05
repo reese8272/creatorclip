@@ -286,8 +286,19 @@ async def _spend_guard_blocked(job_id: str | None, stage: str, creator_id: str) 
 
 
 def start_pipeline(video_id: str) -> None:
-    """Kick off the ingest → transcribe → signals chain."""
-    (ingest_video.s(video_id) | transcribe_video.s() | build_signals.s()).apply_async()
+    """Kick off the ingest → transcribe → context → signals chain.
+
+    ``analyze_video_context`` (Issue 415) sits between transcribe and signals so
+    the whole-video context row is deterministically available before
+    generate_clips runs. It can never fail the chain — any failure degrades to
+    the signal-only pipeline.
+    """
+    (
+        ingest_video.s(video_id)
+        | transcribe_video.s()
+        | analyze_video_context.s()
+        | build_signals.s()
+    ).apply_async()
 
 
 # ── Refund-on-terminal-failure base class (Issue 57) ──────────────────────────
@@ -491,6 +502,176 @@ def transcribe_video(self: Task, video_id: str) -> str:
         "transcribe_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
     )
     return video_id
+
+
+@celery.task(bind=True, max_retries=0, name="worker.tasks.analyze_video_context")
+def analyze_video_context(self: Task, video_id: str) -> str:
+    """Whole-video LLM context pass (Issue 415) — chain member that CANNOT fail.
+
+    Sits between transcribe and build_signals. Any failure — LLM 5xx, parse
+    error, missing transcript, DB hiccup — logs, emits a non-terminal
+    ``context_skipped`` step, and returns ``video_id`` so the chain continues
+    and clips generate signal-only (today's behavior). Plain ``@celery.task``
+    (no RefundOnFailureTask, no retries): the SDK's built-in ``max_retries=2``
+    already covers transients, and a broken context pass must never refund or
+    re-deliver a video whose pipeline is otherwise healthy.
+    """
+    try:
+        creator_id = run_async(_creator_id_for_video(video_id))
+        log_event(
+            "analyze_video_context_started",
+            creator_id=creator_id,
+            task_id=self.request.id,
+            video_id=video_id,
+        )
+        run_async(_video_context_async(video_id, creator_id))
+        log_event(
+            "analyze_video_context_done",
+            creator_id=creator_id,
+            task_id=self.request.id,
+            video_id=video_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — never fail the chain (Issue 415)
+        logger.warning(
+            "analyze_video_context failed for video %s — continuing signal-only: %s: %s",
+            video_id,
+            type(exc).__name__,
+            exc,
+        )
+        with contextlib.suppress(Exception):
+            log_event(
+                "analyze_video_context_skipped",
+                task_id=self.request.id,
+                video_id=video_id,
+                exc_type=type(exc).__name__,
+            )
+        with contextlib.suppress(Exception):
+            from worker.progress import aemit
+
+            run_async(
+                aemit(
+                    video_id,
+                    "step",
+                    label="context_skipped",
+                    stage="video_context",
+                    reason=type(exc).__name__,
+                )
+            )
+    return video_id
+
+
+async def _video_context_async(video_id: str, creator_id: str | None = None) -> None:
+    """Async impl of the whole-video context pass.
+
+    Raises freely — the ``analyze_video_context`` wrapper catches everything.
+    Session discipline (Issue 82b): the read session closes BEFORE the LLM
+    round-trip; persistence reacquires a fresh session afterwards.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from analysis.video_context import PROMPT_VERSION, build_video_context
+    from billing.ledger import record_llm_usage
+    from config import settings
+    from dna.identity import format_for_prompt, get_current
+    from dna.profile import get_active
+    from models import Transcript, VideoContext
+    from worker.progress import aemit
+
+    if not settings.VIDEO_CONTEXT_ENABLED:
+        # Kill switch — today's pipeline exactly: no events, no LLM, no DB write.
+        return
+
+    video_uuid = uuid.UUID(video_id)
+    creator_id = await _tenant_id_or_raise(video_id, creator_id)
+
+    # Spend guard (Issue 290): skip, don't fail. job_id=None so the guard never
+    # emits its TERMINAL error event mid-chain — we emit the non-terminal
+    # context_skipped step instead and let the pipeline continue signal-only.
+    if await _spend_guard_blocked(None, "video_context", creator_id):
+        await aemit(
+            video_id, "step", label="context_skipped", stage="video_context", reason="spend_guard"
+        )
+        return
+
+    dna_brief: str | None = None
+    identity_text: str | None = None
+    async with db.tenant_session(creator_id) as session:
+        # PK check-then-insert idempotency: a Celery redelivery that already has
+        # a context row is a no-op — never a double LLM spend.
+        if await session.get(VideoContext, video_uuid) is not None:
+            logger.info("video_context already exists for video %s — skipping", video_id)
+            return
+
+        video = await session.get(Video, video_uuid)
+        if video is None:
+            raise ValueError(f"Video {video_id} not found")
+        duration_s = float(video.duration_s or 0.0)
+
+        transcript = await session.get(Transcript, video_uuid)
+        segments = transcript.segments_jsonb.get("segments", []) if transcript else []
+
+        dna_profile = await get_active(session, video.creator_id)
+        dna_brief = dna_profile.brief_text if dna_profile else None
+        identity_text = format_for_prompt(await get_current(session, video.creator_id))
+
+    if not segments:
+        await aemit(
+            video_id, "step", label="context_skipped", stage="video_context", reason="no_transcript"
+        )
+        return
+    if duration_s <= 0.0:
+        # Transcript exists but the probe never stored a duration — fall back to
+        # the last segment's end so moment bounds-clamping stays meaningful.
+        duration_s = max(
+            (float(s.get("end", s.get("start", 0.0))) for s in segments), default=0.0
+        )
+
+    await aemit(video_id, "step", label="video_context_start", stage="video_context")
+
+    # LLM round-trip with NO DB session held (Issue 82b).
+    context, usage = await build_video_context(segments, duration_s, dna_brief, identity_text)
+
+    # Bill AFTER the round-trip (scoring.py pattern). record_llm_usage is
+    # best-effort and opens its own short-lived session.
+    await record_llm_usage(
+        uuid.UUID(creator_id),
+        usage,
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+        # ttl:"1h" cache writes bill 2× base input; the flag is set only when
+        # the floor-gated marker actually attached.
+        cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
+    )
+
+    async with db.tenant_session(creator_id) as session:
+        # Re-check then insert: a concurrent delivery that won the race between
+        # our first check and now surfaces as IntegrityError on the PK — treat
+        # as success (their row is as good as ours; the spend already happened).
+        if await session.get(VideoContext, video_uuid) is not None:
+            return
+        session.add(
+            VideoContext(
+                video_id=video_uuid,
+                context_jsonb=context,
+                model=settings.ANTHROPIC_MODEL_VIDEO_CONTEXT,
+                prompt_version=PROMPT_VERSION,
+            )
+        )
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            logger.info(
+                "video_context concurrent insert for video %s — keeping winner's row", video_id
+            )
+
+    await aemit(
+        video_id,
+        "step",
+        label="video_context_done",
+        stage="video_context",
+        moments=len(context.get("moments", [])),
+    )
 
 
 @celery.task(
