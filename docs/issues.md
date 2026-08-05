@@ -1919,6 +1919,79 @@ reading-proficiency research, whose width also works against the void-heavy layo
 
 ---
 
+## L26 follow-ups — filed from the first live A→B run + clip audit (2026-08-05)
+
+> Evidence base: video `e290e6f4` (26:57 Commanders podcast, uploaded via the new Issue-395
+> direct-to-R2 path in 58 s), 8 clips generated + rendered. Audit = all 8 windows checked
+> against the diarized transcript + frame-extraction review of 3 rendered MP4s + loudness pass.
+> Renders are clean (1080×1920 h264/aac, −16 dB mean, no clipping); findings below are the
+> defects worth engine/render work. Clip ids abbreviated.
+
+### Issue 427: Caption placement collides with the speaker's face
+
+- [ ] **Status:** open · **Size:** S · **BETA-visible**
+
+The karaoke captions (one word at a time) render at ~50% frame height — in every sampled frame
+of all 3 audited clips the word sits ON the host's face (over the sunglasses/nose). Standard
+Shorts placement is lower-third, inside title-safe, BELOW the subject's chin.
+
+**Acceptance**
+- [ ] Caption baseline moved to ~68–75% frame height (below typical talking-head chin line), configurable
+- [ ] Never overlaps the detected face box when face data exists (reframe pipeline already detects faces)
+- [ ] Consider 2–3-word grouping vs single-word (readability at Shorts pacing); keep style tokens
+- [ ] Frame-extraction spot-check on a re-rendered clip shows no face overlap
+
+### Issue 428: Clips open mid-sentence — word-boundary snap instead of sentence-boundary snap (one meaning-INVERTING cut)
+
+- [ ] **Status:** open · **Size:** M · **Clip-quality core**
+
+5 of 8 clips open on a sentence fragment. Worst case `84b362b0` (1438.01): source audio is
+"I don't **really think it's gonna happen** …" and the clip opens at "really think it's gonna
+happen" — the negation is cut, INVERTING the speaker's meaning. Others: `85e8f48d` opens "when
+they're cut, when rosters go out…" (fragment tail), `2893e613` opens "standing out." (tail of
+prior sentence), `4b1269e5` opens "maybe the dig" (fragment), `311596f0` opens on a pronoun with
+no referent ("he's not a free safety" — who?). Also `616ad186`'s suggested_hook text ("It's not
+the receivers. It's not the corners") promises an open the audio doesn't deliver until ~8 s in.
+LLM-origin `960d3931` additionally carries ~8 s of outro housekeeping pre-roll ("I'm gonna go
+ahead and close this one out… oh, before we get out of here —") before its story AND runs 110 s
+(over the 60–90 s target) — LLM moment validation should sentence-snap AND clamp length.
+
+**Acceptance**
+- [ ] `setup_start_s` snaps to the nearest SENTENCE start (transcript segments carry punctuation/sentence boundaries; word timestamps exist) with a small lead-in tolerance
+- [ ] Negation-preserving guard: never cut inside a clause (minimum: never start mid-segment)
+- [ ] LLM-proposed windows: sentence-snap both edges + hard clamp to the length target
+- [ ] `suggested_hook` generated from the ACTUAL first ~5 s of the final window, not the story summary
+- [ ] Eval scenario added: mid-sentence-open fixture must fail pre-fix, pass post-fix (SCENARIO_FLOOR bump)
+
+### Issue 429: Near-duplicate overlapping clips both rendered (cross-origin NMS gap)
+
+- [ ] **Status:** open · **Size:** S
+
+`84b362b0` (1438.0–1481.2, signal, "Terry knows something") sits ENTIRELY inside LLM clip
+`960d3931`'s window (1390–1500, "Terry & Diggs") — ~43 s of identical content rendered twice
+(IoU ≈ 0.39, under the NMS threshold). The creator reviews 8 "clips" but only 7 stories.
+
+**Acceptance**
+- [ ] Post-ranking containment/diversity pass: if a lower-ranked clip's window is ≥N% contained in a kept clip's window, drop or demote it (cross-origin, after scoring — preserves the signal-priority union pre-scoring)
+- [ ] Eval fixture with a contained-window pair asserts only one survives
+
+### Issue 430: Static crop slices the source video's own layout chrome — detect the camera region
+
+- [ ] **Status:** open · **Size:** M · interacts with Issue 422 (reframe staging)
+
+The source was a produced podcast layout (show logo card top-right, guest name chip left,
+"@WSHCARTER" social banner bottom). The full-height center crop keeps all of it: logo cut off
+mid-word, name chip truncated at the frame edge, and the source's own social banner occupying
+the bottom ~20% of every rendered Short. The face framing itself is good — the problem is the
+crop treats the whole 16:9 frame as camera when much of it is chrome.
+
+**Acceptance**
+- [ ] Detect the active camera region (static-region/edge detection or face-box expansion) and crop/zoom INTO it before the 9:16 composition, instead of full-height slicing
+- [ ] Falls back to today's full-height crop when no chrome is detected (plain camera sources unchanged)
+- [ ] Frame-extraction check on a produced-layout source shows no truncated third-party chrome
+
+---
+
 ## Source index
 
 Collected from the 2026-08-03 research pass. Cited inline above; listed here so a future pass can

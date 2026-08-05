@@ -26,11 +26,18 @@ even saw, and a mid-upload session expiry (60-min JWT). Full architecture + evid
   CSP test); frontend on node 22: vitest **637/637**, `tsc -b` clean, eslint 0 errors (the
   node-26 jsdom gotcha bit once more first — re-logged with an .nvmrc/engines fix suggestion in
   `docs/OFF_COURSE_BUGS.md` 2026-08-05).
-- **Open tail (deploy-gated):** deploy → run `scripts/r2_set_cors.py https://autoclip.studio` on
-  the VM → live drills: >2 GB upload end-to-end, mid-upload network kill, reload-resume,
-  browser-restart ghost resume, session-expiry drill, 25 GB-declared 413, no lingering incomplete
-  uploads, cloudflared http2 stability. User action items: Cloudflare Security→Events lookup for
-  the 13:1x 403 (zone is Pro — 100 MB proxy cap unchanged, moot for the new path).
+- **DEPLOYED + LIVE-VERIFIED same day (commit `6150754`, deploy run 31015798993):** first real
+  upload = 273 MB in **58 s** via `transport=multipart` (vs 40+ min proxy crawl that morning —
+  and the file was ~3× Cloudflare's 100 MB proxy cap, which conclusively explains the morning's
+  edge 403). Pipeline chained clean: 8 clips scored/titled/hooked/rendered in ~10 min. Bucket
+  CORS set via `scripts/r2_set_cors.py` (echo verified); cloudflared confirmed on http2.
+- **First-run clip audit (same session) → Issues 427–430 filed** (`docs/issues.md` § L26
+  follow-ups): caption-on-face placement · mid-sentence clip opens incl. one meaning-INVERTING
+  cut · near-duplicate overlapping clips both rendered · source-layout chrome in the static crop.
+  Renders/audio themselves clean (1080×1920, −16 dB mean, no clipping).
+- **Still owed:** remaining live drills (>2 GB file, reload-resume, session-expiry drill) + the
+  user's Cloudflare Security→Events lookup for the morning 403 (closure only — the failure class
+  is structurally gone).
 
 ---
 
