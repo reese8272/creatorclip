@@ -76,7 +76,9 @@ class TestClipsReadyTrigger:
 
         mock_session = AsyncMock()
         # Video, Creator, Signals, Transcript (None), VideoContext (None — Issue 416).
-        mock_session.get = AsyncMock(side_effect=[mock_video, mock_creator, mock_signals, None, None])
+        mock_session.get = AsyncMock(
+            side_effect=[mock_video, mock_creator, mock_signals, None, None]
+        )
         mock_session.scalar = AsyncMock(return_value=None)  # no existing done clips
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)

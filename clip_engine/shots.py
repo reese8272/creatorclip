@@ -83,9 +83,7 @@ def _frame_histogram(frame: object) -> object:
     import numpy as np
 
     pixels = np.asarray(frame).reshape(-1, 3).astype(np.float64)
-    hist, _ = np.histogramdd(
-        pixels, bins=(_HIST_BINS,) * 3, range=((0, 256), (0, 256), (0, 256))
-    )
+    hist, _ = np.histogramdd(pixels, bins=(_HIST_BINS,) * 3, range=((0, 256), (0, 256), (0, 256)))
     total = hist.sum()
     if total <= 0:
         return np.zeros(_HIST_BINS**3, dtype=np.float64)

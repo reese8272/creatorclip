@@ -622,9 +622,7 @@ async def _video_context_async(video_id: str, creator_id: str | None = None) -> 
     if duration_s <= 0.0:
         # Transcript exists but the probe never stored a duration — fall back to
         # the last segment's end so moment bounds-clamping stays meaningful.
-        duration_s = max(
-            (float(s.get("end", s.get("start", 0.0))) for s in segments), default=0.0
-        )
+        duration_s = max((float(s.get("end", s.get("start", 0.0))) for s in segments), default=0.0)
 
     await aemit(video_id, "step", label="video_context_start", stage="video_context")
 
@@ -819,9 +817,7 @@ async def _clip_metadata_async(video_id: str, creator_id: str | None = None) -> 
 
     # Non-terminal SSE step — frontend consumers tolerate unknown labels
     # (cross-track contract, DECISIONS 2026-08-04).
-    await aemit(
-        video_id, "step", label="metadata_ready", stage="clip_metadata", clip_count=filled
-    )
+    await aemit(video_id, "step", label="metadata_ready", stage="clip_metadata", clip_count=filled)
 
 
 @celery.task(
@@ -1145,9 +1141,7 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
         else:
             fallback = (video.title if video and video.title else "New Short").strip()
             publish_title = fallback.replace("<", "").replace(">", "").strip()[:100] or "New Short"
-        publish_description = (
-            clip.applied_description or clip.suggested_description or "#Shorts"
-        )
+        publish_description = clip.applied_description or clip.suggested_description or "#Shorts"
 
         if existing is None:
             pub = ClipPublication(
@@ -2339,9 +2333,10 @@ async def _load_clip_render_plan(clip_id: str, creator_id: str) -> _ClipRenderPl
         from config import settings as _settings
 
         transcript_segments: list[dict] | None = None
-        needs_transcript = bool(
-            style_preset and style_preset.get("subtitle") in _CAPTION_STYLES
-        ) or _settings.ACTIVE_SPEAKER_REFRAME_ENABLED
+        needs_transcript = (
+            bool(style_preset and style_preset.get("subtitle") in _CAPTION_STYLES)
+            or _settings.ACTIVE_SPEAKER_REFRAME_ENABLED
+        )
         if needs_transcript:
             transcript = await session.get(Transcript, video.id)
             if transcript and isinstance(transcript.segments_jsonb, dict):

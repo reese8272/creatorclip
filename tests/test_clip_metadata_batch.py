@@ -319,9 +319,7 @@ async def test_redelivery_skips_when_nothing_null(mocker) -> None:
 
     mocker.patch("worker.tasks.db.AsyncSessionLocal", return_value=_session_cm(session))
     mocker.patch("worker.tasks._spend_guard_blocked", new=AsyncMock(return_value=False))
-    batch = mocker.patch(
-        "knowledge.clip_metadata.generate_clip_metadata_batch", new=AsyncMock()
-    )
+    batch = mocker.patch("knowledge.clip_metadata.generate_clip_metadata_batch", new=AsyncMock())
 
     await _clip_metadata_async(str(uuid.uuid4()), str(uuid.uuid4()))
     batch.assert_not_called()

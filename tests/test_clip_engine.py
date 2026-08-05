@@ -372,13 +372,11 @@ def _assert_merge_scenario(scenario: dict) -> None:
         matched = min(pool, key=lambda c: abs(c["setup_start_s"] - anchor))
         if "setup_start_s_min" in exp_c:
             assert matched["setup_start_s"] >= exp_c["setup_start_s_min"], (
-                f"[{name}] setup_start_s={matched['setup_start_s']} < "
-                f"{exp_c['setup_start_s_min']}"
+                f"[{name}] setup_start_s={matched['setup_start_s']} < {exp_c['setup_start_s_min']}"
             )
         if "setup_start_s_max" in exp_c:
             assert matched["setup_start_s"] <= exp_c["setup_start_s_max"], (
-                f"[{name}] setup_start_s={matched['setup_start_s']} > "
-                f"{exp_c['setup_start_s_max']}"
+                f"[{name}] setup_start_s={matched['setup_start_s']} > {exp_c['setup_start_s_max']}"
             )
         if "end_s_min" in exp_c:
             assert matched["end_s"] >= exp_c["end_s_min"], (

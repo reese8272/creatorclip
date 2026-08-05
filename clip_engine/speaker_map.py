@@ -261,7 +261,11 @@ def _speaker_words(
 def _merge_same_speaker_gaps(turns: list[Turn], gap_merge_s: float) -> list[Turn]:
     merged: list[Turn] = []
     for turn in turns:
-        if merged and merged[-1].speaker == turn.speaker and turn.start - merged[-1].end < gap_merge_s:
+        if (
+            merged
+            and merged[-1].speaker == turn.speaker
+            and turn.start - merged[-1].end < gap_merge_s
+        ):
             merged[-1] = Turn(turn.speaker, merged[-1].start, max(merged[-1].end, turn.end))
         else:
             merged.append(turn)
@@ -292,11 +296,7 @@ def extract_speaker_turns(
 
     turns: list[Turn] = []
     for speaker, w_start, w_end in words:
-        if (
-            turns
-            and turns[-1].speaker == speaker
-            and w_start - turns[-1].end < gap_merge_s
-        ):
+        if turns and turns[-1].speaker == speaker and w_start - turns[-1].end < gap_merge_s:
             turns[-1] = Turn(speaker, turns[-1].start, max(turns[-1].end, w_end))
         else:
             turns.append(Turn(speaker, w_start, w_end))
@@ -355,16 +355,16 @@ def mouth_motion_energy(obs: list[FaceObs], start_s: float, end_s: float) -> flo
     fewer than two patched observations fall in the window (no evidence,
     never an error).
     """
-    patches = [
-        o.mouth_patch for o in obs if start_s <= o.t <= end_s and o.mouth_patch is not None
-    ]
+    patches = [o.mouth_patch for o in obs if start_s <= o.t <= end_s and o.mouth_patch is not None]
     if len(patches) < 2:
         return 0.0
     try:
         import numpy as np
 
         diffs = [
-            float(np.mean(np.abs(np.asarray(a, dtype=np.float64) - np.asarray(b, dtype=np.float64))))
+            float(
+                np.mean(np.abs(np.asarray(a, dtype=np.float64) - np.asarray(b, dtype=np.float64)))
+            )
             for a, b in zip(patches, patches[1:], strict=False)
             if np.asarray(a).shape == np.asarray(b).shape
         ]
@@ -430,8 +430,7 @@ def map_speakers_to_tracks(
             if span <= 0:
                 continue
             energies = {
-                t.track_id: mouth_motion_energy(t.obs, turn.start, turn.end)
-                for t in shot_tracks
+                t.track_id: mouth_motion_energy(t.obs, turn.start, turn.end) for t in shot_tracks
             }
             max_energy = max(energies.values(), default=0.0)
             on_screen = [

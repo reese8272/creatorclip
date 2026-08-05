@@ -286,14 +286,10 @@ def _detect_face_obs(
         obs_list: list[_sm.FaceObs] = []
         for det in result.detections or []:
             bb = det.bounding_box
-            keypoints = tuple(
-                (float(kp.x) * w, float(kp.y) * h) for kp in (det.keypoints or [])
-            )
+            keypoints = tuple((float(kp.x) * w, float(kp.y) * h) for kp in (det.keypoints or []))
             mouth_patch = None
             if len(keypoints) > _MOUTH_KEYPOINT_INDEX:
-                mouth_patch = _extract_mouth_patch(
-                    frame_bgr, keypoints[_MOUTH_KEYPOINT_INDEX]
-                )
+                mouth_patch = _extract_mouth_patch(frame_bgr, keypoints[_MOUTH_KEYPOINT_INDEX])
             obs_list.append(
                 _sm.FaceObs(
                     t=timestamp_s,
@@ -806,12 +802,7 @@ def plan_crop_directives(
         # mandatory shot cut already landed within snap range, fold the
         # speaker change into it — retarget its destination and annotate the
         # speaker — instead of stacking a second cut 150 ms away.
-        if (
-            snapped is not None
-            and snapped in consumed_shots
-            and cuts
-            and cuts[-1].t == snapped
-        ):
+        if snapped is not None and snapped in consumed_shots and cuts and cuts[-1].t == snapped:
             if turn.speaker != prev_speaker:
                 cuts[-1] = CropCut(
                     t=snapped,
@@ -953,9 +944,7 @@ def _build_track_json(
     cut_entries: list[dict] = []
     for cut in cuts:
         cut_clip_t = cut.t - start_s
-        idx = next(
-            (i for i, kf in enumerate(keyframes) if kf["t"] >= round(cut_clip_t, 3)), None
-        )
+        idx = next((i for i, kf in enumerate(keyframes) if kf["t"] >= round(cut_clip_t, 3)), None)
         if idx is None or idx == 0:
             continue
         entry: dict = {
@@ -977,9 +966,7 @@ def _build_track_json(
         "duration_s": round(end_s - start_s, 3),
         "keyframes": keyframes,
         "cuts": cut_entries,
-        "shots": [
-            {"t": round(t - start_s, 3)} for t in shot_changes if start_s < t < end_s
-        ],
+        "shots": [{"t": round(t - start_s, 3)} for t in shot_changes if start_s < t < end_s],
         "speakers": {
             "count": speaker_count,
             "mapping_confidence": round(mapping_confidence, 3),

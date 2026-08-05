@@ -217,7 +217,9 @@ async def test_encode_persists_track_in_done_transaction(tmp_path):
         patch("worker.progress.aemit", AsyncMock()),
         patch("worker.tasks.db.tenant_session", fake_sessions),
     ):
-        await _encode_and_upload_clip(str(uuid.uuid4()), tmp_path / "src.mp4", _render_plan(), str(uuid.uuid4()))
+        await _encode_and_upload_clip(
+            str(uuid.uuid4()), tmp_path / "src.mp4", _render_plan(), str(uuid.uuid4())
+        )
 
     assert clip.reframe_track_jsonb == _TRACK
     assert clip.render_uri == "s3://clips/x.mp4"
@@ -241,7 +243,9 @@ async def test_encode_nulls_stale_track_when_reframe_off(tmp_path):
         patch("worker.progress.aemit", AsyncMock()),
         patch("worker.tasks.db.tenant_session", fake_sessions),
     ):
-        await _encode_and_upload_clip(str(uuid.uuid4()), tmp_path / "src.mp4", _render_plan(), str(uuid.uuid4()))
+        await _encode_and_upload_clip(
+            str(uuid.uuid4()), tmp_path / "src.mp4", _render_plan(), str(uuid.uuid4())
+        )
 
     assert clip.reframe_track_jsonb is None
 

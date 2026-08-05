@@ -127,7 +127,9 @@ def test_validate_drops_bad_span_geometry() -> None:
 
 
 def test_validate_caps_moments_by_confidence() -> None:
-    moments = [_moment(i * 100.0, i * 100.0 + 60.0, "Front-load value", 0.5 + i * 0.1) for i in range(5)]
+    moments = [
+        _moment(i * 100.0, i * 100.0 + 60.0, "Front-load value", 0.5 + i * 0.1) for i in range(5)
+    ]
     ctx = validate_context(_payload(moments), duration_s=1000.0)
     assert len(ctx["moments"]) == settings.LLM_CANDIDATES_MAX == 4
     # The lowest-confidence moment (0.5, at start 0) was the one dropped.
@@ -224,7 +226,9 @@ async def test_build_video_context_round_trip(mocker) -> None:
 
     def _create(**kwargs):
         captured.update(kwargs)
-        return _Resp([_Block("text", json.dumps(_payload([_moment(10.0, 70.0, "Front-load value", 0.8)])))])
+        return _Resp(
+            [_Block("text", json.dumps(_payload([_moment(10.0, 70.0, "Front-load value", 0.8)])))]
+        )
 
     mocker.patch.object(vc._ANTHROPIC.messages, "create", AsyncMock(side_effect=_create))
 

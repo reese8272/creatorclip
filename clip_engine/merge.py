@@ -74,9 +74,7 @@ def llm_moments_to_candidates(
         end = float(m["end_s"])
 
         if words:
-            start = snap_to_sentence_boundary(
-                start, words, "backward", timeline_events=events
-            )
+            start = snap_to_sentence_boundary(start, words, "backward", timeline_events=events)
             end = snap_to_sentence_boundary(end, words, "forward", timeline_events=events)
 
         start = max(0.0, start)
@@ -139,9 +137,7 @@ def merge_candidates(
     """
     kept: list[dict] = list(signal_candidates)
     suppressed = 0
-    for cand in sorted(
-        llm_candidates, key=lambda c: c.get("llm_confidence", 0.0), reverse=True
-    ):
+    for cand in sorted(llm_candidates, key=lambda c: c.get("llm_confidence", 0.0), reverse=True):
         if any(_window_iou(cand, k) > _NMS_IOU_THRESHOLD for k in kept):
             suppressed += 1
             continue

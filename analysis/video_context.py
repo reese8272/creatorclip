@@ -313,9 +313,7 @@ def _build_request(
     brief exists the block is omitted entirely (format_for_prompt convention —
     a "(none)" placeholder would only add volatile bytes).
     """
-    static_text = _SYSTEM_STATIC.format(
-        principles="\n".join(f"- {p}" for p in CLIPPING_PRINCIPLES)
-    )
+    static_text = _SYSTEM_STATIC.format(principles="\n".join(f"- {p}" for p in CLIPPING_PRINCIPLES))
     system: list[dict] = [{"type": "text", "text": static_text}]
 
     creator_parts = []

@@ -42,8 +42,17 @@ def _obs_frames(
     ]
 
 
-def _track(track_id: int, cx: float, t0: float, t1: float, *, shot_idx: int = 0,
-           area_side: float = 100.0, fps: float = 5.0, patches=None) -> FaceTrack:
+def _track(
+    track_id: int,
+    cx: float,
+    t0: float,
+    t1: float,
+    *,
+    shot_idx: int = 0,
+    area_side: float = 100.0,
+    fps: float = 5.0,
+    patches=None,
+) -> FaceTrack:
     interval = 1.0 / fps
     obs = []
     i = 0
@@ -64,8 +73,9 @@ def _speaker_segments(turn_spec: list[tuple[int, float, float]]) -> list[dict]:
         t = start
         while t < end - 1e-9:
             w_end = min(t + 0.2, end)
-            words.append({"word": "w", "start": round(t, 3), "end": round(w_end, 3),
-                          "speaker": speaker})
+            words.append(
+                {"word": "w", "start": round(t, 3), "end": round(w_end, 3), "speaker": speaker}
+            )
             t = w_end
         segments.append({"start": start, "end": end, "text": "…", "words": words})
     return segments
@@ -110,9 +120,7 @@ class TestBuildFaceTracks:
         tracks = build_face_tracks(frames, frame_w=1920, shot_changes=[1.0])
         assert len(tracks) == 2
         assert sorted(t.shot_idx for t in tracks) == [0, 1]
-        assert all(
-            all(shot_index_for(o.t, [1.0]) == t.shot_idx for o in t.obs) for t in tracks
-        )
+        assert all(all(shot_index_for(o.t, [1.0]) == t.shot_idx for o in t.obs) for t in tracks)
 
     def test_empty_frames_no_tracks(self) -> None:
         assert build_face_tracks([], frame_w=1920, shot_changes=[]) == []
@@ -363,9 +371,7 @@ class TestChooseReframeMode:
     def test_boundary_values_are_inclusive(self) -> None:
         """coverage == 0.6 and confidence == 0.3 are IN (≥, not >)."""
         assert (
-            choose_reframe_mode(
-                **{**self._RUNG_A, "coverage": 0.6, "mapping_confidence": 0.3}
-            )
+            choose_reframe_mode(**{**self._RUNG_A, "coverage": 0.6, "mapping_confidence": 0.3})
             == "speaker_cut"
         )
 

@@ -250,9 +250,9 @@ class TestSmoothCropTrackSegmented:
         script = build_sendcmd_script(segmented, crop_w=607, frame_w=1920, start_s=0.0)
         xs = [int(line.rstrip(";").split()[-1]) for line in script.splitlines()]
         deltas = [abs(b - a) for a, b in zip(xs, xs[1:], strict=False)]
-        assert max(deltas) == abs(
-            (1500 - 607 // 2) - (400 - 607 // 2)
-        ), "the cut must be a full-distance jump between consecutive lines"
+        assert max(deltas) == abs((1500 - 607 // 2) - (400 - 607 // 2)), (
+            "the cut must be a full-distance jump between consecutive lines"
+        )
 
     def test_multiple_cuts_multiple_resets(self) -> None:
         raw = _make_track(*([400] * 4 + [1500] * 4 + [800] * 4))
@@ -302,9 +302,7 @@ def _dialogue_segments() -> list[dict]:
 
 
 class TestComputeDynamicCrop:
-    def _run(
-        self, tmp_path, *, cuts_enabled=True, transcript=None, obs=_two_face_obs, shots=None
-    ):
+    def _run(self, tmp_path, *, cuts_enabled=True, transcript=None, obs=_two_face_obs, shots=None):
         import config as _config_mod
 
         fake = tmp_path / "v.mp4"
@@ -387,9 +385,7 @@ class TestComputeDynamicCrop:
     def test_keyframe_x_are_the_exact_sendcmd_values(self, tmp_path) -> None:
         """ONE geometry definition: endpoint x == sendcmd x, line for line."""
         result = self._run(tmp_path, transcript=_dialogue_segments())
-        script_xs = [
-            int(line.rstrip(";").split()[-1]) for line in result.sendcmd_text.splitlines()
-        ]
+        script_xs = [int(line.rstrip(";").split()[-1]) for line in result.sendcmd_text.splitlines()]
         json_xs = [kf["x"] for kf in result.track_json["keyframes"]]
         assert script_xs == json_xs
         script_ts = [float(line.split()[0]) for line in result.sendcmd_text.splitlines()]
@@ -406,9 +402,7 @@ class TestComputeDynamicCrop:
     def test_total_failure_returns_static_result(self, tmp_path) -> None:
         fake = tmp_path / "v.mp4"
         fake.touch()
-        with patch(
-            "clip_engine.reframe._iter_sampled_frames", side_effect=RuntimeError("boom")
-        ):
+        with patch("clip_engine.reframe._iter_sampled_frames", side_effect=RuntimeError("boom")):
             result = compute_dynamic_crop(
                 source_path=fake,
                 start_s=0.0,
