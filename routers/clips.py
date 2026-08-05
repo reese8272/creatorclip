@@ -1761,7 +1761,7 @@ async def get_clip_title_suggestions(
     from billing.ledger import record_llm_usage
     from dna.profile import get_active as _get_active_dna
     from knowledge.clip_titles import generate_clip_title_suggestions
-    from knowledge.util import extract_transcript_text
+    from knowledge.util import extract_transcript_window
 
     await check_positive_balance(creator.id, session)
 
@@ -1772,8 +1772,13 @@ async def get_clip_title_suggestions(
     transcript = await session.scalar(
         select(Transcript).where(Transcript.video_id == clip.video_id)
     )
-    clip_transcript = extract_transcript_text(
-        transcript.segments_jsonb if transcript else None, 1500
+    # Issue 414: ground suggestions in the CLIP'S OWN transcript window
+    # ([setup_start_s ?? start_s, end_s], midpoint-assigned) — previously this
+    # passed the whole video transcript truncated to 1500 chars, so any clip
+    # past ~minute 2 was titled against minute-0 content.
+    window_start = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    clip_transcript = extract_transcript_window(
+        transcript.segments_jsonb if transcript else None, window_start, clip.end_s
     )
 
     # Fetch the creator's DNA brief.
