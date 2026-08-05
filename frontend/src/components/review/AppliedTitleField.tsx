@@ -3,13 +3,26 @@ import { TITLE_MAX_CHARS, useApplyClipMetadata } from '@/hooks/useApplyClipMetad
 import { Button } from '@/components/ui/button'
 import type { ReviewClip } from '@/types'
 
-// Inline editable "publish title" row on the Your-call card. Shows the applied
-// title (set from the Why-this-clip Apply buttons or typed here); saving PATCHes
-// the same /clips/{id} endpoint. Collapsed to a subtle affordance while unset;
-// saving an empty value clears the title (publish falls back to the video title).
-export function AppliedTitleField({ clip }: { clip: ReviewClip }) {
-  const [editing, setEditing] = useState(false)
-  const [value, setValue] = useState('')
+// Inline editable "publish title" row. Shows the applied title (set from the
+// metadata-panel Apply buttons or typed here); saving PATCHes the same
+// /clips/{id} endpoint. Collapsed to a subtle affordance while unset; saving an
+// empty value clears the title (publish falls back to the video title).
+//
+// L26 (Issue 424) additive props: ClipMetadataPanel renders its own compact
+// row and mounts this field only while editing — `autoEdit` opens the input
+// immediately (one click, not two) and `onClose` lets the host collapse back
+// to its row on Cancel/Save. Both optional; behavior without them is unchanged.
+export function AppliedTitleField({
+  clip,
+  autoEdit = false,
+  onClose,
+}: {
+  clip: ReviewClip
+  autoEdit?: boolean
+  onClose?: () => void
+}) {
+  const [editing, setEditing] = useState(autoEdit)
+  const [value, setValue] = useState(autoEdit ? (clip.applied_title ?? '') : '')
   const [error, setError] = useState('')
   const apply = useApplyClipMetadata(clip)
 
@@ -25,9 +38,15 @@ export function AppliedTitleField({ clip }: { clip: ReviewClip }) {
       await apply.mutateAsync({ applied_title: trimmed === '' ? null : trimmed })
       setEditing(false)
       setError('')
+      onClose?.()
     } catch {
       setError('Could not save the title — try again.')
     }
+  }
+
+  function cancel() {
+    setEditing(false)
+    onClose?.()
   }
 
   if (!editing) {
@@ -72,7 +91,7 @@ export function AppliedTitleField({ clip }: { clip: ReviewClip }) {
           {value.length}/{TITLE_MAX_CHARS}
         </span>
         {error && <span className="text-xs text-danger">{error}</span>}
-        <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>
+        <Button variant="secondary" size="sm" onClick={cancel}>
           Cancel
         </Button>
         <Button size="sm" disabled={apply.isPending} onClick={save}>

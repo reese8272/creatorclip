@@ -1,18 +1,16 @@
 import { Fragment, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { fitTier } from '@/lib/fit'
-import { EDITOR_PLAYER_W } from '@/lib/toolLayout'
+import { STAGE_CELL } from '@/lib/toolLayout'
 import { WAVEFORM_UNAVAILABLE_MESSAGE } from '@/lib/peaks'
 import { Timeline } from '@/components/editor/Timeline'
-import { FitBadge } from '@/components/ui/fit-badge'
 import { Button } from '@/components/ui/button'
 import { CaptionStylePanel } from '@/components/review/CaptionStylePanel'
 import { CleanPassPanel } from '@/components/review/CleanPassPanel'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { Chip } from '@/components/Chip'
+import { ShortStage } from '@/components/stage/ShortStage'
 import { Switch } from '@/components/ui/switch'
 import {
   cutFromRange,
@@ -35,10 +33,9 @@ import type {
   ReviewClip,
   TranscriptWord,
 } from '@/types'
-import { ArrowLeft, TriangleAlert, X } from '@/components/ui/icon'
-import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
-import { VideoPlayer, type VideoPlayerHandle } from '@/components/ui/video-player'
-import { Card } from '@/components/ui/card'
+import { TriangleAlert, X } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
+import type { VideoPlayerHandle } from '@/components/ui/video-player'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -82,18 +79,15 @@ function activeWordIndex(words: TranscriptWord[], currentTime: number): number {
  */
 export function ShortFormEditor({
   clip,
-  videoId,
   hasPeaks = false,
   className,
 }: {
   clip: ReviewClip
-  videoId: string
   /** The parent video's `has_peaks`. Gating on it means a source that will never
    *  have a waveform costs zero requests instead of a 404 per clip open. */
   hasPeaks?: boolean
   className?: string
 }) {
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
 
   // ── Transcript ───────────────────────────────────────────────────────────
@@ -356,18 +350,48 @@ export function ShortFormEditor({
   const pct = clipDuration > 0 ? (100 * removedS) / clipDuration : 0
   const activeIdx = activeWordIndex(words, currentTime)
 
-  const mediaSrc = `/clips/${clip.id}/download?disposition=inline`
-
   return (
     <div className={cn('flex flex-col gap-3', className)}>
-      {/* Three regions at lg: evidence (transcript) · the media · actions.
+      {/* Three regions at lg: evidence (transcript) · the STAGE · actions.
+          DOM order is mobile-first (stage → transcript → options); explicit
+          col starts place them transcript | stage | options at lg.
           grid-rows-[minmax(0,1fr)] is the grid analogue of min-h-0 — without it
-          an `auto` track grows to its content and overflows the clipped shell. */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(280px,1.4fr)_auto_minmax(272px,340px)] lg:grid-rows-[minmax(0,1fr)]">
+          a track can grow to its content and overflow the clipped shell. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(280px,1.4fr)_minmax(0,1fr)_minmax(272px,340px)] lg:grid-rows-[minmax(0,1fr)]">
+        {/* ── B · The stage — the single primary panel (L2). STAGE_CELL makes
+            this cell a size container so the stage derives the media size from
+            the cell's own height budget (the Issue 424 sizing inversion) —
+            the Timeline dock below simply shrinks the budget, no re-measured
+            subtraction constant involved. */}
+        <section
+          aria-label="Clip preview"
+          className={cn(
+            'flex min-h-0 justify-center lg:col-start-2 lg:row-start-1 lg:overflow-y-auto',
+            STAGE_CELL,
+          )}
+        >
+          <ShortStage
+            clip={clip}
+            // compact: scrubbing belongs to the Timeline dock below, not to a
+            // full transport bar competing with it.
+            density="compact"
+            transport
+            playerRef={playerRef}
+            onTimeChange={setCurrentTime}
+            // cleanedUri is the readiness signal only; playback goes through
+            // the authed download endpoint (the raw URI is s3:// in prod R2).
+            // The in-stage tab swap replaces the old second stacked player.
+            cleanedUri={cleanedUri}
+            onConfirmCleaned={confirmFinal}
+            onDiscardCleaned={discardFinal}
+            statusLine={status || undefined}
+          />
+        </section>
+
         {/* ── A · Transcript — the evidence panel ── */}
         <section
           aria-label="Clip transcript"
-          className="flex min-h-0 flex-col gap-2 lg:overflow-hidden"
+          className="flex min-h-0 flex-col gap-2 lg:col-start-1 lg:row-start-1 lg:overflow-hidden"
         >
           {/* The engine's case for this clip sits with the evidence, not on the
               player. In a height-constrained column every pixel spent beside the
@@ -431,101 +455,19 @@ export function ShortFormEditor({
           )}
         </section>
 
-        {/* ── B · Viewer — the single primary panel (L2), on an `auto` track ──
-            The dead region is gone because the track is `auto` and the card is
-            `w-fit`: the card is exactly as wide as the player, so there is no
-            enclosed empty space to frame. Everything that is not the media went
-            elsewhere — the case for the clip to column A, the transport to the
-            dock — because in a height-constrained column, pixels spent next to
-            the player come out of the player. */}
-        <section aria-label="Clip preview" className="flex min-h-0 justify-center lg:overflow-y-auto">
-          <Card level="primary" className="flex h-fit w-fit flex-col gap-2 p-3">
-            {clip.render_uri ? (
-              <VideoPlayer
-                ref={playerRef}
-                // Keyed on the artifact, not just the clip: a confirmed clean
-                // swap changes render_uri but not the download src, so without
-                // a key change the element would keep playing the old media.
-                mediaKey={clip.render_uri ?? undefined}
-                src={mediaSrc}
-                label="Clip preview"
-                // compact: scrubbing belongs to the Timeline dock below, not to a
-                // full transport bar competing with it.
-                density="compact"
-                transport
-                onTimeChange={setCurrentTime}
-                className={cn(EDITOR_PLAYER_W, 'shadow-accent-glow')}
-              />
-            ) : (
-              <div
-                className={cn(
-                  EDITOR_PLAYER_W,
-                  'flex aspect-[9/16] items-center justify-center rounded-xl border border-default bg-black text-xs text-subtle',
-                )}
-              >
-                Not yet rendered
-              </div>
-            )}
-
-            {/* One compact row, not a stack: a ~110px meta column under the
-                player would cost the player ~110px of height, and height is what
-                sets its width at 9:16. */}
-            <div
-              className={cn(
-                EDITOR_PLAYER_W,
-                'flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1',
-              )}
-            >
-              <span className="font-mono text-mono text-muted">
-                Clip #{clip.rank ?? '—'} ·{' '}
-                {(clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1)}s
-              </span>
-              <FitBadge tier={fitTier(clip.score)} />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => navigate(`/review?video_id=${videoId}`)}
-              >
-                <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back to
-                Review
-              </Button>
-            </div>
-
-            {/* cleanedUri is the readiness signal only; playback goes through
-                the authed download endpoint (the raw URI is s3:// in prod R2). */}
-            {cleanedUri && (
-              <div className={cn(EDITOR_PLAYER_W, 'flex flex-col gap-2')}>
-                <VideoPlayer
-                  src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
-                  label="Edited clip preview"
-                  density="compact"
-                  className="w-full"
-                />
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={confirmFinal}>
-                    Use edited version
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={discardFinal}>
-                    Keep original
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {status && <div className={cn(EDITOR_PLAYER_W, 'text-xs text-subtle')}>{status}</div>}
-          </Card>
-        </section>
-
         {/* ── C · Render options — the actions panel ── */}
         <section
           data-tool-scroll
           aria-label="Render options"
-          className="flex min-h-0 flex-col gap-4 lg:overflow-y-auto"
+          className="flex min-h-0 flex-col gap-4 lg:col-start-3 lg:row-start-1 lg:overflow-y-auto"
         >
           <h2 className="text-xs font-medium uppercase tracking-[0.06em] text-muted">
             Render options
           </h2>
-          <CollapsibleTool title="Caption style" defaultOpen>
+          {/* Collapsed by default (Issue 425): the strongest lever for making a
+              secondary panel recede is not being open — the Editor-side answer
+              to "captioning takes too much space". */}
+          <CollapsibleTool title="Caption style">
             <CaptionStylePanel clip={clip} />
           </CollapsibleTool>
           <CollapsibleTool title="Clean filler + silence">

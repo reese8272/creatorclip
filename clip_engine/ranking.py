@@ -161,14 +161,24 @@ async def score_and_rank(
     max_candidates: int = 8,
     ledger_session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] | None = None,
     style_notes: str | None = None,
+    video_context: dict | None = None,
 ) -> list[dict]:
-    """Extract candidates → score (per-candidate LLM call) → rank. Session-free.
+    """Extract candidates → merge LLM moments → score (ONE LLM call) → rank → trim.
 
-    Split out of the old ``generate_and_rank_clips`` (Issue 82b): the LLM round-trip
-    here can take 30–120 s, so no DB session may be held across it — callers release
-    their session first and persist the returned ranking via ``persist_ranked_clips``
-    on a freshly acquired session. ``ledger_session_factory`` lets the scoring layer
-    open a short-lived session AFTER the LLM call for the usage-ledger write.
+    Session-free. Split out of the old ``generate_and_rank_clips`` (Issue 82b): the
+    LLM round-trip here can take 30–120 s, so no DB session may be held across it —
+    callers release their session first and persist the returned ranking via
+    ``persist_ranked_clips`` on a freshly acquired session. ``ledger_session_factory``
+    lets the scoring layer open a short-lived session AFTER the LLM call for the
+    usage-ledger write.
+
+    ``video_context`` (Issue 416) is the stored ``VideoContext.context_jsonb`` (or
+    None when the context pass was skipped/disabled). Its validated ``moments``
+    become llm-origin candidates unioned with the signal candidates under
+    signal-priority NMS (clip_engine/merge.py), all scored in the ONE existing
+    Sonnet call, then trimmed post-ranking to ``max_candidates`` — weak candidates
+    are displaced on merit, and row/render/shortlist behavior downstream is
+    unchanged. Absent context ⇒ byte-identical behavior to the pre-416 pipeline.
     """
     # Candidate extraction is CPU-bound (numpy array build + scipy find_peaks over
     # duration/0.5 samples). Offload it so it can't stall the API event loop and the
@@ -180,6 +190,17 @@ async def score_and_rank(
     candidates = await asyncio.to_thread(
         lambda: extract_candidates(timeline, max_candidates, words=words or None)
     )
+
+    moments = (video_context or {}).get("moments") or []
+    if moments:
+        from clip_engine.merge import llm_moments_to_candidates, merge_candidates
+
+        llm_candidates = await asyncio.to_thread(
+            lambda: llm_moments_to_candidates(moments, timeline, words=words or None)
+        )
+        if llm_candidates:
+            candidates = merge_candidates(candidates, llm_candidates)
+
     if not candidates:
         logger.info("No candidates found for video %s", video_id)
         return []
@@ -193,7 +214,11 @@ async def score_and_rank(
         ledger_session_factory=ledger_session_factory,
         style_notes=style_notes,
     )
-    return rank_candidates(scored)
+    # Post-ranking trim (Issue 416): the merged pool can exceed max_candidates
+    # (≤8 signal + ≤4 LLM); displacement happens HERE on scored merit, never
+    # pre-scoring. A no-op without merged LLM candidates (extract_candidates
+    # already caps at max_candidates), preserving pre-416 behavior exactly.
+    return rank_candidates(scored)[:max_candidates]
 
 
 async def persist_ranked_clips(
@@ -252,6 +277,10 @@ async def persist_ranked_clips(
                 "features": c.get("features", {}),
                 "principle": c.get("principle", ""),
                 "reasoning": c.get("reasoning", ""),
+                # Issue 416 — provenance: "llm" for context-pass-proposed
+                # candidates, "signal" for audio-energy peaks. Free-form JSONB,
+                # no migration needed.
+                "origin": c.get("origin", "signal"),
             },
             format=ClipFormat.short,
             render_status=RenderStatus.pending,

@@ -628,14 +628,21 @@ def _render_vf_with_reframe_flag(tmp_path, *, flag_enabled: bool) -> str:
         captured.append(cmd)
         return MagicMock(returncode=0, stdout="1920,1080\n", stderr="")
 
-    # Patch compute_reframe_crop to return a deterministic synthetic track.
-    from clip_engine.reframe import CropCenterPoint
+    # Patch compute_dynamic_crop (Issue 421 — render_clip_file's reframe entry
+    # point) to return a deterministic synthetic result.
+    from clip_engine.reframe import CropCenterPoint, ReframeResult
 
     fake_track = [
         CropCenterPoint(10.0, 700),
         CropCenterPoint(10.2, 720),
     ]
     fake_script = "0.000 [enter] crop x 396;\n0.200 [enter] crop x 416;"
+    fake_result = ReframeResult(
+        track_points=fake_track,
+        sendcmd_text=fake_script,
+        track_json={"version": 1, "mode": "face_pan"},
+        mode="face_pan",
+    )
 
     with (
         patch("subprocess.run", side_effect=_fake),
@@ -643,15 +650,22 @@ def _render_vf_with_reframe_flag(tmp_path, *, flag_enabled: bool) -> str:
         patch("cv2.CascadeClassifier") as mock_cc,
         patch.object(_config_mod.settings, "ACTIVE_SPEAKER_REFRAME_ENABLED", flag_enabled),
         patch.object(_config_mod.settings, "REFRAME_SAMPLE_FPS", 5.0),
-        # compute_reframe_crop is imported locally inside render_clip_file via
-        # `from clip_engine.reframe import compute_reframe_crop` — patch at source.
+        # compute_dynamic_crop is resolved through the module inside
+        # render_clip_file — patch at source.
         patch(
-            "clip_engine.reframe.compute_reframe_crop",
-            return_value=(fake_track, fake_script),
+            "clip_engine.reframe.compute_dynamic_crop",
+            return_value=fake_result,
         ),
     ):
         mock_cc.return_value.detectMultiScale.return_value = []
-        render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out)
+        returned = render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out)
+
+    # Flag off → None (the worker nulls any stale persisted track);
+    # flag on → the wire-contract dict from compute_dynamic_crop (Issue 421).
+    if flag_enabled:
+        assert returned == {"version": 1, "mode": "face_pan"}
+    else:
+        assert returned is None
 
     render_cmd = next((c for c in captured if "-vf" in c), None)
     assert render_cmd is not None

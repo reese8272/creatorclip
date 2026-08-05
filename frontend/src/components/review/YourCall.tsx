@@ -1,12 +1,11 @@
 import { useState } from 'react'
 import { api, ApiError } from '@/lib/api'
-import { AppliedTitleField } from '@/components/review/AppliedTitleField'
 import { CleanedPreviewConfirm } from '@/components/review/CleanedPreviewConfirm'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { FeedbackAction, FeedbackPayload, ReviewClip, TaskQueued } from '@/types'
-import { Download, RotateCcw, Scissors, ThumbsDown, ThumbsUp } from '@/components/ui/icon'
-import { ICON_SIZE } from '@/components/ui/iconSizes'
+import { ArrowRight, Download, RotateCcw, Scissors, ThumbsDown, ThumbsUp } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 const APPROVE_TAGS = [
   { id: 'titles_fit_style', label: 'Titles fit my style' },
@@ -188,8 +187,8 @@ export function YourCall({
         )}
       </div>
 
-      {/* The title/description this clip will publish with (metadata-lane PATCH). */}
-      <AppliedTitleField clip={clip} />
+      {/* The publish title/description moved to ClipMetadataPanel (Issue 424) —
+          this card is the decision, that panel is the packaging. */}
 
       {panel && (
         <div className="mt-3.5 animate-slide-up border-t border-default pt-3.5">
@@ -230,6 +229,14 @@ export function YourCall({
           </div>
         </div>
       )}
+
+      {/* Quiet footer, not a destination (Issue 424 — moved off the stage; the
+          accessible name is load-bearing for the shortlist queue tests). */}
+      <div className="mt-3 flex justify-center border-t border-default pt-2.5">
+        <button onClick={onAdvance} className="text-xs text-muted hover:text-fg">
+          Next clip <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
+        </button>
+      </div>
     </div>
   )
 }

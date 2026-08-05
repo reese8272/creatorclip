@@ -348,6 +348,46 @@ export interface ReviewClip {
   // null) is never shortlisted — it was never engine-scored, so there is no
   // case to argue for it as a "top pick".
   shortlisted: boolean
+  // L26 Track A (Issue 417) — pipeline-suggested publish metadata. OPTIONAL on
+  // purpose: the columns land server-side on a parallel branch, so old payloads
+  // must keep parsing and the UI falls back to today's behavior when absent.
+  // `applied_*` above stays creator-typed only; these are the engine's drafts.
+  suggested_title?: string | null
+  suggested_description?: string | null
+  suggested_hook?: string | null
+}
+
+// ── Crop track (L26 cross-track contract, Issue 421 wire shape) ──────────────
+// Served at GET /clips/{clip_id}/crop-track (404 {detail:{code:"no_crop_track"}}
+// for pre-pipeline clips). One geometry definition shared by the render's
+// sendcmd and this preview: `t` is clip-relative seconds, `x` is the CLAMPED
+// LEFT EDGE of the crop window in source pixels (the exact sendcmd values, not
+// centers). Interpolation rule: lerp between keyframes; snap at cuts.
+
+export interface CropTrackKeyframe {
+  t: number
+  x: number
+}
+
+export interface CropTrackCut {
+  t: number
+  from_x: number
+  to_x: number
+  speaker?: number
+}
+
+export interface CropTrack {
+  version: number
+  mode: 'speaker_cut' | 'face_pan' | 'static'
+  source: { width: number; height: number }
+  crop: { width: number; height: number }
+  origin_s: number
+  duration_s: number
+  keyframes: CropTrackKeyframe[]
+  cuts: CropTrackCut[]
+  shots: { t: number }[]
+  speakers: { count: number; mapping_confidence: number }
+  meta: { sample_fps: number; fallback: boolean }
 }
 
 // Issue 216 — honest personalization-status surface.

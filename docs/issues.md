@@ -4,12 +4,16 @@
 queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `docs/DECISIONS.md`
 (2026-08-03). This file is the live queue.
 
-**Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
-2026-08-03). **Batch B: #389, #392 and #390 are DONE, MERGED and DEPLOYED** — PR #70 → `main`
-(`67fe4db`) and **#391 across PR #71** (`0b59a75`, migration `0052`) **and PR #73** (`7b8f281`, the
-render path), all deployed.
-**BATCH B IS COMPLETE.** Issue **406** (dependency advisories) also closed, so Layer 0 is fully green.
-**Next: Batch C — close the capability gap (393–397, 401).** See `docs/PROJECT_STATE.md`.
+**Active lane: L26 — A→B Auto-Clipping MVP (Issues 414–426).** Declared 2026-08-04 (user decision;
+`docs/DECISIONS.md` 2026-08-04): the MVP viability criterion is "the best auto-clipping short creation
+on the planet," and three verified gaps block it — the LLM never reads the whole video, the crop is a
+static single-keyframe frame, and the 9:16 short occupies ~9% of the Review workspace. **L25 Batch C is
+PAUSED, not cancelled** — #394 re-targets the new ShortStage overlay slot, #396 becomes the manual
+escape hatch *after* auto-reframe ships, #399 is unaffected. Full design in the approved plan
+(session 2026-08-04) and the DECISIONS entry.
+
+Prior lane state: **L25 Batches A & B are 100% CLOSED** (384–392, 400, 406–413 — merged & deployed;
+see `docs/PROJECT_STATE.md`).
 
 **Also closed, outside the lane:** **#406** ✅ — the 6 `pip-audit` advisories (aiohttp,
 cryptography), merged as PR #72. See § Hygiene below.
@@ -51,6 +55,267 @@ changes the gut reaction to the product.
 | **E** | Breadth — scope-call cluster, do not start before D closes | **403–405** | multi-week |
 
 Batches run in order. **Batch E is filed but explicitly not funded** — see the scope note above it.
+
+---
+
+# Lane L26 — A→B Auto-Clipping MVP (Issues 414–426)
+
+**The finding in one paragraph.** The pipeline works mechanically but the "intelligence" is thinner
+than it looks: clip candidates come from scipy audio-energy peak-picking and the only LLM call sees
+~600 chars per candidate — it can score, never propose, so a great story delivered flat is invisible.
+Titles are on-demand clicks, descriptions have no generator at all (`publish` falls back to
+`"#Shorts"`), the production crop is one Haar face at the clip midpoint frozen for the whole clip
+(the dynamic reframe in `clip_engine/reframe.py` is flag-off, largest-face-only, never verified), and
+the 9:16 short is ≈260×470px in a 1440×900 workspace. L26 closes all three gaps in three parallel
+tracks. Design: approved plan 2026-08-04 + `docs/DECISIONS.md` (2026-08-04, L26 entry).
+
+**Tracks & merge order** (A → B rebase → C; A/B share `worker/tasks.py`, `routers/clips.py`,
+`config.py`, `models.py`):
+
+| Track | Theme | Issues | Branch |
+|-------|-------|--------|--------|
+| **A** | Intelligence: whole-video context → hybrid candidates → batched metadata | 414–417 | `lane/l26-intel` |
+| **B** | Speaker-aware dynamic crop: diarization → shots → speaker map → cut/pan | 418–422 | `lane/l26-crop` |
+| **C** | Short-first unified UI: ShortStage, Review+Editor flip, crop overlay | 423–426 | `lane/l26-stage` |
+
+Binding cross-track contracts (crop-track wire shape, migration numbering 0053–0055, additive
+transcript `speaker` field, SSE stage-label tolerance) are in the DECISIONS entry.
+
+---
+
+### Issue 414: Transcript-window helper + clip-titles window bug fix
+- [x] **Status:** DONE 2026-08-04 · **Track:** A · **Size:** S · **Depends:** —
+
+**What.** New `knowledge/util.py::extract_transcript_window(segments_jsonb, start_s, end_s,
+max_chars=1200)` (midpoint-assignment, the `scoring.py` rule), then fix `routers/clips.py:1775`:
+title-suggestions currently ground in the WHOLE video transcript truncated to 1500 chars
+(`knowledge/clip_titles.py:49`), not the clip's own window — a real fidelity bug for any late clip.
+
+**Acceptance**
+- [x] `extract_transcript_window` unit-tested (missing transcript, empty window, cap behavior)
+- [x] `/clips/{id}/title-suggestions` grounds in the clip's `[setup_start_s ?? start_s, end_s]` window;
+      test asserts the LLM payload contains window text (not minute-0 text) for a late clip
+- [x] Existing clip-titles tests stay green
+
+### Issue 415: Whole-video context pass (VideoContext table + task + chain)
+- [x] **Status:** DONE 2026-08-04 · **Track:** A · **Size:** M · **Depends:** —
+
+**What.** New chain member: `ingest | transcribe | analyze_video_context | build_signals`. The task
+reads the FULL transcript (rendered as ~30s paragraphs with `[512s]` markers — one call, no chunking;
+120 min ≈ 26K tok) + creator identity (`dna/identity.py::format_for_prompt`) + DNA brief, and stores a
+validated `context_jsonb` (`summary`, `structure`, `narrative_arcs`, `tone`, `audience_relevance`,
+`moments[]` with principle citations) in a new 1:1 `VideoContext` table (migration **0053**, 0044 RLS
+pattern verbatim). Structured output forced; prompt-cache blocks per Issue-315 discipline; model
+`ANTHROPIC_MODEL_VIDEO_CONTEXT=claude-sonnet-4-6`. **The task can never fail the chain**: any
+LLM/parse failure logs, emits `context_skipped`, returns — clips generate signal-only as today.
+
+**Acceptance**
+- [x] Chain shape updated; `VIDEO_CONTEXT_ENABLED=false` short-circuits to today's pipeline exactly
+- [x] Row persisted with schema-valid `context_jsonb`; ≤ `LLM_CANDIDATES_MAX=4` validated moments
+      (bounds-clamped, principle ∈ the 12, invalid dropped)
+- [x] Mocked LLM 5xx/parse failure → chain completes, clips still generate
+- [x] Redelivery is a no-op (PK check-then-insert; no double spend); spend-guard skip emits `context_skipped`
+- [x] Usage billed via ledger after the round-trip (scoring.py pattern); cache marker floor-gated
+      (byte-identity test per `test_brief_caching.py` style)
+- [x] RLS policy present; migration up/down smoke; new config keys in `.env.example`
+
+### Issue 416: Hybrid candidate merge — LLM moments ∪ signal peaks (the engine change)
+- [x] **Status:** DONE 2026-08-04 · **Track:** A · **Size:** L · **Depends:** 415
+
+**What.** `extract_candidates` stays byte-untouched (eval harness green by construction). New pure
+layer `clip_engine/merge.py`: `llm_moments_to_candidates()` (sentence-snap via existing
+`snap_to_sentence_boundary`, `peak_s` = signal argmax in window else midpoint, candidates.py
+invariants + `MIN_CLIP_S` enforced, tagged `origin:"llm"`) + `merge_candidates()` (signal-priority
+NMS, IoU>0.5 suppression, chronological). `ranking.py::score_and_rank` gains optional
+`video_context`; merged pool (≤8 signal + ≤4 LLM) scored in the ONE existing Sonnet call;
+post-ranking trim to `CLIPS_PER_VIDEO_DEFAULT=8` — weak candidates displaced on merit. Scoring:
+payload gains `origin`/wrapped `llm_reason`; `_SYSTEM_STATIC` gains one origin line; `_PRINCIPLES`
+gains missing #12 "Clean Context Boundary"; `max_tokens` 1200→1800; cold-start rule
+`max(_signal_score, 0.8·llm_confidence)` for llm-origin. Provenance in `signals_jsonb["origin"]`.
+
+**Acceptance**
+- [x] All existing eval scenarios pass unmodified; `extract_candidates` diff empty
+- [x] Flat-energy fixture story → persisted `origin:"llm"` clip through score→rank→persist (mocked LLM)
+- [x] Overlapping LLM candidate (IoU>0.5) suppressed; trim caps rows at 8
+- [x] Cold-start rule + 12-citable-principles pinned by tests
+- [x] 3 new `kind: merge` eval scenarios (flat-energy admitted / overlap dedupe / invalid dropped);
+      `SCENARIO_FLOOR` 15 → **18**
+- [x] Absent context row ⇒ byte-identical behavior to today
+
+### Issue 417: Batched auto-metadata — suggested title/description/hook for every clip
+- [x] **Status:** DONE 2026-08-04 · **Track:** A · **Size:** M · **Depends:** 414, 415
+
+**What.** New `knowledge/clip_metadata.py::generate_clip_metadata_batch()` — ONE structured-output
+Sonnet call for all ranked clips (static honesty rubric + cached DNA block + uncached video-context
+summary + per-clip payloads each grounded in its OWN transcript window). Python clamps: title ≤100
+chars, description ≤5000 UTF-8 bytes + `#Shorts` + no angle brackets, hook ≤200. Migration **0054**:
+`clips.suggested_title/description/hook` + `suggestions_generated_at`. `applied_*` stays
+creator-typed; publish fallback becomes `applied_* or suggested_* or (video.title | "#Shorts")`. New
+sibling task `generate_clip_metadata` enqueued after `persist_ranked_clips` commits, parallel with
+render; idempotency filter `suggested_title IS NULL`. On-demand endpoints unchanged (= Regenerate).
+`ClipOut` gains the three `suggested_*` fields.
+
+**Acceptance**
+- [x] Post-pipeline, every ranked clip has non-NULL suggested_* (mocked-LLM test through
+      `_generate_clips_async`); exactly ONE LLM call per video
+- [x] Each clip's payload contains only its own window text; clamps pinned by tests
+- [x] Publish fallback order pinned (worker test); redelivery fills only NULL rows
+- [x] LLM-down ⇒ render completes, columns NULL, clips usable; billed + spend-guard-gated
+- [x] No-virality structural scan green on new prompt strings; `AUTO_CLIP_METADATA=false` disables
+- [x] SSE emits non-terminal `metadata_ready`; OpenAPI/router-surface snapshots updated
+
+### Issue 418: Speaker diarization in transcription
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-crop`, pending L26 merge) · **Track:** B · **Size:** S · **Depends:** —
+
+**What.** `diarize=settings.TRANSCRIPTION_DIARIZE_ENABLED` (new kill-switch, default true) on the
+Deepgram request — SDK 3.7.7 verified to have the field (no repeat of the `words=True` outage).
+`_normalize_deepgram()` gains **additive** `speaker`/`speaker_confidence` on words, `speaker` on
+segments (keys omitted when absent). AssemblyAI parity via `speaker_labels=True` + letter→int map;
+WhisperX degrades gracefully. No migration (schemaless JSONB).
+
+**Acceptance**
+- [x] Diarized-fixture normalization tests (Deepgram + AssemblyAI); missing-speaker tolerance
+- [x] Consumers-ignore regressions: captions + filler byte-identical on speaker-bearing transcripts
+- [x] Real-SDK kwargs-validation test extended to `diarize`
+- [x] Deepgram diarization surcharge checked: +$0.0020/min add-on (deepgram.com/pricing 2026-08-04)
+      → `COST_PER_MIN_DEEPGRAM` 0.0077→0.0097, `PRICE_BOOK_VERSION` bumped, DECISIONS entry
+
+### Issue 419: Shot-change detection module
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-crop`, pending L26 merge) · **Track:** B · **Size:** S · **Depends:** —
+
+**What.** New `clip_engine/shots.py`: `detect_shot_changes()` via one downscaled ffmpeg `scdet` pass
+over the clip window (`scale=320:-2,scdet=threshold=10`, parse `lavfi.scd.time` from stderr — zero
+new Python deps; amends the 2026-06-23 PySceneDetect pencil-in); histogram-diff fallback over the
+existing 5fps samples; total failure → `[]` = one shot (safe).
+
+**Acceptance**
+- [x] `_parse_scdet_output` unit-tested on captured stderr fixture (REAL ffmpeg 8.1.2 capture,
+      `tests/fixtures/scdet_stderr.txt`); histogram fallback tested
+- [x] Contract documented: tracks never span shot boundaries; EMA resets; never pan across a source cut
+
+### Issue 420: Face tracks + speaker→face mapping + cut/pan planner
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-crop`, pending L26 merge) · **Track:** B · **Size:** L · **Depends:** 418, 419
+
+**What.** New `clip_engine/speaker_map.py` (pure, synthetic-testable without mediapipe): greedy
+nearest-neighbor face tracks per shot; speaker turns (gap-merge <0.4s, backchannel absorb <0.8s);
+mouth-motion energy from BlazeFace's mouth keypoint on already-decoded frames; weighted vote
+speaker→track assignment with margin-ratio confidence. **Fallback ladder** `speaker_cut → face_pan →
+static` — off-screen speaker holds framing; bad mapping degrades, never worse than today. In
+`reframe.py`: `_detect_face_obs()` (+keypoints), **single `cv2.VideoCapture` sequential-grab
+refactor** (mandatory — per-sample open/seek is the latency killer), `plan_crop_directives()` (cut on
+speaker change ≥0.8s turn + |Δcx| ≥0.25·frame_w + ≥1.2s spacing; J-cut 150ms lead; snap to shot
+boundary ±300ms; always cut at source cuts; suppress inside punch-in pulse), segmented EMA smoothing,
+`compute_dynamic_crop() -> ReframeResult`. Cuts are unsmoothed sendcmd value jumps — no new filters.
+Cleaned/summary render paths explicitly keep static crops (follow-up filed).
+
+**Acceptance**
+- [x] All synthetic unit tests green **without mediapipe installed** (`test_speaker_map.py` 41,
+      `test_reframe_planner.py` 25 — planner thresholds, ladder rungs, off-screen hold,
+      segmented smoothing, sendcmd jumps)
+- [x] Config: `REFRAME_CUT_ENABLED`, `REFRAME_MIN_SHOT_S=1.2`, `REFRAME_CUT_MIN_TURN_S=0.8`,
+      `REFRAME_CUT_MIN_DISTANCE_FRAC=0.25`, `SHOT_DETECT_SCDET_THRESHOLD=10.0` in `.env.example`
+- [x] Flag-off behavior byte-identical to today (render.py untouched this issue; pinned in 421's
+      flag-off test — vf chain identical + `None` return)
+
+### Issue 421: Render integration + crop-track persistence + API
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-crop`; 0055 re-parented onto 0054 at L26
+  merge) · **Track:** B · **Size:** M · **Depends:** 420
+
+**What.** Migration **0055**: nullable `clips.reframe_track_jsonb` (NOT in ClipEditDocument — CAS
+conflict; #396 layers on top later). Track recomputed every render, persisted in the done-marking
+transaction; `_load_clip_render_plan` loads transcript whenever the reframe flag is on. **Unified
+wire contract** at `GET /clips/{clip_id}/crop-track` (404 `no_crop_track`): `{version, mode,
+source:{width,height}, crop:{width,height}, origin_s, duration_s, keyframes:[{t,x}] (x = clamped
+LEFT edge, exact sendcmd values), cuts:[{t,from_x,to_x,speaker?}], shots, speakers, meta}`.
+`has_crop_track` on ClipOut. Re-render replaces or deletes the track — never stale.
+
+**Acceptance**
+- [x] Track returned by `render_clip_file`, persisted, served; 404 for pre-pipeline clips
+- [x] Geometry shared: endpoint x-values are the sendcmd values (one definition; pinned by
+      `test_keyframe_x_are_the_exact_sendcmd_values`)
+- [x] Flag-off renders byte-identical; multi-segment paths unchanged (cleaned/summary keep
+      static crops); migration up/down smoke run against a throwaway local PG16 DB
+      (0052→0055→0052→0055, column jsonb NULLABLE verified)
+
+### Issue 422: Worker image (mediapipe) + staging rollout + flag flip
+- [ ] **Status:** code-side PREPARED 2026-08-04 (`requirements-image.txt` + Dockerfile +
+  `reframe_stages` vlog timings + staging checklist in `docs/DEPLOYMENT.md`); **staging
+  verification OPEN** — no Docker locally, the four unlock criteria below need staging
+  evidence; flags stay off in prod · **Track:** B · **Size:** M · **Depends:** 421
+
+**What.** `requirements-image.txt` (`-r requirements.txt` + `mediapipe==0.10.21`), Dockerfile
+installs it; local dev untouched (lazy imports). Flag sequencing: neutral deploy →
+`TRANSCRIPTION_DIARIZE_ENABLED=true` → staging reframe-on/cuts-off (verify pan rung) → staging cuts
+on vs a real 2-speaker fixture → prod flip. Closes **Issue 189's four unlock criteria with recorded
+evidence**; per-stage vlog timings (budget est. +12–24s per 60s clip vs 240s timeout).
+
+**Acceptance**
+- [ ] Image builds with mediapipe + model asset verified (unlock #1)
+- [ ] Real 2-speaker clip visually follows the speaker with cuts on turn changes (unlock #2)
+- [ ] Timing budget measured 30/60/90s and recorded (unlock #3); sendcmd tmp cleanup verified (#4)
+- [ ] DECISIONS flag-flip entry lands with the evidence; prod flip only after sign-off
+
+### Issue 423: Stage foundation — contracts + StagePlaceholder + useClipRender
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`) · **Track:** C · **Size:** S · **Depends:** —
+
+**What.** Step 0: `types.ts` gains optional `suggested_*` on ReviewClip + `CropTrack` types;
+`e2e/fixtures/mock-api.ts` gains the crop-track route (one tracked clip + `c1` 404) and suggested
+fields (inert until consumed). Step 1: extract `StagePlaceholder.tsx` (unified render states) +
+`hooks/useClipRender.ts` (state machine from `ClipPlayer.tsx:50-79`); ClipPlayer/ShortFormEditor
+consume them **pixel-identically**.
+
+**Acceptance**
+- [x] All render/failure/expired states reachable from both pages; zero visual-baseline diff
+- [x] `npm test` + tsc + eslint + structural gates green; no baseline regen needed
+
+### Issue 424: ShortStage + Review flip + metadata compaction
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`; CI baseline regen pending) · **Track:** C · **Size:** L · **Depends:** 423
+
+**What.** `components/stage/ShortStage.tsx` (stage owns the 9:16 frame: player/placeholder, meta row,
+cleaned-preview tab swap, `overlay` + `below` slots; ONE `level="primary"` per page). Sizing
+inversion in `toolLayout.ts`: `STAGE_CELL` (lg container-type:size) + `STAGE_MEDIA_W`
+(`min(34rem,100cqw,(100cqh−6rem)·0.5625)`) replace the subtraction constants. Review grid
+`[minmax(260px,24rem)_minmax(0,1fr)_minmax(300px,26rem)]`; `WhyThisClip.tsx` split into
+`ClipCase.tsx` + `ClipMetadataPanel.tsx` (title + hook one truncating row each, `applied_* ??
+suggested_*` precedence, Apply chip → existing PATCH, "More suggestions" Disclosure = Regenerate);
+YourCall drops its AppliedTitleField embed, gains quiet "Next clip".
+
+**Acceptance**
+- [x] Review media box ≥1.8× today's area at 1440×900 (Playwright boundingBox assertion — measured 1.89×)
+- [x] Exactly one primary card; title+hook ≤2 collapsed rows; #412 empty-canvas regression guard
+- [x] Trim save/apply flows identical (existing tests); axe + disclaimer + no-virality green
+- [ ] Review baselines regenerated via CI dispatch (`--update-snapshots=all`, ubuntu only)
+
+### Issue 425: Editor flip + toolbar merge + deletions
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`; CI baseline regen pending) · **Track:** C · **Size:** M · **Depends:** 424
+
+**What.** ShortFormEditor composes ShortStage (cut/document logic untouched); cleaned preview becomes
+the in-stage tab swap; `Editor.tsx` h1 + mode tablist merge into one toolbar strip;
+CaptionStylePanel collapsed by default; delete `ClipPlayer.tsx`, `WhyThisClip.tsx`, old toolLayout
+constants (tests migrate).
+
+**Acceptance**
+- [x] One transport player per page; undo/redo/apply-cuts/CAS flows untouched
+      (`editor-persistence.spec.ts` unchanged); J/K/L + capture-bus keys unaffected
+- [x] Stage card fits its grid row (tool-shell boundingBox guard)
+- [ ] Editor + long-form baselines regenerated via CI dispatch
+
+### Issue 426: Crop-track overlay preview
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`; CI baseline regen pending) · **Track:** C · **Size:** M · **Depends:** 421 (endpoint), 424
+
+**What.** `hooks/useCropTrack.ts` (key `['crop-track', id, render_uri]`, 404→null, staleTime
+Infinity) + `components/stage/CropTrackOverlay.tsx`: pointer-events-none ~112px mini-map (source
+rect + accent crop window via translateX, cut ticks), label `AI framing` / `Framing: centered` on
+fallback. Animated via `subscribeTime` + rAF writing `style.transform` on a ref — zero React renders
+per frame. No track → render nothing (honest absence). Pure divs. Mock-api fixture unblocks UI work
+before 421 merges. Follow-up (filed, not scheduled): source-framing view over
+`GET /videos/{id}/stream` — the #396 host.
+
+**Acceptance**
+- [x] Lerp + cut-snap + clamp math unit-tested against fixture keyframes
+- [x] 404 → nothing rendered, no error; fallback label honest; overlay never intercepts pointers
+- [x] Zero setState in the animation path; e2e fixture shows map on tracked clip, nothing on `c1`
+- [ ] Baselines regenerated via CI dispatch
 
 ---
 

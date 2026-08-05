@@ -197,8 +197,9 @@ SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "eval", "scenarios")
 # silent deletion (or @skip-piling) cannot hollow out the eval harness without
 # raising a visible failure. Raise this number whenever a new scenario is added;
 # never lower it. (Issue 265; raised 6 → 14 when the adversarial scenarios landed — Issue 199;
-# 14 → 15 when the stream-recap budget scenario landed — Issue 190)
-SCENARIO_FLOOR = 15
+# 14 → 15 when the stream-recap budget scenario landed — Issue 190;
+# 15 → 18 when the three kind:merge hybrid-candidate scenarios landed — Issue 416)
+SCENARIO_FLOOR = 18
 
 # Scenario files that are explicitly allowed to carry a pytest skip/xfail marker
 # (e.g. a known-broken scenario under active investigation). Add the YAML filename
@@ -313,11 +314,88 @@ def _assert_recap_scenario(scenario: dict) -> None:
             )
 
 
+def _assert_merge_scenario(scenario: dict) -> None:
+    """Merge-kind scenario assertions (Issue 416): raw moments flow through
+    validate_context (bounds / principle registry / cap), become llm-origin
+    candidates, and union with the signal candidates under signal-priority NMS.
+    Asserts pool counts, per-candidate window expectations, and the global
+    geometry invariants on every merged candidate."""
+    from analysis.video_context import validate_context
+    from clip_engine.candidates import MIN_CLIP_S
+    from clip_engine.merge import llm_moments_to_candidates, merge_candidates
+
+    inp = scenario["input"]
+    expected = scenario.get("expected", {})
+    name = scenario["scenario"]
+    timeline = inp["timeline"]
+    duration_s = float(timeline.get("duration_s", 0.0))
+
+    moments = validate_context({"moments": inp.get("moments", [])}, duration_s)["moments"]
+    signal_cands = extract_candidates(timeline, max_candidates=8)
+    llm_cands = llm_moments_to_candidates(moments, timeline)
+    merged = merge_candidates(signal_cands, llm_cands)
+
+    llm_in_merged = [c for c in merged if c.get("origin") == "llm"]
+    if "llm_candidates" in expected:
+        assert len(llm_in_merged) == expected["llm_candidates"], (
+            f"[{name}] expected {expected['llm_candidates']} llm-origin candidate(s) "
+            f"in the merged pool, got {len(llm_in_merged)}"
+        )
+    if "min_total" in expected:
+        assert len(merged) >= expected["min_total"], (
+            f"[{name}] merged pool {len(merged)} < expected min {expected['min_total']}"
+        )
+    if "max_total" in expected:
+        assert len(merged) <= expected["max_total"], (
+            f"[{name}] merged pool {len(merged)} > expected max {expected['max_total']}"
+        )
+
+    # Global invariants: every merged candidate keeps the candidates.py geometry.
+    for c in merged:
+        assert c["setup_start_s"] < c["peak_s"], (
+            f"[{name}] setup_start_s={c['setup_start_s']} >= peak_s={c['peak_s']}"
+        )
+        assert c["end_s"] - c["setup_start_s"] >= MIN_CLIP_S - 1e-6, (
+            f"[{name}] window ({c['setup_start_s']},{c['end_s']}) shorter than MIN_CLIP_S"
+        )
+        assert c["end_s"] <= duration_s + 1e-6, (
+            f"[{name}] end_s={c['end_s']} runs past duration {duration_s}"
+        )
+    starts = [c["setup_start_s"] for c in merged]
+    assert starts == sorted(starts), f"[{name}] merged pool not chronological: {starts}"
+
+    # Per-candidate window expectations, matched within the expected origin pool.
+    for exp_c in expected.get("candidates", []):
+        pool = llm_in_merged if exp_c.get("origin") == "llm" else merged
+        assert pool, f"[{name}] no candidates in the {exp_c.get('origin', 'any')} pool"
+        anchor = exp_c.get("setup_start_s_min", exp_c.get("setup_start_s_max", 0.0))
+        matched = min(pool, key=lambda c: abs(c["setup_start_s"] - anchor))
+        if "setup_start_s_min" in exp_c:
+            assert matched["setup_start_s"] >= exp_c["setup_start_s_min"], (
+                f"[{name}] setup_start_s={matched['setup_start_s']} < {exp_c['setup_start_s_min']}"
+            )
+        if "setup_start_s_max" in exp_c:
+            assert matched["setup_start_s"] <= exp_c["setup_start_s_max"], (
+                f"[{name}] setup_start_s={matched['setup_start_s']} > {exp_c['setup_start_s_max']}"
+            )
+        if "end_s_min" in exp_c:
+            assert matched["end_s"] >= exp_c["end_s_min"], (
+                f"[{name}] end_s={matched['end_s']} < {exp_c['end_s_min']}"
+            )
+        if "end_s_max" in exp_c:
+            assert matched["end_s"] <= exp_c["end_s_max"], (
+                f"[{name}] end_s={matched['end_s']} > {exp_c['end_s_max']}"
+            )
+
+
 def _assert_scenario(scenario: dict) -> None:
     """Run all geometry assertions for one loaded scenario. Raises AssertionError on
     any violation. Shared by the per-scenario test and the aggregate pass-rate gate."""
     if scenario.get("kind") == "recap":
         _assert_recap_scenario(scenario)
+        return
+    if scenario.get("kind") == "merge":
+        _assert_merge_scenario(scenario)
         return
     timeline = scenario["input"]["timeline"]
     expected = scenario.get("expected", {})

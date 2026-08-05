@@ -15,8 +15,12 @@ import { test, expect } from './fixtures/mock-api'
 test('the two clip suggestion actions are visibly separated', async ({ page }) => {
   await page.goto('review?video_id=v1', { waitUntil: 'domcontentloaded' })
 
-  const titles = page.getByRole('button', { name: /Suggest titles/i })
-  const caption = page.getByRole('button', { name: /Suggest caption/i })
+  // Issue 424 moved the lazy suggestion triggers into the metadata panel's
+  // "More suggestions" disclosure, relabeled Regenerate. Open it first.
+  await page.getByText('More suggestions').click()
+
+  const titles = page.getByRole('button', { name: /Regenerate titles/i })
+  const caption = page.getByRole('button', { name: /Regenerate caption/i })
   await titles.waitFor()
 
   const a = await titles.boundingBox()
@@ -32,4 +36,49 @@ test('the two clip suggestion actions are visibly separated', async ({ page }) =
     Math.max(horizontal, vertical),
     `actions are touching — horizontal gap ${horizontal}px, vertical gap ${vertical}px`,
   ).toBeGreaterThanOrEqual(4)
+})
+
+// L26 Issue 424 — the sizing inversion's acceptance gate. The pre-L26 media box
+// measured 273×486 at 1440×900 (~9% of the workspace); the stage flip must buy
+// at least 1.8× that area. Geometry, not pixels — this runs anywhere, no
+// baseline regen involved.
+test('the review media box is at least 1.8x the pre-L26 area at 1440x900', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'measured at 1440x900')
+  await page.goto('review?video_id=v1', { waitUntil: 'domcontentloaded' })
+
+  const video = page.locator('section[aria-label="Clip preview"] video')
+  await video.waitFor()
+  const box = await video.boundingBox()
+  expect(box, 'the stage player should be laid out').not.toBeNull()
+
+  const PRE_L26_AREA = 273 * 486
+  expect(
+    box!.width * box!.height,
+    `media box ${Math.round(box!.width)}×${Math.round(box!.height)} is under 1.8× the old ${273}×${486}`,
+  ).toBeGreaterThanOrEqual(1.8 * PRE_L26_AREA)
+})
+
+// L26 Issue 426 — the crop-track overlay. c1 404s (`no_crop_track`, the normal
+// pre-pipeline state) and must show NOTHING; c2 is the one tracked clip and
+// shows the honest mini-map, which may never intercept pointers.
+test('the crop-track mini-map shows on the tracked clip and never on the 404 clip', async ({
+  page,
+}) => {
+  await page.goto('review?video_id=v1', { waitUntil: 'domcontentloaded' })
+  await page.locator('section[aria-label="Clip preview"] video').waitFor()
+
+  // c1: the 404 clip — give the query time to settle, then assert absence.
+  await page.waitForTimeout(600)
+  await expect(page.getByTestId('crop-track-overlay')).toHaveCount(0)
+
+  // Advance to c2, the tracked clip.
+  await page.getByRole('button', { name: /Next clip/ }).click()
+  const overlay = page.getByTestId('crop-track-overlay')
+  await overlay.waitFor()
+  await expect(overlay).toContainText('AI framing')
+  expect(await overlay.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none')
+  // One tick for the fixture's speaker-change cut.
+  await expect(page.getByTestId('crop-cut-tick')).toHaveCount(1)
 })

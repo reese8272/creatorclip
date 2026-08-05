@@ -4,6 +4,92 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-04 — L26 BUILD COMPLETE: all three tracks merged on `lane/l26` (414–421 + 423–426 DONE; 422 code-prepared, staging OPEN)
+
+Serial merge A → B → C per the binding cross-track contract. Conflicts were additive-only
+(models.py + docs/SOT.md keep-both); migration 0055 re-parented onto 0054 at the merge (single
+alembic head verified: 0052→0053→0054→0055); `.env.example` PRICE_BOOK_VERSION aligned to the
+config default 2026-08-04. CropTrack wire contract verified field-for-field between
+`clip_engine/reframe.py`'s serializer and `frontend/src/types.ts` — no divergence.
+
+**Final merged gates (2026-08-04):**
+- Backend unit lane: **2766 passed / 71 skipped / 167 deselected / 0 failed**; ruff clean;
+  mypy clean (142 files). The Track-A-reported pre-existing `test_response_models` failure did
+  NOT reproduce here — it is environment-dependent (vacuous-pass under fastapi 0.137.1 lazy
+  router include; see `docs/OFF_COURSE_BUGS.md`, still open).
+- Eval harness: **22/22** `eval_scenario`, `SCENARIO_FLOOR=18`.
+- Frontend (node 22): vitest **624/624**, `tsc -b` clean, eslint **0 errors** (1 pre-existing
+  logged warning). E2e passed 83/0/11 on the C branch; frontend files untouched by the merge.
+
+**Open tail:** Issue 422's four staging unlock criteria (mediapipe image on staging, real
+2-speaker visual verification, timing budget, tmp cleanup) — flags stay off in prod; CI visual
+baseline regen for Review/Editor/long-form (dispatch with `--update-snapshots=all`); Track C
+deviations recorded in `docs/DECISIONS.md` (2026-08-04 Track C entry).
+
+---
+
+## 2026-08-04 — L26 Track A COMPLETE: Issues 414–417 all DONE (branch `lane/l26-intel`)
+
+The intelligence pipeline shipped in build order 414 → 415 → 416 → 417, one commit per issue:
+
+- **414** — `knowledge/util.py::extract_transcript_window` (midpoint-assignment) + the
+  title-suggestions grounding fix: `/clips/{id}/title-suggestions` now reads the clip's own
+  `[setup_start_s ?? start_s, end_s]` window instead of the whole transcript truncated at 1500 chars.
+- **415** — whole-video context pass: chain is now `ingest | transcribe | analyze_video_context |
+  build_signals`. New never-fails task (plain celery, max_retries=0, catch-all → `context_skipped`
+  SSE + return), `analysis/video_context.py` (ONE full-transcript Sonnet call, [512s]-marker
+  paragraphs, per-paragraph coarsening, floor-gated 1h cache marker, structured output, ≤4 validated
+  moments), 1:1 `video_context` table (migration 0053, 0044 RLS pattern + 0045-hardened GUC),
+  PK check-then-insert idempotency, spend-guard skip, ledger billing after the round-trip.
+- **416** — hybrid candidate merge: `clip_engine/merge.py` (LLM moments → candidates,
+  signal-priority NMS IoU>0.5), `score_and_rank(video_context=…)` scores the merged pool (≤8+≤4)
+  in the ONE existing call then trims post-ranking to `CLIPS_PER_VIDEO_DEFAULT`;
+  `extract_candidates` byte-untouched; scorer gains citable #12 "Clean Context Boundary",
+  origin/llm_reason payload, max_tokens 1800, cold-start rule `max(signal, 0.8·llm_confidence)`;
+  provenance in `signals_jsonb["origin"]`; 3 new `kind: merge` eval scenarios, `SCENARIO_FLOOR` 15→18.
+- **417** — batched auto-metadata: `knowledge/clip_metadata.py` (ONE structured-output call per
+  video, per-clip windows wrapped untrusted, YouTube-limit clamps incl. UTF-8-byte description cap),
+  migration 0054 `clips.suggested_*` + `suggestions_generated_at`, publish precedence
+  `applied_* → suggested_* → (video.title | "#Shorts")`, sibling task enqueued post-persist parallel
+  with render (fill-only on `suggested_title IS NULL`), non-terminal `metadata_ready` SSE,
+  `ClipOut.suggested_*`.
+
+**Verification:** full backend unit lane **2646 passed / 70 skipped** (from 2480 at track start);
+eval harness 22/22 `eval_scenario` tests incl. the merge kind; repo-wide ruff clean. Migrations
+0053/0054 are structurally smoke-tested in the unit lane; the live up/down runs at deploy
+(integration lane / prod alembic). One pre-existing base-commit failure
+(`test_response_models` — peaks/stream routes) logged in `docs/OFF_COURSE_BUGS.md`, not Track A's.
+New config: `ANTHROPIC_MODEL_VIDEO_CONTEXT`, `ANTHROPIC_MODEL_CLIP_METADATA`,
+`VIDEO_CONTEXT_ENABLED`, `VIDEO_CONTEXT_TRANSCRIPT_MAX_CHARS`, `LLM_CANDIDATES_MAX`,
+`AUTO_CLIP_METADATA`. Tracks B (418–422) and C (423–426) remain open; B rebases on A.
+
+---
+
+## 2026-08-04 — Lane L26 declared: A→B Auto-Clipping MVP (Issues 414–426). BUILD IN PROGRESS.
+
+User-driven MVP push: "the best auto-clipping short creation on the planet" is the viability bar.
+Three-track plan researched, designed, and approved this session (plan file + `docs/DECISIONS.md`
+2026-08-04 L26 entry, 10 locked decisions): **A** — whole-video LLM context pass feeding hybrid
+(LLM ∪ signal) candidates + one batched auto-metadata call so every clip lands packaged with
+title/description/hook (414–417); **B** — speaker-aware dynamic crop: Deepgram diarization, ffmpeg
+scdet shots, speaker→face voting, cut-on-turn/pan-within-shot, persisted crop track + API, image
+rollout closing Issue 189's four unlock criteria (418–422); **C** — short-first unified UI: shared
+ShortStage, Review+Editor flips (~2.0× media area on Review), compact metadata rows, crop-track
+overlay (423–426). L25 Batch C paused (#394/#396 re-scoped, #399 unaffected). Merge order A → B → C.
+
+**Track B status (2026-08-04, branch `lane/l26-crop`): 418–421 BUILT, 422 code-side prepared.**
+418 diarization (additive speaker fields, real-SDK diarize kwarg pin, consumers-ignore regressions,
+Deepgram +$0.0020/min diarize surcharge verified → `COST_PER_MIN_DEEPGRAM=0.0097`); 419 shots.py
+(scdet + captured-stderr fixture + histogram fallback); 420 speaker_map.py + planner + segmented
+smoothing + `compute_dynamic_crop` (all synthetic tests, no mediapipe locally; single-VideoCapture
+refactor landed); 421 migration 0055 (down_revision temporarily `0052` — re-parent onto 0054 at the
+L26 merge), track persisted in the done-marking transaction, `GET /clips/{id}/crop-track` +
+`has_crop_track`. 422: `requirements-image.txt` + Dockerfile + `reframe_stages` vlog timings +
+staging checklist in `docs/DEPLOYMENT.md` — **the four Issue-189 unlock criteria remain OPEN**
+(staging evidence required; flags stay off in prod). Unit lane on the branch: 2689 passed.
+
+---
+
 ## 2026-08-04 — Issue 413: app typeface swapped to Lexend (user-driven)
 
 Creator feedback after the close-out wave: the main text still read "blocky and ugly". Chosen by

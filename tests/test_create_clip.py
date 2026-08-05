@@ -170,6 +170,9 @@ def test_create_clip_duplicate_selection_returns_existing_200(client):
     existing.render_uri = None
     existing.cleaned_render_uri = None
     existing.applied_title = None
+    existing.suggested_title = None
+    existing.suggested_description = None
+    existing.suggested_hook = None
     existing.applied_description = None
     existing.style_preset = None
     added = _overrides(creator, video, existing_clip=existing)
@@ -221,6 +224,9 @@ def test_list_clips_impressions_exclude_creator_selections(client):
         cl.render_uri = None
         cl.cleaned_render_uri = None
         cl.applied_title = None
+        cl.suggested_title = None
+        cl.suggested_description = None
+        cl.suggested_hook = None
         cl.applied_description = None
         cl.style_preset = None
         return cl
@@ -268,6 +274,9 @@ def test_clip_response_engine_backcompat_origin_and_aspect():
     clip.render_uri = "s3://b/c.mp4"
     clip.cleaned_render_uri = None
     clip.applied_title = None
+    clip.suggested_title = None
+    clip.suggested_description = None
+    clip.suggested_hook = None
     clip.applied_description = None
     clip.style_preset = {"aspect": "1:1"}
     body = _clip_response(clip)

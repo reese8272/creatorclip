@@ -182,6 +182,36 @@ def extract_transcript_excerpt(
     return " ".join(parts)[:max_chars]
 
 
+def extract_transcript_window(
+    segments_jsonb: dict | None, start_s: float, end_s: float, max_chars: int = 1200
+) -> str:
+    """Extract plain text for segments whose MIDPOINT falls in ``[start_s, end_s)``.
+
+    Midpoint assignment is the ``clip_engine/scoring.py`` rule (Issue 414): a
+    segment straddling a window boundary lands in exactly one window instead of
+    being double-counted by adjacent windows or silently dropped by a
+    full-containment filter. The half-open interval keeps adjacent windows a
+    strict partition of the transcript.
+
+    Used to ground per-clip LLM calls (title suggestions, batched metadata) in
+    the clip's OWN spoken content rather than the whole-video transcript.
+    Returns an empty string when the transcript is missing or no segment's
+    midpoint falls inside the window.
+    """
+    if not segments_jsonb:
+        return ""
+    segs = segments_jsonb.get("segments", [])
+    parts = []
+    for seg in segs:
+        seg_start = float(seg.get("start", 0.0))
+        seg_end = float(seg.get("end", seg_start))
+        if start_s <= (seg_start + seg_end) / 2.0 < end_s:
+            text = seg.get("text", "").strip()
+            if text:
+                parts.append(text)
+    return " ".join(parts)[:max_chars]
+
+
 def get_transcript_segments(segments_jsonb: dict | None) -> list[dict]:
     """Return the raw segments list from segments_jsonb, or empty list."""
     if not segments_jsonb:

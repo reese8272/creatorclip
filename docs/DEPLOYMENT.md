@@ -409,3 +409,66 @@ set `TOKEN_ENCRYPTION_KEY_PREVIOUS` to the current key, re-encrypt with
 | AssemblyAI API | Reliable, word-level timestamps | Per-minute cost, external data dependency |
 
 Decision: log in `docs/DECISIONS.md` when made.
+
+---
+
+## Speaker-Aware Reframe — Staging Rollout Checklist (Issue 422, gates Issue 189's flag flip)
+
+> **STATUS: OPEN — none of these criteria are closed.** `ACTIVE_SPEAKER_REFRAME_ENABLED`
+> stays **false** in prod until every box below is checked WITH RECORDED EVIDENCE and the
+> Issue-189 reversal entry lands in `docs/DECISIONS.md` (2026-08-04 L26 entry, decision 10:
+> the flag flip is pending evidence, not decided in code). Do not flip the default in
+> `config.py` — the flip is an env change on staging first, prod last.
+
+**What ships in the image (this issue's code side, already landed):**
+`requirements-image.txt` (`-r requirements.txt` + `mediapipe==0.10.21`) installed by the
+Dockerfile builder stage; the BlazeFace hub asset at
+`/usr/share/mediapipe-models/blaze_face_short_range.tflite` (`MEDIAPIPE_FACE_MODEL_PATH`);
+per-stage vlog timings emitted by `clip_engine.reframe.compute_dynamic_crop` as the
+`reframe_stages` event (`reframe_detect_ms` / `reframe_shots_ms` / `reframe_plan_ms`).
+Local dev is untouched — mediapipe is a lazy import and every reframe unit test is synthetic.
+
+### Issue 189's four unlock criteria (each needs recorded evidence)
+
+- [ ] **Unlock #1 — image builds with mediapipe + model asset verified.** Build the image;
+      inside the worker container run
+      `python -c "import mediapipe"` and
+      `python -c "from clip_engine.reframe import _create_face_detector; assert _create_face_detector() is not None"`.
+      Evidence: build log + the two command outputs.
+- [ ] **Unlock #2 — real 2-speaker clip visually follows the speaker.** Upload a real
+      two-speaker fixture on staging with the reframe on; verify the rendered short frames
+      the ACTIVE speaker and (cuts stage) hard-cuts on turn changes with no mid-shot pans
+      across source cuts. Evidence: the rendered mp4 + the clip's
+      `GET /clips/{id}/crop-track` payload (mode `speaker_cut`, cuts populated).
+- [ ] **Unlock #3 — timing budget measured at 30/60/90 s and recorded.** Pull the
+      `reframe_stages` vlog events for one render each at ~30/60/90 s clip length; record
+      `reframe_detect_ms`/`reframe_shots_ms`/`reframe_plan_ms` and total render wall time
+      against the 240 s render timeout (plan estimate: +12–24 s per 60 s clip, detection-
+      dominated — the single-VideoCapture refactor is what makes this budget possible).
+      Evidence: the three event lines + total encode duration.
+- [ ] **Unlock #4 — sendcmd tmp cleanup verified.** After several renders (including one
+      FAILED render — kill ffmpeg mid-encode), `ls /tmp/*.sendcmd` inside the worker
+      container is empty (cleanup runs in `render_clip_file`'s `finally`). Evidence:
+      the ls output post-failure.
+
+### Flag sequencing (in order; each step soaks before the next)
+
+1. **Neutral deploy** — ship the image with all flags at defaults
+   (`ACTIVE_SPEAKER_REFRAME_ENABLED=false`). Nothing behavioral changes; verifies the
+   image builds and deploys with mediapipe present (unlock #1).
+2. **`TRANSCRIPTION_DIARIZE_ENABLED=true`** (already the default) — confirm diarized
+   transcripts on staging carry `speaker` fields and captions/filler outputs are
+   unchanged (the consumers-ignore contract). Note: diarization adds $0.0020/min to
+   Deepgram cost (price book updated, Issue 418).
+3. **Staging: `ACTIVE_SPEAKER_REFRAME_ENABLED=true` + `REFRAME_CUT_ENABLED=false`** —
+   verify the PAN rung alone (this is the original Issue-189 behavior improved by
+   per-shot smoothing resets): unlocks #2 (pan follows the largest face), #3, #4.
+4. **Staging: `REFRAME_CUT_ENABLED=true`** — the speaker_cut rung against the real
+   2-speaker fixture; re-verify #2 with cuts and #3 (cuts add planner time, ~nothing).
+5. **Prod flip** — only after 1–4 are green, budget signed off, and the DECISIONS
+   reversal entry is written with the evidence per criterion.
+
+**Rollback:** the flag is a pure env kill-switch — set
+`ACTIVE_SPEAKER_REFRAME_ENABLED=false` and restart the worker; the next render nulls the
+clip's stored crop track in the same done-marking transaction (never stale), and the
+legacy single-keyframe Haar crop is back byte-for-byte.

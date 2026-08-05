@@ -164,6 +164,55 @@ describe('Review', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Keep' }))
     expect(screen.getByText('Why are you keeping this?')).toBeInTheDocument()
   })
+
+  // ── L26 Issue 424: the stage flip ──
+  it('renders exactly ONE primary panel — the stage card (docs/UI.md hierarchy rule)', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const { container } = renderReview('/app/review?video_id=v1')
+    await screen.findByText(/Clip #1/)
+    const primaries = container.querySelectorAll('[data-elevation="primary"]')
+    expect(primaries).toHaveLength(1)
+    // And it is the stage: it hosts the clip player.
+    expect(primaries[0]!.querySelector('video')).not.toBeNull()
+  })
+
+  it('shows the metadata panel on the actions rail and keeps Next clip working from YourCall', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderReview('/app/review?video_id=v1')
+    await screen.findByText(/Clip #1/)
+    expect(screen.getByTestId('clip-metadata-panel')).toBeInTheDocument()
+    // The quiet footer advance still carries the load-bearing accessible name.
+    expect(screen.getByRole('button', { name: /Next clip/ })).toBeInTheDocument()
+  })
+
+  it('scales the trim filmstrip to the setup-origin duration, not end_s - start_s', async () => {
+    // Setup clips have setup_start_s < start_s. The backend validates and cuts
+    // trims against end_s - (setup_start_s ?? start_s), so the filmstrip's
+    // timebase must match or every drag submits compressed seconds. (Migrated
+    // from ClipPlayer.test when the filmstrip moved to the stage's below slot.)
+    vi.stubGlobal('fetch', mockFetch())
+    renderReview('/app/review?video_id=v1')
+    await screen.findByText(/Clip #1/)
+    // BASE_CLIP: end 20, setup_start 2 → 18s, never 20s.
+    expect(screen.getByRole('slider', { name: 'Trim start' })).toHaveAttribute(
+      'aria-valuemax',
+      '18',
+    )
+    expect(screen.getByRole('slider', { name: 'Trim end' })).toHaveAttribute('aria-valuemax', '18')
+    // Both the meta row and the filmstrip readout agree on the timebase.
+    expect(screen.getAllByText(/18\.0s/).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('keeps the personalization card inside the case column (#412 empty-canvas guard)', async () => {
+    const personalization: PersonalizationStatus = {
+      active: false, labels: 5, threshold: 20, weight: 0,
+    }
+    vi.stubGlobal('fetch', mockFetch(personalization))
+    renderReview('/app/review?video_id=v1')
+    await screen.findByText(/Clip #1/)
+    const caseColumn = screen.getByRole('region', { name: 'Why this clip' })
+    expect(caseColumn.textContent).toContain('Learning your taste')
+  })
 })
 
 // ── Issue 216: PersonalizationBand honest copy ────────────────────────────────

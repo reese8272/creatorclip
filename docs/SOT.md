@@ -12,7 +12,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Backend | FastAPI (Python 3.12+) | Async-first |
-| Task queue | Celery + Redis | Durable video jobs: ingest → transcribe → signals → DNA → clip → render |
+| Task queue | Celery + Redis | Durable video jobs: ingest → transcribe → video-context (L26, never-fails) → signals → DNA → clip → render (+ batched clip-metadata sibling) |
 | LLM | Anthropic SDK; per-task model registry (Issue 318): **`claude-sonnet-4-6`** for reasoning/streaming tasks (DNA brief, titles, thumbnails, scoring, analysis, improvement, chat, intake); **`claude-haiku-4-5`** for cheap classify tasks (hooks, chapters, performer analysis); **no Opus** — see docs/DECISIONS.md (Issue 221). Each task has an independently overridable `ANTHROPIC_MODEL_<TASK>` env var in config.py. Sonnet 4.6 cacheable-prefix floor = 1024 tokens; Haiku 4.5 = 4096 tokens (confirmed 2026-06-26). | Prompt caching on DNA profile + evergreen corpus **mandatory**; web-search tool for live research |
 | Embeddings | Voyage AI (`voyage-3.5`) → pgvector | Local sentence-transformers as offline fallback |
 | Transcription | Deepgram nova-3 (default, `TRANSCRIPTION_BACKEND=deepgram`) | WhisperX (faster-whisper + forced alignment) available as self-hosted opt-in; AssemblyAI also supported; all selected via `TRANSCRIPTION_BACKEND` config. MIP opt-out (`mip_opt_out=True`) enforced on every Deepgram call (Issue 251). |
@@ -63,6 +63,12 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `LLM_TIMEOUT_SECONDS` | No | Default `120` |
 | `ACTIVE_SPEAKER_REFRAME_ENABLED` | No | Default `False`. Gates the per-frame MediaPipe reframe path in render.py (Issue 189). Keep False until render-env smoke test passes. |
 | `REFRAME_SAMPLE_FPS` | No | Default `5.0`. Frames/second to sample for face detection in the per-frame reframe path. Ignored when `ACTIVE_SPEAKER_REFRAME_ENABLED=false`. |
+| `TRANSCRIPTION_DIARIZE_ENABLED` | No | Default `True`. Requests per-word speaker labels (Deepgram `diarize` / AssemblyAI `speaker_labels`); additive `speaker` fields feed the reframe ladder (Issue 418). Deepgram bills +$0.0020/min for it. |
+| `SHOT_DETECT_SCDET_THRESHOLD` | No | Default `10.0`. ffmpeg scdet scene-change threshold for shot detection (Issue 419). |
+| `REFRAME_CUT_ENABLED` | No | Default `True`. Speaker_cut ladder rung sub-flag; `false` caps the ladder at face_pan (staging pan-rung verification — Issue 422). Master gate is `ACTIVE_SPEAKER_REFRAME_ENABLED`. |
+| `REFRAME_MIN_SHOT_S` | No | Default `1.2`. Minimum seconds between consecutive crop cuts (Issue 420). |
+| `REFRAME_CUT_MIN_TURN_S` | No | Default `0.8`. Minimum speaker-turn length to earn a cut (Issue 420). |
+| `REFRAME_CUT_MIN_DISTANCE_FRAC` | No | Default `0.25`. Minimum framing move for a cut, as a fraction of frame width (Issue 420). |
 | `ENV` | No | `development` \| `production`; gates `/docs`, error verbosity |
 | `ALLOWED_ORIGINS` | Yes (prod) | Comma-separated origins; never `*` in production |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Yes (prod) | Token for the `cloudflared` service in `docker-compose.prod.yml`; routes `autoclip.studio` → `app:8000` with no open inbound ports |
@@ -126,9 +132,12 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── window.py               # Rolling 60–90s context window
 │   ├── candidates.py           # Peak detection + backward look for setup start
 │   ├── scoring.py              # Multi-signal + DNA-weighted scoring (Claude + features)
-│   ├── ranking.py              # DNA-weighted + preference-model rerank
+│   ├── ranking.py              # DNA-weighted + preference-model rerank; merges LLM moments pre-scoring + post-ranking trim (Issue 416)
+│   ├── merge.py                # Hybrid candidate merge — LLM moments ∪ signal peaks under signal-priority NMS (Issue 416)
 │   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex; flag-gated per-frame reframe path (Issue 189, ACTIVE_SPEAKER_REFRAME_ENABLED)
-│   ├── reframe.py              # (NEW Issue 189) per-frame MediaPipe BlazeFace face tracking → EMA-smoothed crop-center timeline → ffmpeg sendcmd script; lazy import; gated by ACTIVE_SPEAKER_REFRAME_ENABLED (default False — render-env pending)
+│   ├── reframe.py              # (Issue 189, extended Issue 420/421) speaker-aware dynamic crop: single-VideoCapture detection pass (BlazeFace boxes + keypoints + mouth patches) → shots/turns/mapping → plan_crop_directives (J-cut, snap, punch-in suppression) → segmented-EMA sendcmd + unified wire-contract track JSON (compute_dynamic_crop); lazy imports; gated by ACTIVE_SPEAKER_REFRAME_ENABLED (default False — staging pending, Issue 422)
+│   ├── shots.py                # (NEW Issue 419) shot-change detection: ffmpeg scdet pass (lavfi.scd.time from stderr) + numpy histogram-diff fallback over the 5fps samples; total failure → [] = one shot
+│   ├── speaker_map.py          # (NEW Issue 420) PURE speaker→face mapping: per-shot greedy-NN face tracks, diarized turns (gap-merge/backchannel absorb), mouth-motion energy, weighted-vote mapping w/ margin-ratio confidence, fallback ladder speaker_cut→face_pan→static
 │   ├── captions.py             # Animated word-level ASS subtitles (Issue 133 — bold_pop / gradient_slide / minimal via pysubs2 + libass)
 │   ├── filler.py               # Filler-word + silence cut-list generator (Issue 134 — Tier1 unconditional + Tier2 pause-flanked + 800ms silence w/150ms tail)
 │   └── edits.py                # User-supplied cut-list validator (Issue 135 — bounds, overlap, 5s/85% caps, sub-frame floor) for text-based editor
@@ -154,6 +163,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── clip_titles.py          # Per-clip Short-title + hook-rewrite generator (Issue 322)
 │   ├── clip_captions.py        # Per-clip caption-hook / thumbnail overlay-text (Issue 323)
 │   ├── clip_explain.py         # Per-clip Why-This-Clip narrative, cites CLIPPING_PRINCIPLES (Issue 325)
+│   ├── clip_metadata.py        # Batched suggested title/description/hook — ONE call per video (Issue 417)
 │   ├── util.py                 # Shared transcript extraction helpers
 │   └── seed/                   # Evergreen corpus: hook psychology, pacing, retention theory
 │
@@ -161,7 +171,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   └── timing.py               # Best upload window + optimal gap from analytics
 │
 ├── analysis/
-│   └── brief.py                # Video performance analysis (Claude streaming, Issue 121)
+│   ├── brief.py                # Video performance analysis (Claude streaming, Issue 121)
+│   └── video_context.py        # Whole-video context pass — ONE full-transcript call, validated moments (Issue 415)
 │
 ├── improvement/
 │   └── brief.py                # Content-improvement brief generation
@@ -178,7 +189,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── auth.py                 # OAuth login/callback, session
 │   ├── creators.py             # Creator profile, DNA, onboarding state
 │   ├── videos.py               # Link/upload video, ingestion status
-│   ├── clips.py                # List candidate clips, get clip, render status; POST /clips/{id}/title-suggestions, /caption-hooks, /explanation (Issues 322/323/325)
+│   ├── clips.py                # List candidate clips, get clip, render status; POST /clips/{id}/title-suggestions, /caption-hooks, /explanation (Issues 322/323/325); GET /clips/{id}/crop-track — persisted reframe track, 404 no_crop_track (Issue 421). ClipOut carries origin + suggested_title/description/hook + has_crop_track (L26)
 │   ├── review.py               # Feedback: upvote/downvote/skip/trim/format
 │   ├── upload_intel.py         # GET timing recommendation
 │   ├── improvement.py          # GET improvement brief
@@ -230,7 +241,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │       ├── types.ts            # API response shapes
 │       ├── test/setup.ts       # Vitest + RTL setup (jest-dom matchers, cleanup)
 │       ├── lib/                # api.ts (typed fetch) · queryClient.ts · brief.ts (+test) · taskStream.ts (SSE) · utils.ts · videosPoll.ts (shared ['videos'] refetch interval, Issue 369) · peaks.ts (+test — BBC audiowaveform decode + max-of-bucket envelope reduction, Issue 392) · timelineZoom.ts (+test — pixels-per-second zoom maths, pointer-anchored; Issue 390) · timelineInteraction.ts (+test — hit-testing + PIXEL-threshold snapping) · editorCuts.ts (+test — stable cut ids, non-mutating merge, toDocumentCuts/withIndices: the word span is DERIVED, never persisted — Issue 391) · editCommands.ts (+test — snapshot undo/redo history; unbounded within a session) · saveScheduler.ts (+test — 800ms trailing / 2s MAX-WAIT autosave cadence; the ceiling is what makes continuous dragging still save) · editDocCache.ts (+test — localStorage demoted to a one-time legacy import + paint cache, never the source of truth) · keyboard.ts (isTypingTarget/isModalOpen, one definition) · toolLayout.ts (tool-shell player widths, derived from viewport HEIGHT so a 9:16/16:9 player cannot crowd out its panel — Issue 389; note the ~14.39px root font-size trap documented there)
-│       ├── hooks/              # useTimelineViewport.ts (+test — measurement, zoom, non-passive wheel; Issue 390) · useEditorShortcuts.ts (+test — ONE capture-phase document listener; never add a second) · useAuth.ts (TanStack Query; 401→null) · useTaskStream.ts (SSE log hook +test) · useTaskResult.ts (token/step/done-payload SSE hook, Issue 85e) · useStreamAction.ts (POST→stream helper, 85e) · useCleanedUriPoll.ts (clean/edit ready-poll, 85f) · useEditDocument.ts (+test — server-authoritative edit document; the query is the SEED, not the state: it hydrates once and NEVER invalidates on save, or an in-flight autosave would revert the creator's newer edits — Issue 391)
+│       ├── hooks/              # useTimelineViewport.ts (+test — measurement, zoom, non-passive wheel; Issue 390) · useEditorShortcuts.ts (+test — ONE capture-phase document listener; never add a second) · useAuth.ts (TanStack Query; 401→null) · useTaskStream.ts (SSE log hook +test) · useTaskResult.ts (token/step/done-payload SSE hook, Issue 85e) · useStreamAction.ts (POST→stream helper, 85e) · useCleanedUriPoll.ts (clean/edit ready-poll, 85f) · useEditDocument.ts (+test — server-authoritative edit document; the query is the SEED, not the state: it hydrates once and NEVER invalidates on save, or an in-flight autosave would revert the creator's newer edits — Issue 391) · useClipRender.ts (render-state machine extracted from ClipPlayer — Issue 423) · useCropTrack.ts (GET /clips/{id}/crop-track; 404→null, staleTime Infinity, keyed on render_uri — Issue 426)
 │       ├── components/         # AuthGate.tsx (+test, protects routes) · AppChrome.tsx (Nav/Footer shell) · ToolChrome.tsx (+test — full-height, non-scrolling shell for the TOOL routes, no marketing footer; Issue 389) · LegalLinks.tsx (+test — Terms/Privacy/Accessibility, shared by Footer and the tool status bar) · Nav.tsx (+test; Editor+Settings links, Issue 304) · Footer.tsx · DisclaimerBand.tsx · Chip.tsx (+test — decorative mascot, Issue 304) · QueryErrorState.tsx (+test — shared retry card, Issue 361) · EmptyStatePrompt.tsx (+test — shared empty state whose action is a REQUIRED discriminated union, so a prose-only dead-end empty state does not type-check; 13 call sites — Issue 355)
 │       ├── components/ask/     # AskSurfaceTabs — one row differentiating the three "ask" surfaces
 │       │                         (Assistant / Analyze one video / Insights) by SCOPE; mounted on all
@@ -246,7 +257,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │       ├── components/analysis/ # AnalysisPanel (StatusChip/CopyButton) · AnalysisQuery · TitleOptimizer · HookAnalyzer · ChaptersPanel · ThumbnailConcepts (Issue 85e)
 │       ├── components/layout/  # ToolShell (+test — owns the single <main> and the DOCKED honesty status bar; the bar lives here, not in ToolChrome, because the page tests render Editor/Review standalone — Issue 389) · ToolStatusBar (HONESTY_STATEMENT constant + LegalLinks)
 │       ├── components/editor/   # TimelineRail (the shared pointer/zoom/scroll surface both timelines compose — Issue 390) · Timeline (+test, +keys test) — short-form clip editing: cut regions with draggable edges, word snapping · MasterTimeline (long-form source, same rail) · TimelineRuler (+test — adaptive DOM ruler, never canvas) · Waveform (canvas peak renderer; NO synthetic fallback — flat track when peaks are absent, Issue 392) · ShortFormEditor (the single-clip workspace, extracted from a 700-line Editor.tsx so Issues 390/391/392 conflict in different files — Issue 389) · LongFormEditor (real source player + drag-to-select create-clip + Your-clips group + per-clip export — Issues 307/372/373) · FullTranscriptPanel (searchable segment transcript, seek + Clip-this — Issue 372)
-│       ├── components/review/   # ClipPlayer (player+filmstrip, Issue 306; creator-clip provenance 373) · StyleReview (+test — video-level style review, Issue 370) · TrimFilmstrip (+test) + trim.ts (dual-handle trim) · YourCall (triage card) · WhyThisClip · CaptionStylePanel · CleanPassPanel · TranscriptEditor · CollapsibleTool (plain/ReactNode title) (Issue 85f/306)
+│       ├── components/review/   # ClipCase + ClipMetadataPanel (WhyThisClip split — title/hook one truncating row each, `applied_* ?? suggested_*` precedence, Apply chip; Issue 424) · StyleReview (+test — video-level style review, Issue 370) · TrimFilmstrip (+test) + trim.ts (dual-handle trim) · YourCall (triage card + quiet "Next clip"; Issue 424) · CaptionStylePanel (collapsed by default, Issue 425) · CleanPassPanel · TranscriptEditor · CollapsibleTool (plain/ReactNode title) (Issue 85f/306). ClipPlayer + WhyThisClip DELETED (Issue 425 — stage/ShortStage + useClipRender replace them)
+│       ├── components/stage/    # (NEW L26 Track C, Issues 423–426) ShortStage (THE one 9:16 stage Review + Editor both compose: player/placeholder, compact meta row, in-stage cleaned-preview tab swap, `overlay` + `below` slots; exactly ONE Card level="primary" per page) · StagePlaceholder (unified render/failure/expired states) · CropTrackOverlay (+test — pointer-events-none "AI framing" mini-map: source rect + accent crop window via translateX + cut ticks, animated by subscribeTime + rAF writing style.transform on a ref, zero React renders per frame; no track → renders nothing)
 │       └── pages/              # Dashboard (+test, 85c; videos-first reorg 305) · Onboarding (+test, 85d) · Insights (+test, 85e; chip-idea 309) · Analysis (+test, 85e; chip-magnify 309) · Review (+test, 85f; filmstrip trim + Your-call card + Chips, 306) · Editor (+test, 188; short|long mode toggle + long-form source, 307) · Profile (+test; read-only snapshot, 308) · Settings (+test; full build 308) · Chat (chip-wave/think/streaming, 309) · Pricing (+test) · Login · Walkthrough (+test)
 │
 ├── tests/
@@ -380,6 +392,13 @@ transcripts
 signals
   video_id (FK), timeline_jsonb (audio energy, silence, laughter, retention spikes)
 
+video_context                        -- whole-video LLM context pass (Issue 415, migration 0053)
+  video_id (PK = FK, CASCADE), context_jsonb (version, summary, structure,
+    narrative_arcs, tone, audience_relevance, moments[] — validated, <=4
+    LLM-proposed clip moments consumed by the Issue-416 hybrid merge),
+  model, prompt_version, created_at
+  RLS: tenant_isolation via videos.creator_id (0044 subquery pattern, 0045-hardened GUC)
+
 creator_dna                          -- the inferred profile (versioned)
   id, creator_id (FK), version, brief_text, patterns_jsonb,
   top_video_ids_jsonb, bottom_video_ids_jsonb,
@@ -420,9 +439,22 @@ clips
   poster_uri (NULLABLE, migration 0050 — poster still for the RENDERED
     deliverable at posters/{creator_id}/clip-{clip_id}.jpg: reframed,
     captions burned in, correct aspect. Issue 387),
-  applied_title, applied_description   -- creator-approved publish metadata
+  applied_title, applied_description,  -- creator-approved publish metadata
                                        -- (migration 0047; NULL = publish falls
                                        -- back to video.title / "#Shorts")
+  suggested_title, suggested_description, suggested_hook,
+  suggestions_generated_at             -- pipeline-suggested metadata (Issue 417,
+                                       -- migration 0054; one batched call per
+                                       -- video, pre-clamped; publish precedence
+                                       -- applied_* -> suggested_* -> video.title|"#Shorts";
+                                       -- fill-only on suggested_title IS NULL)
+  reframe_track_jsonb (NULLABLE, migration 0055 — Issue 421: the speaker-aware
+    crop track in the unified wire contract; keyframe x = the exact ffmpeg
+    sendcmd left-edge values. Recomputed + replaced (or nulled) in the same
+    done-marking transaction as render_uri on EVERY render — never stale.
+    Served at GET /clips/{id}/crop-track (404 no_crop_track);
+    ClipOut carries only has_crop_track. NOT in clip_edit_documents —
+    worker writes would bump CAS revisions)
 
 clip_edit_documents                  -- the creator's in-progress edit (Issue 391, migration 0052)
   -- READ BY THE RENDER PATH. POST /clips/{id}/cuts sends only `base_revision`;

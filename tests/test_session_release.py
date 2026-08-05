@@ -66,6 +66,9 @@ def _clip_stub(video_id: uuid.UUID) -> MagicMock:
     c.render_uri = None
     c.cleaned_render_uri = None
     c.applied_title = None
+    c.suggested_title = None
+    c.suggested_description = None
+    c.suggested_hook = None
     c.applied_description = None
     c.style_preset = None  # Issue 373: _clip_response derives `aspect` from it
     return c
