@@ -51,6 +51,20 @@ def _make_track(*centers: int, start_s: float = 0.0, fps: float = 5.0) -> list[C
     return [CropCenterPoint(start_s + i * interval, cx) for i, cx in enumerate(centers)]
 
 
+def _frames_iter(frame: object):
+    """Fake for the _iter_sampled_frames seam: every timestamp yields ``frame``.
+
+    (Issue 420 migrated the per-sample ``_read_frame_cv2`` patches here — the
+    module now decodes through ONE cv2.VideoCapture.)
+    """
+
+    def _gen(video_path, timestamps):
+        for ts in timestamps:
+            yield (ts, frame)
+
+    return _gen
+
+
 # ---------------------------------------------------------------------------
 # CropCenterPoint
 # ---------------------------------------------------------------------------
@@ -254,7 +268,7 @@ class TestBuildCropCenterTrack:
         """When cv2 is not importable, every point should be the frame-center fallback."""
         fake = tmp_path / "v.mp4"
         fake.touch()
-        with patch("clip_engine.reframe._read_frame_cv2", return_value=None):
+        with patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(None)):
             track = build_crop_center_track(
                 fake, start_s=0.0, end_s=1.0, frame_width=1920, sample_fps=2.0
             )
@@ -273,7 +287,7 @@ class TestBuildCropCenterTrack:
 
         # Patch both frame extraction and mediapipe detection.
         with (
-            patch("clip_engine.reframe._read_frame_cv2", return_value=fake_frame),
+            patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(fake_frame)),
             patch(
                 "clip_engine.reframe._detect_faces_mediapipe",
                 return_value=[800],  # face center_x = 800
@@ -295,7 +309,7 @@ class TestBuildCropCenterTrack:
         fake_frame = np.zeros((1080, 1920, 3), dtype="uint8")
 
         with (
-            patch("clip_engine.reframe._read_frame_cv2", return_value=fake_frame),
+            patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(fake_frame)),
             patch("clip_engine.reframe._detect_faces_mediapipe", return_value=[]),
         ):
             track = build_crop_center_track(
@@ -315,7 +329,7 @@ class TestBuildCropCenterTrack:
         fake_frame = np.zeros((1080, 1920, 3), dtype="uint8")
 
         with (
-            patch("clip_engine.reframe._read_frame_cv2", return_value=fake_frame),
+            patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(fake_frame)),
             patch("clip_engine.reframe._detect_faces_mediapipe", return_value=[600]),
         ):
             track = build_crop_center_track(
@@ -334,7 +348,7 @@ class TestBuildCropCenterTrack:
         fake_frame = np.zeros((1080, 1920, 3), dtype="uint8")
 
         with (
-            patch("clip_engine.reframe._read_frame_cv2", return_value=fake_frame),
+            patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(fake_frame)),
             patch(
                 "clip_engine.reframe._detect_faces_mediapipe",
                 side_effect=RuntimeError("mediapipe crashed"),
@@ -366,14 +380,24 @@ class TestComputeReframeCrop:
     ) -> tuple[list[CropCenterPoint], str]:
         import numpy as np
 
+        from clip_engine.speaker_map import FaceObs
+
         fake = tmp_path / "v.mp4"
         fake.touch()
         fake_frame = np.zeros((1080, 1920, 3), dtype="uint8")
         centers = detected_centers if detected_centers is not None else [800]
 
+        def _fake_obs(frame, detector, ts):
+            return [FaceObs(t=ts, cx=float(c), cy=500.0, w=100.0, h=100.0) for c in centers]
+
+        # compute_reframe_crop delegates to compute_dynamic_crop (Issue 420):
+        # the detection seam is _detect_face_obs and shot detection is mocked
+        # to keep the test hermetic (no ffmpeg subprocess).
         with (
-            patch("clip_engine.reframe._read_frame_cv2", return_value=fake_frame),
-            patch("clip_engine.reframe._detect_faces_mediapipe", return_value=centers),
+            patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(fake_frame)),
+            patch("clip_engine.reframe._detect_face_obs", side_effect=_fake_obs),
+            patch("clip_engine.reframe._shots.detect_shot_changes", return_value=[]),
+            patch("clip_engine.reframe._downscale_for_hist", return_value=None),
         ):
             return compute_reframe_crop(
                 source_path=fake,
@@ -403,11 +427,11 @@ class TestComputeReframeCrop:
         assert script == ""
 
     def test_total_failure_returns_center_fallback(self, tmp_path: Path) -> None:
-        """When build_crop_center_track raises, the fallback is the frame center."""
+        """When the detection pass raises, the fallback is the frame center."""
         fake = tmp_path / "v.mp4"
         fake.touch()
         with patch(
-            "clip_engine.reframe.build_crop_center_track",
+            "clip_engine.reframe._iter_sampled_frames",
             side_effect=RuntimeError("disk error"),
         ):
             track, script = compute_reframe_crop(
@@ -484,14 +508,18 @@ class TestLazyImportGuard:
 
 
 @pytest.mark.skipif(not _CV2_AVAILABLE, reason="cv2/libGL not available on this host")
-class TestReadFrameCv2NaNFps:
-    """_read_frame_cv2: NaN fps must not propagate to int() and crash."""
+class TestIterSampledFramesNaNFps:
+    """_iter_sampled_frames: NaN fps must not propagate to int() and crash.
 
-    def _read_with_fps(self, tmp_path: Path, fps_value: float) -> object:
+    (Ported from the old _read_frame_cv2 tests when Issue 420 replaced the
+    per-sample open+seek with one sequential capture — same guard, new home.)
+    """
+
+    def _read_with_fps(self, tmp_path: Path, fps_value: float) -> list:
         """Patch cv2 so cap.get(CAP_PROP_FPS) returns fps_value."""
         import numpy as np
 
-        from clip_engine.reframe import _read_frame_cv2
+        from clip_engine.reframe import _iter_sampled_frames
 
         fake = tmp_path / "v.mp4"
         fake.touch()
@@ -501,33 +529,29 @@ class TestReadFrameCv2NaNFps:
         mock_cap.isOpened.return_value = True
         mock_cap.get.return_value = fps_value
         mock_cap.read.return_value = (True, fake_frame)
+        mock_cap.grab.return_value = True
 
         with patch("cv2.VideoCapture", return_value=mock_cap):
-            return _read_frame_cv2(fake, 1.0)
+            return list(_iter_sampled_frames(fake, [1.0]))
 
     def test_fps_zero_falls_back_to_default(self, tmp_path: Path) -> None:
-        """fps=0.0 is falsy but should use the 25.0 default, not divide-by-zero."""
-        # With the bug: `fps or 25.0` → 25.0 for zero (truthy guard works here).
-        # After fix: math.isfinite check also handles zero explicitly.
-        result = self._read_with_fps(tmp_path, 0.0)
-        # Must not raise; returns a frame or None
-        assert result is not None or result is None  # just no exception
+        """fps=0.0 must use the 25.0 default, not divide-by-zero/underflow."""
+        results = self._read_with_fps(tmp_path, 0.0)
+        assert len(results) == 1  # just no exception, one yield per timestamp
 
     def test_fps_nan_no_crash(self, tmp_path: Path) -> None:
-        """fps=NaN is truthy so `fps or 25.0` keeps NaN, causing int(ts*NaN) to
-        raise ValueError. The guard must intercept this and use 25.0 instead."""
-
-        result = self._read_with_fps(tmp_path, float("nan"))
-        # Must not raise a ValueError/TypeError from int(timestamp * NaN)
-        assert result is not None or result is None  # just no exception
+        """fps=NaN is truthy so a bare `fps or 25.0` would keep NaN, making
+        int(ts*NaN) raise. The math.isfinite guard must intercept it."""
+        results = self._read_with_fps(tmp_path, float("nan"))
+        assert len(results) == 1
 
     def test_fps_nan_uses_25_default(self, tmp_path: Path) -> None:
-        """With NaN fps the frame_idx must be computed with 25.0 (default), not NaN."""
+        """With NaN fps the seek frame index must be computed with 25.0."""
         import math
 
         import numpy as np
 
-        from clip_engine.reframe import _read_frame_cv2
+        from clip_engine.reframe import _iter_sampled_frames
 
         fake = tmp_path / "v.mp4"
         fake.touch()
@@ -538,6 +562,7 @@ class TestReadFrameCv2NaNFps:
         mock_cap.isOpened.return_value = True
         mock_cap.get.return_value = float("nan")
         mock_cap.read.return_value = (True, fake_frame)
+        mock_cap.grab.return_value = True
 
         def _fake_set(prop, value):
             set_calls.append(value)
@@ -545,13 +570,87 @@ class TestReadFrameCv2NaNFps:
         mock_cap.set.side_effect = _fake_set
 
         with patch("cv2.VideoCapture", return_value=mock_cap):
-            _read_frame_cv2(fake, 2.0)
+            list(_iter_sampled_frames(fake, [2.0]))
 
         # frame_idx = int(2.0 * 25.0) = 50; cap.set receives 50.0
         assert set_calls, "cap.set must have been called"
         frame_idx_arg = set_calls[0]
         assert math.isfinite(frame_idx_arg), f"frame_idx was NaN/inf: {frame_idx_arg}"
         assert frame_idx_arg == pytest.approx(50.0)
+
+
+@pytest.mark.skipif(not _CV2_AVAILABLE, reason="cv2/libGL not available on this host")
+class TestIterSampledFramesSequentialCapture:
+    """The Issue-420 mandatory refactor: ONE VideoCapture per clip, ONE seek,
+    sequential grab()/retrieve() — no per-sample open+seek."""
+
+    def _run_capture(self, tmp_path: Path, timestamps: list[float]) -> tuple[MagicMock, list]:
+        import numpy as np
+
+        from clip_engine.reframe import _iter_sampled_frames
+
+        fake = tmp_path / "v.mp4"
+        fake.touch()
+        fake_frame = np.zeros((4, 4, 3), dtype="uint8")
+
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.return_value = 25.0
+        mock_cap.read.return_value = (True, fake_frame)
+        mock_cap.grab.return_value = True
+
+        with patch("cv2.VideoCapture", return_value=mock_cap) as cap_ctor:
+            results = list(_iter_sampled_frames(fake, timestamps))
+        return cap_ctor, results
+
+    def test_one_capture_one_seek_for_many_samples(self, tmp_path: Path) -> None:
+        cap_ctor, results = self._run_capture(tmp_path, [10.0, 10.2, 10.4, 10.6, 10.8])
+        assert cap_ctor.call_count == 1, "must open exactly ONE VideoCapture per clip"
+        mock_cap = cap_ctor.return_value
+        assert mock_cap.set.call_count == 1, "must seek exactly once (to the first sample)"
+        assert mock_cap.release.call_count == 1
+        assert len(results) == 5
+        assert all(frame is not None for _, frame in results)
+
+    def test_intermediate_frames_skipped_via_grab(self, tmp_path: Path) -> None:
+        # 25 fps, samples 0.2s apart → 5 frames apart: read() consumes one,
+        # grab() must skip the 4 in between for each subsequent sample.
+        cap_ctor, _ = self._run_capture(tmp_path, [10.0, 10.2, 10.4])
+        mock_cap = cap_ctor.return_value
+        assert mock_cap.grab.call_count == 8  # 2 gaps × 4 skipped frames
+        assert mock_cap.read.call_count == 3
+
+    def test_unopenable_source_yields_all_none(self, tmp_path: Path) -> None:
+        from clip_engine.reframe import _iter_sampled_frames
+
+        fake = tmp_path / "v.mp4"
+        fake.touch()
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = False
+        with patch("cv2.VideoCapture", return_value=mock_cap):
+            results = list(_iter_sampled_frames(fake, [0.0, 0.2]))
+        assert results == [(0.0, None), (0.2, None)]
+
+    def test_eof_mid_track_yields_none_for_rest(self, tmp_path: Path) -> None:
+        import numpy as np
+
+        from clip_engine.reframe import _iter_sampled_frames
+
+        fake = tmp_path / "v.mp4"
+        fake.touch()
+        fake_frame = np.zeros((4, 4, 3), dtype="uint8")
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.return_value = 25.0
+        # First read succeeds, then EOF.
+        mock_cap.read.side_effect = [(True, fake_frame), (False, None)]
+        mock_cap.grab.return_value = False  # grab also fails past EOF
+
+        with patch("cv2.VideoCapture", return_value=mock_cap):
+            results = list(_iter_sampled_frames(fake, [0.0, 0.2, 0.4]))
+        assert results[0][1] is not None
+        assert results[1][1] is None
+        assert results[2][1] is None
 
 
 class TestSmoothCropTrackEdges:
@@ -577,7 +676,7 @@ class TestBuildCropCenterTrackEdges:
         → cv2 seek returns None → fallback, no raise."""
         fake = tmp_path / "v.mp4"
         fake.touch()
-        with patch("clip_engine.reframe._read_frame_cv2", return_value=None):
+        with patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(None)):
             track = build_crop_center_track(
                 fake, start_s=-5.0, end_s=5.0, frame_width=1920, sample_fps=1.0
             )
@@ -589,7 +688,7 @@ class TestBuildCropCenterTrackEdges:
         (cv2 seek-past-EOF) → fallback, no raise."""
         fake = tmp_path / "v.mp4"
         fake.touch()
-        with patch("clip_engine.reframe._read_frame_cv2", return_value=None):
+        with patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(None)):
             track = build_crop_center_track(
                 fake, start_s=9000.0, end_s=9005.0, frame_width=1920, sample_fps=1.0
             )
@@ -623,7 +722,7 @@ class TestDetectorHoisting:
         mock_detector = MagicMock()
 
         with (
-            patch("clip_engine.reframe._read_frame_cv2", return_value=fake_frame),
+            patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(fake_frame)),
             patch(
                 "clip_engine.reframe._create_face_detector", return_value=mock_detector
             ) as create_mock,

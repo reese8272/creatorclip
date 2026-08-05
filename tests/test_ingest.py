@@ -229,7 +229,11 @@ def test_assemblyai_sets_sdk_http_timeout(monkeypatch):
         words: list = []
         text = ""
 
-    fake_aai.Transcriber = lambda: types.SimpleNamespace(transcribe=lambda _p: _Transcript())
+    # Issue 418: the real call is transcribe(path, TranscriptionConfig(...)).
+    fake_aai.TranscriptionConfig = lambda **kw: types.SimpleNamespace(**kw)
+    fake_aai.Transcriber = lambda: types.SimpleNamespace(
+        transcribe=lambda _p, _c=None: _Transcript()
+    )
     monkeypatch.setitem(sys.modules, "assemblyai", fake_aai)
     monkeypatch.setattr("config.settings.ASSEMBLYAI_API_KEY", "k")
     monkeypatch.setattr("config.settings.TRANSCRIPTION_HTTP_TIMEOUT_S", 99)

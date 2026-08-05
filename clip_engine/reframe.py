@@ -1,54 +1,65 @@
 """
-Per-frame active-speaker reframe (Issue 189).
+Per-frame active-speaker reframe (Issue 189, extended by Issue 420).
 
 Replaces the single-keyframe Haar crop in render.py with a time-varying
-9:16 (or any aspect) crop path driven by per-frame face tracking.
+9:16 (or any aspect) crop path driven by per-frame face tracking, and — when
+diarization + shot detection + speaker→face mapping agree — hard CUTS between
+speaker framings on turn changes (Lane L26, Issue 420).
 
 Architecture:
-  1. Sample frames from the clip at ``sample_fps`` (default 5 fps).
+  1. Sample frames from the clip at ``sample_fps`` (default 5 fps) using ONE
+     ``cv2.VideoCapture`` with sequential ``grab()``/``retrieve()`` — the old
+     per-sample open+seek pattern was the dominant reframe latency.
   2. For each frame run MediaPipe BlazeFace face detection (lazy import so
-     the app and test suite remain importable without mediapipe installed).
-  3. Build a crop-center timeline: an ordered list of (timestamp_s, center_x)
-     pairs using the largest detected face, or the frame-center fallback when
-     no face is detected.
-  4. Smooth the center-x track with an exponential moving average (EMA) to
-     kill jitter and clamp the inter-frame pan speed so the crop never whips
-     faster than ``max_pan_px_per_s`` pixels/second.
-  5. Emit an ffmpeg ``sendcmd`` script whose lines adjust the crop ``x`` offset
-     once per sample, giving ffmpeg a time-varying crop without decoding every
-     frame twice.
+     the app and test suite remain importable without mediapipe installed),
+     keeping full observations: box + 6 keypoints + a mouth patch.
+  3. Detect source shot changes (``clip_engine/shots.py``), extract diarized
+     speaker turns and map speakers onto per-shot face tracks
+     (``clip_engine/speaker_map.py``), then choose the reframe mode via the
+     fallback ladder ``speaker_cut → face_pan → static``.
+  4. Plan crop directives: cut on speaker change (J-cut 150 ms lead, snapped
+     to shot boundaries, spaced ≥ REFRAME_MIN_SHOT_S), ALWAYS cut at source
+     shot changes, hold framing for off-screen speakers, suppress cuts inside
+     the punch-in pulse.
+  5. Smooth the center-x track with an exponential moving average PER
+     INTER-CUT SEGMENT (state resets at every cut) and clamp pan speed.
+  6. Emit an ffmpeg ``sendcmd`` script whose lines adjust the crop ``x``
+     offset once per sample. A cut is just an UNSMOOTHED value jump between
+     consecutive sendcmd lines — no new filter machinery.
 
 The heavy path is intentionally designed to be:
   - LAZY: mediapipe and cv2 are imported inside functions, not at module level,
     so the app starts and tests run without these packages installed.
   - GATED: ``render.py`` only calls this module when
-    ``settings.ACTIVE_SPEAKER_REFRAME_ENABLED`` is True. The default is False;
-    the existing single-keyframe Haar path remains the production default until
-    this path is verified in a render environment.
-  - FALLBACK-SAFE: every frame that fails detection contributes the
-    frame-center value; if the entire track fails, the caller receives a
-    single-keyframe center (byte-compatible with the legacy path).
+    ``settings.ACTIVE_SPEAKER_REFRAME_ENABLED`` is True (default False).
+  - FALLBACK-SAFE: every rung of the ladder degrades toward today's behavior,
+    never past it; total failure returns a single center keyframe
+    (byte-compatible with the legacy path).
 
 Verify scope:
-  Unit-testable: crop-center timeline geometry, EMA smoothing, clamp, sendcmd
-  text, fallback behaviour — all verified here with synthetic inputs.
+  Unit-testable: geometry, tracks, turns, mapping, ladder, planner, segmented
+  smoothing, sendcmd text, track JSON — all verified with synthetic inputs.
   render-env/staging-pending: actual ffmpeg crop output on real multi-speaker
-  media. Not verifiable on this dev box (no ffmpeg / real media).
+  media (Issue 422 staging checklist / Issue 189 unlock criteria).
 
-Cites Principle 4 (Pattern interrupt — the crop follows the active speaker,
-keeping the subject centred and the viewer locked in) and Principle 11
-(Audience-fit — per-creator quality, not generic generic virality signal).
+Cites Principle 4 (Pattern interrupt — the crop follows the conversation) and
+Principle 11 (Audience-fit — per-creator quality, not a generic virality
+signal).
 """
 
 from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clip_engine import shots as _shots
+from clip_engine import speaker_map as _sm
+
 if TYPE_CHECKING:
-    pass
+    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +93,27 @@ _MP_MIN_CONFIDENCE: float = 0.5
 # ffmpeg sendcmd timing precision (decimal places for seconds).
 _SENDCMD_TIME_DECIMALS: int = 3
 
+# Cut planner (Issue 420). The J-cut lead makes the framing change LEAD the
+# incoming speaker's first word by 150 ms — the editorial convention that a
+# reaction shot pre-empts the line. Cuts within ±300 ms of a detected shot
+# boundary snap onto it (one visual event, not two), and speaker cuts inside
+# ±0.6 s of the punch-in peak are suppressed so the zoom pulse and a framing
+# jump never stack (0.6 s = render.py's _PUNCH_IN_RAMP_S half-width).
+_J_CUT_LEAD_S: float = 0.150
+_SHOT_SNAP_S: float = 0.300
+_PUNCH_IN_SUPPRESS_S: float = 0.6
+
+# BlazeFace keypoint order: right eye, left eye, nose tip, MOUTH CENTER,
+# right tragion, left tragion.
+_MOUTH_KEYPOINT_INDEX: int = 3
+# Half-size (px) of the grayscale mouth patch cut around the mouth keypoint.
+_MOUTH_PATCH_HALF_PX: int = 8
+
+# Downscale target for the histogram-fallback samples handed to shots.py —
+# tiny on purpose: ~450 samples × 32×18×3 bytes ≈ 0.8 MB per 90 s clip.
+_HIST_SAMPLE_W: int = 32
+_HIST_SAMPLE_H: int = 18
+
 
 # ---------------------------------------------------------------------------
 # Public data types
@@ -106,6 +138,52 @@ class CropCenterPoint:
     def __repr__(self) -> str:
         tag = " [fallback]" if self.is_fallback else ""
         return f"CropCenterPoint(t={self.timestamp_s:.3f}s, cx={self.center_x}px{tag})"
+
+
+@dataclass(frozen=True)
+class CropCut:
+    """A planned hard cut in the crop track (source-relative seconds).
+
+    ``speaker`` is the diarized speaker whose turn triggered the cut, or
+    ``None`` for a mandatory source shot-change cut. Track ids refer to
+    :class:`clip_engine.speaker_map.FaceTrack`.
+    """
+
+    t: float
+    speaker: int | None
+    from_track: int | None
+    to_track: int | None
+
+
+@dataclass(frozen=True)
+class CropSegment:
+    """One inter-cut span of the clip and the face track that owns framing.
+
+    ``track_id`` None = no mapped on-screen face — framing holds (previous
+    value, or frame center at clip start).
+    """
+
+    start: float
+    end: float
+    track_id: int | None
+
+
+@dataclass
+class ReframeResult:
+    """Everything one dynamic-crop computation produces (Issue 420/421).
+
+    ``track_points`` + ``sendcmd_text`` drive the ffmpeg render;
+    ``track_json`` is the UNIFIED wire-contract dict persisted to
+    ``clips.reframe_track_jsonb`` and served at ``GET /clips/{id}/crop-track``
+    — its keyframe ``x`` values ARE the sendcmd values (one geometry
+    definition). ``mode`` is the ladder outcome:
+    ``speaker_cut`` | ``face_pan`` | ``static``.
+    """
+
+    track_points: list[CropCenterPoint] = field(default_factory=list)
+    sendcmd_text: str = ""
+    track_json: dict = field(default_factory=dict)
+    mode: str = "static"
 
 
 # ---------------------------------------------------------------------------
@@ -161,23 +239,37 @@ def _close_face_detector(detector: object | None) -> None:
             logger.debug("MediaPipe face detector close failed: %s", exc)
 
 
-def _detect_faces_mediapipe(
+def _extract_mouth_patch(frame_bgr: object, mouth_xy: tuple[float, float]) -> object | None:
+    """Small grayscale patch around the mouth keypoint (mouth-motion signal).
+
+    Fixed ±``_MOUTH_PATCH_HALF_PX`` window; may be smaller at frame edges —
+    ``speaker_map.mouth_motion_energy`` skips shape-mismatched pairs.
+    """
+    try:
+        import numpy as np
+
+        arr = np.asarray(frame_bgr)
+        h, w = arr.shape[:2]
+        x, y = int(round(mouth_xy[0])), int(round(mouth_xy[1]))
+        x0, x1 = max(0, x - _MOUTH_PATCH_HALF_PX), min(w, x + _MOUTH_PATCH_HALF_PX)
+        y0, y1 = max(0, y - _MOUTH_PATCH_HALF_PX), min(h, y + _MOUTH_PATCH_HALF_PX)
+        patch = arr[y0:y1, x0:x1]
+        if patch.size == 0:
+            return None
+        return patch.mean(axis=2).astype("float32")
+    except Exception:
+        return None
+
+
+def _detect_face_obs(
     frame_bgr: object,  # numpy ndarray — typed as object to avoid numpy import at module level
-    frame_width: int,
-    detector: object | None = None,
-) -> list[int]:
-    """Detect face bounding-box centers (x coordinate) using MediaPipe BlazeFace.
+    detector: object | None,
+    timestamp_s: float,
+) -> list[_sm.FaceObs]:
+    """Detect full face observations (box + 6 BlazeFace keypoints + mouth patch).
 
-    Args:
-        frame_bgr: A numpy BGR image array (H × W × 3) as returned by cv2.
-        frame_width: Width of the source frame in pixels (used for normalisation).
-        detector: A pre-built MediaPipe Tasks FaceDetector from
-            :func:`_create_face_detector` — built once per track, not per frame.
-
-    Returns:
-        A list of x-center coordinates (pixels) for each detected face, in
-        descending order of face bounding-box area (largest face first).
-        Returns an empty list if no detector is available or no face found.
+    Returns observations sorted largest-face-first; ``[]`` when no detector is
+    available, nothing is found, or anything fails (fallback point upstream).
     """
     if detector is None:
         return []
@@ -186,27 +278,53 @@ def _detect_faces_mediapipe(
         import numpy as np
 
         # MediaPipe Tasks API expects RGB; cv2 produces BGR.
-        frame_rgb = np.asarray(frame_bgr)[:, :, ::-1]
+        frame_rgb = np.ascontiguousarray(np.asarray(frame_bgr)[:, :, ::-1])
+        h, w = frame_rgb.shape[:2]
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
         result = detector.detect(mp_image)  # type: ignore[attr-defined]
 
-        if not result.detections:
-            return []
-
-        centers: list[tuple[int, int]] = []  # (center_x, area)
-        for det in result.detections:
+        obs_list: list[_sm.FaceObs] = []
+        for det in result.detections or []:
             bb = det.bounding_box
-            area = bb.width * bb.height
-            cx = bb.origin_x + bb.width // 2
-            centers.append((cx, area))
-
-        # Sort largest face first so caller takes index 0 as the active speaker.
-        centers.sort(key=lambda t: t[1], reverse=True)
-        return [cx for cx, _ in centers]
-
+            keypoints = tuple(
+                (float(kp.x) * w, float(kp.y) * h) for kp in (det.keypoints or [])
+            )
+            mouth_patch = None
+            if len(keypoints) > _MOUTH_KEYPOINT_INDEX:
+                mouth_patch = _extract_mouth_patch(
+                    frame_bgr, keypoints[_MOUTH_KEYPOINT_INDEX]
+                )
+            obs_list.append(
+                _sm.FaceObs(
+                    t=timestamp_s,
+                    cx=bb.origin_x + bb.width / 2.0,
+                    cy=bb.origin_y + bb.height / 2.0,
+                    w=float(bb.width),
+                    h=float(bb.height),
+                    keypoints=keypoints,
+                    mouth_patch=mouth_patch,
+                )
+            )
+        obs_list.sort(key=lambda o: o.area, reverse=True)
+        return obs_list
     except Exception as exc:
         logger.debug("MediaPipe face detection unavailable: %s", exc)
         return []
+
+
+def _detect_faces_mediapipe(
+    frame_bgr: object,
+    frame_width: int,
+    detector: object | None = None,
+) -> list[int]:
+    """Legacy wrapper kept for the pan path + existing tests (Issue 420).
+
+    Returns face center-x values in descending bounding-box-area order
+    (largest face first — the active-speaker proxy of the pan rung), by
+    delegating to :func:`_detect_face_obs`.
+    """
+    _ = frame_width  # kept for signature compatibility
+    return [int(round(o.cx)) for o in _detect_face_obs(frame_bgr, detector, 0.0)]
 
 
 def _mediapipe_model_path() -> str:
@@ -255,37 +373,102 @@ def _mediapipe_model_path() -> str:
 
 
 # ---------------------------------------------------------------------------
-# OpenCV frame extraction helper (lazy import)
+# OpenCV frame extraction (lazy import) — ONE capture per clip (Issue 420)
 # ---------------------------------------------------------------------------
 
 
-def _read_frame_cv2(video_path: Path, timestamp_s: float) -> object | None:
-    """Extract a single frame at ``timestamp_s`` from ``video_path`` using cv2.
+def _iter_sampled_frames(
+    video_path: Path, timestamps: list[float]
+) -> Iterator[tuple[float, object | None]]:
+    """Yield ``(timestamp_s, BGR frame | None)`` for each requested timestamp
+    using ONE ``cv2.VideoCapture``.
 
-    Returns a BGR numpy array, or None on any failure (file missing, seek
-    past EOF, cv2 not installed, etc.).
+    MANDATORY refactor (Issue 420): the previous per-sample
+    ``open → seek → read → release`` pattern spawned 300–450 captures per
+    60–90 s clip at 5 fps — each open re-parses the container and each seek
+    walks the index, making detection the render path's dominant latency.
+    Here the capture opens once, seeks ONCE to the first sample's frame
+    index, then advances with sequential ``grab()`` (decode-skip) and reads
+    only the sampled frames.
 
-    This is the lightweight sampling path for the reframe tracker.  A full
-    ffmpeg subprocess per-frame would be ~10× slower at 5 fps on a 60-second
-    clip (300 subprocess spawns vs one cv2.VideoCapture open).
+    NaN/zero FPS guards preserved from the old ``_read_frame_cv2``: NaN is
+    truthy, so a bare ``fps or 25.0`` would keep NaN and ``int(ts*NaN)``
+    raises — checked explicitly with ``math.isfinite``.
+
+    Never raises; any failure yields ``None`` frames (fallback upstream).
     """
+    if not timestamps:
+        return
     try:
         import cv2  # noqa: PLC0415
+    except ImportError:
+        for ts in timestamps:
+            yield (ts, None)
+        return
 
+    cap = None
+    try:
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             logger.warning("cv2 could not open %s", video_path)
-            return None
+            for ts in timestamps:
+                yield (ts, None)
+            return
         raw_fps = cap.get(cv2.CAP_PROP_FPS)
-        # NaN is truthy so `raw_fps or 25.0` would keep NaN; guard explicitly.
         fps = raw_fps if math.isfinite(raw_fps) and raw_fps > 0 else 25.0
-        frame_idx = int(timestamp_s * fps)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, float(frame_idx))
-        ok, frame = cap.read()
-        cap.release()
-        return frame if ok else None
-    except Exception as exc:
-        logger.debug("cv2 frame read failed at %.3fs from %s: %s", timestamp_s, video_path, exc)
+
+        current: int | None = None
+        eof = False
+        for ts in timestamps:
+            target = max(0, int(ts * fps))
+            if eof:
+                yield (ts, None)
+                continue
+            try:
+                if current is None:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, float(target))
+                    current = target
+                while current < target:
+                    if not cap.grab():
+                        eof = True
+                        break
+                    current += 1
+                if eof:
+                    yield (ts, None)
+                    continue
+                ok, frame = cap.read()
+                current += 1
+                if not ok:
+                    eof = True
+                    yield (ts, None)
+                    continue
+                yield (ts, frame)
+            except Exception as exc:
+                logger.debug("cv2 frame read failed at %.3fs from %s: %s", ts, video_path, exc)
+                yield (ts, None)
+    finally:
+        if cap is not None:
+            cap.release()
+
+
+def _sample_timestamps(start_s: float, end_s: float, sample_fps: float) -> list[float]:
+    """The clip's detection sample times — shared by both detection passes."""
+    duration = end_s - start_s
+    interval_s = 1.0 / sample_fps
+    sample_count = max(1, int(duration * sample_fps))
+    return [ts for i in range(sample_count) if (ts := start_s + i * interval_s) < end_s]
+
+
+def _downscale_for_hist(frame: object) -> object | None:
+    """Tiny copy of a frame for the shots.py histogram fallback (≈2 KB each)."""
+    try:
+        import cv2  # noqa: PLC0415
+        import numpy as np
+
+        return cv2.resize(
+            np.asarray(frame), (_HIST_SAMPLE_W, _HIST_SAMPLE_H), interpolation=cv2.INTER_AREA
+        )
+    except Exception:
         return None
 
 
@@ -304,46 +487,28 @@ def build_crop_center_track(
 ) -> list[CropCenterPoint]:
     """Build a per-frame crop-center timeline for the clip [start_s, end_s].
 
-    Samples frames at ``sample_fps`` using cv2.VideoCapture, runs MediaPipe
-    BlazeFace on each frame, and returns a chronologically ordered list of
-    :class:`CropCenterPoint` objects describing where the crop should be
-    centred at each timestamp.
+    Samples frames at ``sample_fps`` through ONE ``cv2.VideoCapture``
+    (:func:`_iter_sampled_frames`), runs MediaPipe BlazeFace on each frame,
+    and returns a chronologically ordered list of :class:`CropCenterPoint`
+    objects describing where the crop should be centred at each timestamp.
 
     On total detection failure (mediapipe unavailable or every frame returns
-    no detection) the function returns a single ``CropCenterPoint`` at the
-    clip midpoint using the frame-center fallback — this is byte-compatible
-    with the legacy single-keyframe Haar path.
-
-    Args:
-        source_path: Absolute path to the source video file.
-        start_s: Clip start time in source-relative seconds.
-        end_s: Clip end time in source-relative seconds.
-        frame_width: Width of the source video frame in pixels.
-        sample_fps: Frames per second to sample for detection.
-
-    Returns:
-        Ordered list of :class:`CropCenterPoint` records, at least one entry.
+    no detection) the function returns frame-center fallback points — byte-
+    compatible with the legacy single-keyframe Haar path.
     """
     duration = end_s - start_s
     if duration <= 0:
         raise ValueError(f"build_crop_center_track: invalid range [{start_s}, {end_s}]")
 
     center_fallback = frame_width // 2
-    interval_s = 1.0 / sample_fps
-    # Build sample timestamps; always include the clip midpoint for the
-    # single-sample fallback case.
-    sample_count = max(1, int(duration * sample_fps))
-    timestamps = [start_s + i * interval_s for i in range(sample_count)]
+    timestamps = _sample_timestamps(start_s, end_s, sample_fps)
 
     # One detector for the whole track (Issue 352 Batch H) — building it per
     # frame parsed the model asset 300–450 times per clip at 5 fps.
     detector = _create_face_detector()
     raw_points: list[CropCenterPoint] = []
     try:
-        for ts in timestamps:
-            if ts >= end_s:
-                break
-            frame = _read_frame_cv2(source_path, ts)
+        for ts, frame in _iter_sampled_frames(source_path, timestamps):
             if frame is None:
                 raw_points.append(CropCenterPoint(ts, center_fallback, is_fallback=True))
                 continue
@@ -428,6 +593,46 @@ def smooth_crop_track(
     return smoothed
 
 
+def smooth_crop_track_segmented(
+    raw_track: list[CropCenterPoint],
+    cut_times: list[float],
+    *,
+    ema_alpha: float = _EMA_ALPHA,
+    max_pan_px_per_s: float = _MAX_PAN_PX_PER_S,
+) -> list[CropCenterPoint]:
+    """EMA-smooth per inter-cut segment; smoothing state RESETS at every cut.
+
+    The existing :func:`smooth_crop_track` runs unchanged inside each
+    segment; because its first point passes through un-lagged, the first
+    sample at/after a cut takes the new segment's raw value — a cut is an
+    UNSMOOTHED value jump between consecutive sendcmd lines (no new filter
+    machinery, Issue 420). Also enforces the shots.py contract: the crop
+    never pans across a source cut (each shot boundary is a cut time).
+    """
+    if not raw_track:
+        return []
+    boundaries = sorted(cut_times)
+    segments: list[list[CropCenterPoint]] = []
+    current: list[CropCenterPoint] = []
+    bi = 0
+    for point in raw_track:
+        while bi < len(boundaries) and point.timestamp_s >= boundaries[bi]:
+            if current:
+                segments.append(current)
+                current = []
+            bi += 1
+        current.append(point)
+    if current:
+        segments.append(current)
+
+    smoothed: list[CropCenterPoint] = []
+    for segment in segments:
+        smoothed.extend(
+            smooth_crop_track(segment, ema_alpha=ema_alpha, max_pan_px_per_s=max_pan_px_per_s)
+        )
+    return smoothed
+
+
 def clamp_crop_x(center_x: int, crop_w: int, frame_w: int) -> int:
     """Clamp a crop x-offset so the crop window stays fully within the frame.
 
@@ -482,8 +687,488 @@ def build_sendcmd_script(
 
 
 # ---------------------------------------------------------------------------
-# Convenience entry point (called from render.py when flag is enabled)
+# Cut/pan planner (Issue 420)
 # ---------------------------------------------------------------------------
+
+
+def plan_crop_directives(
+    turns: list[_sm.Turn],
+    mapping: _sm.SpeakerMapping,
+    tracks: list[_sm.FaceTrack],
+    shot_changes: list[float],
+    start_s: float,
+    end_s: float,
+    frame_w: int,
+    *,
+    min_turn_s: float,
+    min_distance_frac: float,
+    min_shot_s: float,
+    j_cut_lead_s: float = _J_CUT_LEAD_S,
+    shot_snap_s: float = _SHOT_SNAP_S,
+    punch_in_peak_s: float | None = None,
+    punch_in_suppress_s: float = _PUNCH_IN_SUPPRESS_S,
+) -> tuple[list[CropCut], list[CropSegment]]:
+    """Plan the hard cuts and per-segment framing owners for ``speaker_cut``.
+
+    THE CUT POLICY (Issue 420, exact):
+      - a SPEAKER cut fires only when the mapped speaker CHANGES track AND
+        the incoming turn lasts ≥ ``min_turn_s`` AND the framing move is
+        ≥ ``min_distance_frac·frame_w`` AND ≥ ``min_shot_s`` has passed since
+        the last cut;
+      - the cut lands ``j_cut_lead_s`` (150 ms) BEFORE the turn's first word
+        (J-cut) and SNAPS onto a source shot boundary within ±``shot_snap_s``;
+      - a source shot change is ALWAYS a cut (never pan across a source cut —
+        shots.py contract), regardless of spacing;
+      - speaker cuts inside ±``punch_in_suppress_s`` of the punch-in peak are
+        SUPPRESSED (the zoom pulse and a framing jump never stack);
+      - an off-screen speaker (no mapped track in the current shot) HOLDS the
+        current framing — never cut to nothing.
+
+    Returns ``(cuts, segments)`` — segments tile ``[start_s, end_s]`` exactly,
+    each owning the track that drives framing between consecutive cuts.
+    All times are source-relative.
+    """
+    window_shots = [t for t in shot_changes if start_s < t < end_s]
+    tracks_by_id = {t.track_id: t for t in tracks}
+
+    def _cx_of(track_id: int | None) -> float:
+        track = tracks_by_id.get(track_id) if track_id is not None else None
+        return track.mean_cx if track is not None else frame_w / 2.0
+
+    # Initial framing owner: the mapped track of whichever turn is active (or
+    # first) at clip start; else the largest track in the opening shot.
+    shot0 = _sm.shot_index_for(start_s, shot_changes)
+    current_speaker: int | None = None
+    current_track: int | None = None
+    for first_turn in turns:
+        if first_turn.end > start_s:
+            current_speaker = first_turn.speaker
+            current_track = mapping.track_for(first_turn.speaker, shot0)
+            break
+    if current_track is None:
+        shot0_tracks = [t for t in tracks if t.shot_idx == shot0]
+        if shot0_tracks:
+            current_track = max(shot0_tracks, key=lambda t: t.mean_area).track_id
+
+    cuts: list[CropCut] = []
+    segment_tracks: list[int | None] = [current_track]
+    last_cut_t = start_s
+
+    # Merge the two event streams chronologically.
+    events: list[tuple[float, str, object]] = [(t, "shot", t) for t in window_shots]
+    events += [(turn.start, "turn", turn) for turn in turns if start_s < turn.start < end_s]
+    events.sort(key=lambda e: (e[0], e[1]))  # shot before turn on exact ties
+
+    def _emit(t: float, speaker: int | None, to_track: int | None) -> None:
+        nonlocal current_track, last_cut_t
+        cuts.append(CropCut(t=t, speaker=speaker, from_track=current_track, to_track=to_track))
+        segment_tracks.append(to_track)
+        current_track = to_track
+        last_cut_t = t
+
+    consumed_shots: set[float] = set()
+
+    for _, kind, payload in events:
+        if kind == "shot":
+            boundary = float(payload)  # type: ignore[arg-type]
+            if boundary in consumed_shots:
+                continue
+            # Mandatory: tracks are per-shot, so re-resolve the active
+            # speaker's track in the NEW shot (None → hold/center framing).
+            new_shot = _sm.shot_index_for(boundary, shot_changes)
+            to_track = (
+                mapping.track_for(current_speaker, new_shot)
+                if current_speaker is not None
+                else None
+            )
+            if to_track is None:
+                new_shot_tracks = [t for t in tracks if t.shot_idx == new_shot]
+                if new_shot_tracks:
+                    to_track = max(new_shot_tracks, key=lambda t: t.mean_area).track_id
+            consumed_shots.add(boundary)
+            _emit(boundary, None, to_track)
+            continue
+
+        turn: _sm.Turn = payload  # type: ignore[assignment]
+        prev_speaker = current_speaker
+        current_speaker = turn.speaker
+        t_cut = turn.start - j_cut_lead_s
+        # Snap target first: a snapped cut lands ON the boundary, so the
+        # incoming speaker's track must be resolved in the POST-boundary shot.
+        snapped = next((b for b in window_shots if abs(b - t_cut) <= shot_snap_s), None)
+        effective_t = snapped if snapped is not None else max(t_cut, start_s)
+        shot_at = _sm.shot_index_for(effective_t, shot_changes)
+        target = mapping.track_for(turn.speaker, shot_at)
+        if target is None:
+            continue  # off-screen speaker holds framing — never cut to nothing
+
+        # Snapped-boundary coalescing (one visual event, not two): when a
+        # mandatory shot cut already landed within snap range, fold the
+        # speaker change into it — retarget its destination and annotate the
+        # speaker — instead of stacking a second cut 150 ms away.
+        if (
+            snapped is not None
+            and snapped in consumed_shots
+            and cuts
+            and cuts[-1].t == snapped
+        ):
+            if turn.speaker != prev_speaker:
+                cuts[-1] = CropCut(
+                    t=snapped,
+                    speaker=turn.speaker,
+                    from_track=cuts[-1].from_track,
+                    to_track=target,
+                )
+                segment_tracks[-1] = target
+                current_track = target
+            continue
+
+        if target == current_track:
+            continue  # already framed on this speaker
+        if turn.duration < min_turn_s:
+            continue
+        if abs(_cx_of(target) - _cx_of(current_track)) < min_distance_frac * frame_w:
+            continue
+        if punch_in_peak_s is not None and abs(t_cut - punch_in_peak_s) <= punch_in_suppress_s:
+            continue  # never stack a framing jump on the zoom pulse
+
+        if snapped is not None:
+            # Snap onto the (not yet reached) source shot boundary.
+            consumed_shots.add(snapped)
+            _emit(snapped, turn.speaker, target)
+            continue
+
+        if t_cut <= start_s:
+            # The turn effectively starts with the clip — frame it, no cut.
+            current_track = target
+            segment_tracks[-1] = target if not cuts else segment_tracks[-1]
+            if not cuts:
+                segment_tracks[0] = target
+            continue
+        if t_cut - last_cut_t < min_shot_s:
+            continue
+        _emit(t_cut, turn.speaker, target)
+
+    boundaries = [start_s] + [c.t for c in cuts] + [end_s]
+    segments = [
+        CropSegment(start=boundaries[i], end=boundaries[i + 1], track_id=segment_tracks[i])
+        for i in range(len(boundaries) - 1)
+    ]
+    return cuts, segments
+
+
+def _raw_track_from_segments(
+    sample_times: list[float],
+    segments: list[CropSegment],
+    tracks: list[_sm.FaceTrack],
+    frame_w: int,
+    sample_fps: float,
+) -> list[CropCenterPoint]:
+    """Per-sample raw crop centers following each segment's owning track.
+
+    Off-screen/undetected moments HOLD the previous value (deliberate framing,
+    not a fallback); only a total absence of any signal yields frame-center
+    fallback points.
+    """
+    tracks_by_id = {t.track_id: t for t in tracks}
+    tolerance_s = 1.5 / sample_fps
+    out: list[CropCenterPoint] = []
+    prev_cx: float | None = None
+    si = 0
+    for ts in sample_times:
+        while si < len(segments) - 1 and ts >= segments[si].end:
+            si += 1
+        track = None
+        if segments:
+            track_id = segments[si].track_id
+            track = tracks_by_id.get(track_id) if track_id is not None else None
+        cx = track.cx_at(ts, tolerance_s=tolerance_s) if track is not None else None
+        if cx is None and track is not None and prev_cx is None:
+            cx = track.mean_cx  # segment opens before its track's first obs
+        if cx is None:
+            if prev_cx is not None:
+                out.append(CropCenterPoint(ts, int(round(prev_cx))))
+            else:
+                out.append(CropCenterPoint(ts, frame_w // 2, is_fallback=True))
+                prev_cx = float(frame_w // 2)
+            continue
+        out.append(CropCenterPoint(ts, int(round(cx))))
+        prev_cx = float(cx)
+    return out
+
+
+def _raw_track_largest_face(
+    obs_frames: list[tuple[float, list[_sm.FaceObs]]],
+    frame_w: int,
+) -> list[CropCenterPoint]:
+    """Pan-rung raw track: largest detected face per sample, center fallback."""
+    center = frame_w // 2
+    out: list[CropCenterPoint] = []
+    for ts, obs in obs_frames:
+        if obs:
+            out.append(CropCenterPoint(ts, int(round(obs[0].cx))))
+        else:
+            out.append(CropCenterPoint(ts, center, is_fallback=True))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Track JSON (unified wire contract — Issue 421 / Cross-Track Reconciliation)
+# ---------------------------------------------------------------------------
+
+TRACK_JSON_VERSION = 1
+
+
+def _build_track_json(
+    smoothed: list[CropCenterPoint],
+    cuts: list[CropCut],
+    shot_changes: list[float],
+    mode: str,
+    *,
+    start_s: float,
+    end_s: float,
+    frame_w: int,
+    frame_h: int,
+    crop_w: int,
+    sample_fps: float,
+    speaker_count: int,
+    mapping_confidence: float,
+) -> dict:
+    """Serialize the computed track to the UNIFIED crop-track wire contract.
+
+    ``keyframes[].x`` is the clamped LEFT edge — the EXACT value each sendcmd
+    line carries (one geometry definition shared by render and preview;
+    conversion from center via :func:`clamp_crop_x`). All ``t`` are
+    clip-relative. Interpolation contract for consumers: lerp between
+    keyframes; SNAP at cuts.
+    """
+    keyframes = [
+        {
+            "t": max(0.0, round(p.timestamp_s - start_s, _SENDCMD_TIME_DECIMALS)),
+            "x": clamp_crop_x(p.center_x, crop_w, frame_w),
+        }
+        for p in smoothed
+    ]
+
+    cut_entries: list[dict] = []
+    for cut in cuts:
+        cut_clip_t = cut.t - start_s
+        idx = next(
+            (i for i, kf in enumerate(keyframes) if kf["t"] >= round(cut_clip_t, 3)), None
+        )
+        if idx is None or idx == 0:
+            continue
+        entry: dict = {
+            "t": keyframes[idx]["t"],
+            "from_x": keyframes[idx - 1]["x"],
+            "to_x": keyframes[idx]["x"],
+        }
+        if cut.speaker is not None:
+            entry["speaker"] = cut.speaker
+        cut_entries.append(entry)
+
+    fallback = mode == "static" or all(p.is_fallback for p in smoothed)
+    return {
+        "version": TRACK_JSON_VERSION,
+        "mode": mode,
+        "source": {"width": frame_w, "height": frame_h},
+        "crop": {"width": crop_w, "height": frame_h},
+        "origin_s": round(start_s, 3),
+        "duration_s": round(end_s - start_s, 3),
+        "keyframes": keyframes,
+        "cuts": cut_entries,
+        "shots": [
+            {"t": round(t - start_s, 3)} for t in shot_changes if start_s < t < end_s
+        ],
+        "speakers": {
+            "count": speaker_count,
+            "mapping_confidence": round(mapping_confidence, 3),
+        },
+        "meta": {"sample_fps": sample_fps, "fallback": fallback},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Entry points (called from render.py when the flag is enabled)
+# ---------------------------------------------------------------------------
+
+
+def compute_dynamic_crop(
+    source_path: Path,
+    start_s: float,
+    end_s: float,
+    frame_width: int,
+    frame_height: int,
+    crop_w: int,
+    *,
+    sample_fps: float = _DEFAULT_SAMPLE_FPS,
+    transcript_segments: list[dict] | None = None,
+    punch_in_peak_s: float | None = None,
+) -> ReframeResult:
+    """Compute the full dynamic crop: detection → shots → mapping → plan →
+    segmented smoothing → sendcmd + wire-contract track JSON.
+
+    The ladder (``speaker_cut → face_pan → static``) is applied via
+    :func:`clip_engine.speaker_map.choose_reframe_mode`; each stage degrades
+    toward today's behavior and the whole function NEVER raises — total
+    failure returns a static single-center result (mode ``static``,
+    empty sendcmd → render.py's static-crop path).
+
+    ``transcript_segments`` is the full ``Transcript.segments_jsonb["segments"]``
+    list (speaker fields optional — Issue 418). ``punch_in_peak_s`` is the
+    SOURCE-relative punch-in peak time when the zoom pulse will be applied,
+    used only to suppress speaker cuts inside the pulse.
+    """
+    from config import settings  # noqa: PLC0415 — avoid config import at module init
+
+    try:
+        duration = end_s - start_s
+        if duration <= 0:
+            raise ValueError(f"compute_dynamic_crop: invalid range [{start_s}, {end_s}]")
+
+        timestamps = _sample_timestamps(start_s, end_s, sample_fps)
+
+        # ── Detection pass: ONE capture, full observations ────────────────
+        detector = _create_face_detector()
+        obs_frames: list[tuple[float, list[_sm.FaceObs]]] = []
+        hist_samples: list[tuple[float, object]] = []
+        try:
+            for ts, frame in _iter_sampled_frames(source_path, timestamps):
+                if frame is None:
+                    obs_frames.append((ts, []))
+                    continue
+                obs_frames.append((ts, _detect_face_obs(frame, detector, ts)))
+                small = _downscale_for_hist(frame)
+                if small is not None:
+                    hist_samples.append((ts, small))
+        finally:
+            _close_face_detector(detector)
+
+        # ── Shots / turns / tracks / mapping ──────────────────────────────
+        try:
+            shot_changes = _shots.detect_shot_changes(
+                source_path, start_s, end_s, fallback_samples=hist_samples
+            )
+        except Exception as exc:
+            logger.warning("shot detection failed: %s — treating clip as one shot", exc)
+            shot_changes = []
+
+        segments_in = transcript_segments or []
+        turns = _sm.extract_speaker_turns(segments_in, start_s, end_s)
+        coverage = _sm.diarization_coverage(segments_in, start_s, end_s)
+        tracks = _sm.build_face_tracks(obs_frames, frame_width, shot_changes)
+        mapping = _sm.map_speakers_to_tracks(tracks, turns)
+        speaker_count = len({t.speaker for t in turns})
+
+        mode = _sm.choose_reframe_mode(
+            n_tracks=len(tracks),
+            n_speakers=speaker_count,
+            coverage=coverage,
+            mapping_confidence=mapping.confidence,
+            cuts_enabled=settings.REFRAME_CUT_ENABLED,
+            frame_w=frame_width,
+            crop_w=crop_w,
+        )
+
+        # ── Plan + smooth per mode ────────────────────────────────────────
+        cuts: list[CropCut] = []
+        if mode == "speaker_cut":
+            cuts, plan_segments = plan_crop_directives(
+                turns,
+                mapping,
+                tracks,
+                shot_changes,
+                start_s,
+                end_s,
+                frame_width,
+                min_turn_s=settings.REFRAME_CUT_MIN_TURN_S,
+                min_distance_frac=settings.REFRAME_CUT_MIN_DISTANCE_FRAC,
+                min_shot_s=settings.REFRAME_MIN_SHOT_S,
+                punch_in_peak_s=punch_in_peak_s,
+            )
+            raw = _raw_track_from_segments(
+                timestamps, plan_segments, tracks, frame_width, sample_fps
+            )
+        elif mode == "face_pan":
+            # Pan rung — largest-face EMA pan (today's designed behavior),
+            # improved: mandatory cuts + smoothing resets at source cuts.
+            raw = _raw_track_largest_face(obs_frames, frame_width)
+            cuts = [
+                CropCut(t=t, speaker=None, from_track=None, to_track=None)
+                for t in shot_changes
+                if start_s < t < end_s
+            ]
+        else:  # static
+            mid = start_s + duration / 2.0
+            raw = [CropCenterPoint(mid, frame_width // 2, is_fallback=True)]
+
+        smoothed = smooth_crop_track_segmented(raw, [c.t for c in cuts])
+        script = (
+            build_sendcmd_script(smoothed, crop_w, frame_width, start_s)
+            if len(smoothed) > 1
+            else ""
+        )
+        track_json = _build_track_json(
+            smoothed,
+            cuts,
+            shot_changes,
+            mode,
+            start_s=start_s,
+            end_s=end_s,
+            frame_w=frame_width,
+            frame_h=frame_height,
+            crop_w=crop_w,
+            sample_fps=sample_fps,
+            speaker_count=speaker_count,
+            mapping_confidence=mapping.confidence,
+        )
+        logger.info(
+            "Dynamic crop: mode=%s samples=%d cuts=%d shots=%d speakers=%d "
+            "confidence=%.2f coverage=%.2f fallback_pct=%.0f%% for %s [%.2f–%.2f]",
+            mode,
+            len(smoothed),
+            len(cuts),
+            len(shot_changes),
+            speaker_count,
+            mapping.confidence,
+            coverage,
+            100.0 * sum(1 for p in smoothed if p.is_fallback) / max(1, len(smoothed)),
+            source_path.name,
+            start_s,
+            end_s,
+        )
+        return ReframeResult(
+            track_points=smoothed, sendcmd_text=script, track_json=track_json, mode=mode
+        )
+    except Exception as exc:
+        logger.warning(
+            "Dynamic crop failed for %s [%.2f–%.2f]: %s — falling back to static center",
+            source_path.name,
+            start_s,
+            end_s,
+            exc,
+        )
+        mid = start_s + max(0.0, end_s - start_s) / 2.0
+        fallback_point = CropCenterPoint(mid, frame_width // 2, is_fallback=True)
+        return ReframeResult(
+            track_points=[fallback_point],
+            sendcmd_text="",
+            track_json=_build_track_json(
+                [fallback_point],
+                [],
+                [],
+                "static",
+                start_s=start_s,
+                end_s=end_s,
+                frame_w=frame_width,
+                frame_h=frame_height,
+                crop_w=crop_w,
+                sample_fps=sample_fps,
+                speaker_count=0,
+                mapping_confidence=0.0,
+            ),
+            mode="static",
+        )
 
 
 def compute_reframe_crop(
@@ -496,75 +1181,21 @@ def compute_reframe_crop(
     *,
     sample_fps: float = _DEFAULT_SAMPLE_FPS,
 ) -> tuple[list[CropCenterPoint], str]:
-    """High-level entry point: detect, smooth, and build the sendcmd script.
+    """Legacy entry point — DELEGATES to :func:`compute_dynamic_crop`.
 
-    This is the single call site that render.py invokes when
-    ``settings.ACTIVE_SPEAKER_REFRAME_ENABLED`` is True.  It combines
-    :func:`build_crop_center_track`, :func:`smooth_crop_track`, and
-    :func:`build_sendcmd_script` into one call, and degrades gracefully
-    by returning a single-point center-fallback when detection fails
-    entirely.
-
-    Principles:
-      - Principle 4 (Pattern interrupt): following the active speaker keeps
-        the viewer visually anchored to whoever is speaking, creating a
-        natural rhythm of micro-movement that sustains attention.
-      - Principle 11 (Audience-fit over generic virality): per-creator quality
-        render, not a generic auto-crop service.
-
-    Args:
-        source_path: Absolute path to the source video file.
-        start_s: Clip start in source-relative seconds.
-        end_s: Clip end in source-relative seconds.
-        frame_width: Source frame width in pixels.
-        frame_height: Source frame height in pixels (unused in crop math,
-            included for forward-compatibility with vertical-pan support).
-        crop_w: Crop window width derived from the output aspect ratio.
-        sample_fps: Frames per second to sample for face detection.
-
-    Returns:
-        ``(smoothed_track, sendcmd_script_text)``
-
-        ``smoothed_track`` is the list of :class:`CropCenterPoint` records
-        after EMA smoothing and pan clamping.
-
-        ``sendcmd_script_text`` is ready to write to a temp ``.sendcmd`` file
-        and pass to ffmpeg via ``-filter_complex "sendcmd=f=<file>,crop=..."``.
-        Returns an empty string when the track has zero or one point
-        (no dynamic crop needed; use a static x-offset from the single point).
+    Kept for callers that predate the speaker-aware planner (no transcript in
+    hand): without transcript segments the ladder lands on the pan or static
+    rung, which is the original Issue-189 behavior improved by per-shot
+    smoothing resets. Returns ``(smoothed_track, sendcmd_script_text)``.
     """
-    _ = frame_height  # reserved for future vertical-pan support
-
-    try:
-        raw_track = build_crop_center_track(
-            source_path, start_s, end_s, frame_width, sample_fps=sample_fps
-        )
-    except Exception as exc:
-        logger.warning(
-            "Reframe track build failed for %s [%.2f–%.2f]: %s — falling back to center",
-            source_path.name,
-            start_s,
-            end_s,
-            exc,
-        )
-        mid = start_s + (end_s - start_s) / 2.0
-        fallback = [CropCenterPoint(mid, frame_width // 2, is_fallback=True)]
-        return fallback, ""
-
-    smoothed = smooth_crop_track(raw_track)
-
-    if len(smoothed) <= 1:
-        # Single sample — no time-varying crop needed; caller uses the
-        # static x-offset from smoothed[0].center_x.
-        return smoothed, ""
-
-    script = build_sendcmd_script(smoothed, crop_w, frame_width, start_s)
-    logger.info(
-        "Reframe track: %d samples for %s [%.2f–%.2f], fallback_pct=%.0f%%",
-        len(smoothed),
-        source_path.name,
+    result = compute_dynamic_crop(
+        source_path,
         start_s,
         end_s,
-        100.0 * sum(1 for p in smoothed if p.is_fallback) / len(smoothed),
+        frame_width,
+        frame_height,
+        crop_w,
+        sample_fps=sample_fps,
+        transcript_segments=None,
     )
-    return smoothed, script
+    return result.track_points, result.sendcmd_text

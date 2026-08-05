@@ -370,6 +370,23 @@ class Settings(BaseSettings):
     # positive on staging footage.
     SHOT_DETECT_SCDET_THRESHOLD: float = 10.0
 
+    # ── Speaker-cut planner (Issue 420) ───────────────────────────────────────
+    # Sub-flag for the speaker_cut ladder rung. When False (with the master
+    # ACTIVE_SPEAKER_REFRAME_ENABLED on) the ladder tops out at face_pan —
+    # the staging sequence verifies the pan rung with cuts off before enabling
+    # cuts (Issue 422 flag sequencing). Master flag off = neither runs.
+    REFRAME_CUT_ENABLED: bool = True
+    # Minimum spacing between consecutive crop cuts. 1.2s is the floor under
+    # which consecutive framing jumps read as flicker, not editing.
+    REFRAME_MIN_SHOT_S: float = 1.2
+    # A speaker turn must last at least this long to earn a cut — shorter
+    # interjections hold the current framing (backchannels are additionally
+    # absorbed in speaker_map.extract_speaker_turns).
+    REFRAME_CUT_MIN_TURN_S: float = 0.8
+    # Minimum framing move for a cut, as a fraction of source frame width —
+    # below this a cut reads as a stutter (the EMA pan covers small moves).
+    REFRAME_CUT_MIN_DISTANCE_FRAC: float = 0.25
+
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     # ── Shortlist mode (Issue 377) ──────────────────────────────────────────────
     # How many of the ranked candidates the Review surface argues a case for by
