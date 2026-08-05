@@ -421,12 +421,32 @@ Decision: log in `docs/DECISIONS.md` when made.
 > `config.py` — the flip is an env change on staging first, prod last.
 
 **What ships in the image (this issue's code side, already landed):**
-`requirements-image.txt` (`-r requirements.txt` + `mediapipe==0.10.21`) installed by the
-Dockerfile builder stage; the BlazeFace hub asset at
+`requirements-image.txt` (`-r requirements.txt` + `mediapipe==0.10.21`) behind the Dockerfile
+build arg **`INSTALL_REFRAME=true`** (default false — see step 0); the BlazeFace hub asset at
 `/usr/share/mediapipe-models/blaze_face_short_range.tflite` (`MEDIAPIPE_FACE_MODEL_PATH`);
 per-stage vlog timings emitted by `clip_engine.reframe.compute_dynamic_crop` as the
 `reframe_stages` event (`reframe_detect_ms` / `reframe_shots_ms` / `reframe_plan_ms`).
 Local dev is untouched — mediapipe is a lazy import and every reframe unit test is synthetic.
+
+### Step 0 — resolve the mediapipe × numpy conflict (BLOCKS unlock #1)
+
+**Discovered at the 2026-08-05 L26 deploy:** `mediapipe==0.10.21` pins `numpy<2` on its official
+wheels while the app pins `numpy==2.1.3` → `pip ResolutionImpossible`, which failed the first
+`docker-publish` run on main. The unconditional install was therefore gated behind
+`--build-arg INSTALL_REFRAME=true` (default false) so the prod image builds and deploys without
+mediapipe — safe because `ACTIVE_SPEAKER_REFRAME_ENABLED=false` means the import never happens.
+The constraint is reportedly a wheel-metadata limitation more than a runtime incompatibility
+(most of mediapipe works on numpy 2; see google-ai-edge/mediapipe#5676/#6023 and the
+cansik/mediapipe-numpy2 patch tool). Options to evaluate WHEN doing this checklist, in order:
+1. **Newest mediapipe release** (≥0.10.31 existed as of late 2025) — check whether the numpy pin
+   was lifted AND that the Tasks `FaceDetector` API (`clip_engine/reframe.py` uses Tasks, not
+   `mediapipe.solutions`) still ships; update the pin in `requirements-image.txt` if so.
+2. **Patched wheel** (`cansik/mediapipe-numpy2`-style metadata patch, vendored/pinned by hash) —
+   acceptable for the staging verification image; record a DECISIONS entry if it ends up in prod.
+3. **Dedicated worker image on numpy<2** — last resort; diverges scipy/librosa resolution and
+   doubles the dependency-audit surface.
+- [ ] Resolution chosen, `requirements-image.txt` updated, `docker build --build-arg
+      INSTALL_REFRAME=true` succeeds, and a DECISIONS entry records the choice.
 
 ### Issue 189's four unlock criteria (each needs recorded evidence)
 

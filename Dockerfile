@@ -36,12 +36,20 @@ ENV MEDIAPIPE_FACE_MODEL_PATH=/usr/share/mediapipe-models/blaze_face_short_range
 WORKDIR /app
 
 # ── Dependency layer (cached until requirements*.txt change) ─────────────────
-# requirements-image.txt chains `-r requirements.txt` and adds the image-only
-# deps (mediapipe for the speaker-aware reframe, Issue 422). Local dev and CI
-# keep installing requirements.txt alone — mediapipe stays a lazy import.
+# INSTALL_REFRAME=true additionally installs requirements-image.txt (mediapipe
+# for the speaker-aware reframe, Issue 422). Default FALSE: mediapipe==0.10.21
+# requires numpy<2 and the app pins numpy==2.1.3 — the combination is
+# pip-unresolvable, so the reframe image needs its own resolution story first
+# (tracked in docs/DEPLOYMENT.md § staging checklist step 0). Prod runs with
+# ACTIVE_SPEAKER_REFRAME_ENABLED=false and never imports mediapipe.
 FROM base AS builder
+ARG INSTALL_REFRAME=false
 COPY requirements.txt requirements-image.txt ./
-RUN pip install --no-cache-dir --user -r requirements-image.txt
+RUN if [ "$INSTALL_REFRAME" = "true" ]; then \
+      pip install --no-cache-dir --user -r requirements-image.txt; \
+    else \
+      pip install --no-cache-dir --user -r requirements.txt; \
+    fi
 
 # ── Frontend build (Vite SPA → /app/frontend/dist) ───────────────────────────
 # The React + TS app (frontend/, base=/app/) is compiled here and the static
