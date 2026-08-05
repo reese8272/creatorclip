@@ -186,6 +186,40 @@ def test_snap_candidates_noop_without_segments():
     assert snap_candidates_to_sentences(candidates, [], duration_s=100.0) is candidates
 
 
+def test_snap_candidates_clamps_signal_window_to_target():
+    """The rank-10 live escape: a 95 s natural signal window stretched past
+    100 s by edge snapping must come back <= CLIP_TARGET_MAX_S, cut at a
+    sentence end."""
+    segments = [
+        _segment(0.0, 60.0, [("Opening", 0.0, 0.5), ("beat.", 0.6, 60.0)]),
+        _segment(61.0, 85.0, [("Middle", 61.0, 61.5), ("beat.", 61.6, 85.0)]),
+        _segment(86.0, 130.0, [("Closing", 86.0, 86.5), ("beat.", 86.6, 130.0)]),
+    ]
+    # Start on a boundary (0.0), end mid-final-sentence at 101 → forward snap
+    # would push it to 130; the clamp must cut at the latest sentence end
+    # within (0, 90] = 85.0.
+    candidates = [{"setup_start_s": 0.0, "start_s": 0.0, "peak_s": 80.0, "end_s": 101.0}]
+    out = snap_candidates_to_sentences(candidates, segments, duration_s=200.0)
+    assert len(out) == 1
+    assert out[0]["end_s"] == 85.0
+    assert out[0]["end_s"] - out[0]["setup_start_s"] <= CLIP_TARGET_MAX_S
+
+
+def test_snap_candidates_clamp_never_cuts_before_peak():
+    """A sparse sentence index whose only end inside the target window falls
+    BEFORE the peak must not amputate the payoff — fall back to the ceiling."""
+    segments = [
+        _segment(0.0, 40.0, [("Early", 0.0, 0.5), ("beat.", 0.6, 40.0)]),
+        _segment(95.0, 130.0, [("Late", 95.0, 95.5), ("beat.", 95.6, 130.0)]),
+    ]
+    # Latest sentence end within (0, 90] is 40.0 — before the peak at 88.
+    candidates = [{"setup_start_s": 0.0, "start_s": 0.0, "peak_s": 88.0, "end_s": 101.0}]
+    out = snap_candidates_to_sentences(candidates, segments, duration_s=200.0)
+    assert len(out) == 1
+    assert out[0]["end_s"] == 90.0  # bare ceiling, past the peak
+    assert out[0]["end_s"] > out[0]["peak_s"]
+
+
 def test_clamp_window_to_target_cuts_at_sentence_end():
     sentences = [
         {"start_s": 0.0, "end_s": 40.0},

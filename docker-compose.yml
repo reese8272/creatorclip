@@ -23,7 +23,9 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
-    command: celery -A worker.celery_app worker --loglevel=info --concurrency=2
+    # Dev consumes BOTH queues in one worker (Issue 432): renders still route
+    # to `render`, but a second container isn't worth it locally.
+    command: celery -A worker.celery_app worker --loglevel=info --concurrency=2 -Q celery,render
 
   postgres:
     image: pgvector/pgvector:pg16

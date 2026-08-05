@@ -1992,6 +1992,29 @@ crop treats the whole 16:9 frame as camera when much of it is chrome.
 - [x] Falls back to today's full-height crop when no chrome is detected (fail-open gates; byte-identical vf pinned by tests; skipped under the reframe flag — 422 seam documented)
 - [ ] Frame-extraction check on a produced-layout source shows no truncated third-party chrome (staging, then flag flip)
 
+### Issue 432: On-demand renders collapse under concurrency — dedicated render queue
+
+- [ ] **Status:** open · **Size:** S · filed 2026-08-05 (live defect from the first post-wave upload)
+
+The creator clicked "render" on ranks 9–12 in Review within ~10 s; four `render_clip` tasks ran
+four concurrent ffmpeg 1080p encodes on the 4-core VM, every encode starved, and **all four hit
+the render timeout (~266 s) together** → Celery retries, two clips stuck `failed`. The
+auto-render batch (`render_video_clips`) is sequential by design; the on-demand path had no
+concurrency guard, and a click DURING the batch would collide the same way.
+
+**Fix (built with this filing):** route every ffmpeg-encoding task
+(`render_clip` / `render_video_clips` / `clean_clip` / `edit_clip` / `render_summary`) to a
+dedicated `render` queue via `task_routes` (`worker/celery_app.py`), consumed by a new
+`render-worker` compose service with `--concurrency=1`; the main worker takes `-Q celery` only.
+Dev compose consumes both queues in one worker. Note for the parked K8s track: the Helm chart
+needs a matching render-worker Deployment when Issue 275 lands.
+
+**Acceptance**
+- [x] Render tasks route to the `render` queue (pinned: `tests/test_celery_routing.py`)
+- [x] Prod compose: `render-worker` service `--concurrency=1 -Q render`; main worker `-Q celery`
+- [ ] Live: click-render several clips in quick succession → all complete serially, none time out
+- [ ] Failed rank-9/12 clips from video `6c221f12` reset and re-rendered
+
 ### Issue 431: "Generate more clips" — user-triggered regeneration excluding existing windows
 
 - [ ] **Status:** open · **Size:** M · filed 2026-08-05 (user directive during the 427–430 wave)
@@ -2092,4 +2115,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **432**.
+- Next free issue number: **433**.

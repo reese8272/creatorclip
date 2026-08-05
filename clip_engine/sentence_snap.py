@@ -188,6 +188,18 @@ def snap_candidates_to_sentences(
         )
         cand["end_s"] = round(snap_end(cand["end_s"], sentences), 2)
 
+        # Hard 90 s ceiling for ALL candidates (2026-08-05 live finding: a
+        # signal window at 95 s natural max stretched to 100.6 s after edge
+        # snapping). The sentence-aligned cut can never land before the peak:
+        # setup >= peak - 85 (75 s lookback + <=10 s snap), so the ceiling sits
+        # >= 5 s past the peak — but a sparse sentence index could still pick an
+        # earlier end, so floor at the bare ceiling when it would cut the payoff.
+        if cand["end_s"] - cand["setup_start_s"] > CLIP_TARGET_MAX_S:
+            new_end = clamp_window_to_target(cand["setup_start_s"], cand["end_s"], sentences)
+            if new_end <= peak:
+                new_end = cand["setup_start_s"] + CLIP_TARGET_MAX_S
+            cand["end_s"] = round(new_end, 2)
+
         if cand["end_s"] - cand["setup_start_s"] < MIN_CLIP_S:
             cand["end_s"] = round(cand["setup_start_s"] + MIN_CLIP_S, 2)
         if duration_s > 0:

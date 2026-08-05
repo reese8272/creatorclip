@@ -61,10 +61,27 @@ def visibility_timeout_s(soft_limit_s: int) -> int:
     return max(3600, soft_limit_s + HARD_LIMIT_MARGIN_S + VISIBILITY_BUFFER_S)
 
 
+# Dedicated ffmpeg-render queue (Issue 432). Every ffmpeg-encoding task routes
+# here, and the render worker consumes it with --concurrency=1: renders are CPU-
+# saturating (a single libx264 encode uses the whole box), so N concurrent
+# renders starve each other into the render timeout — the live failure was four
+# on-demand clicks timing out together at ~266 s each on the 4-core VM. Network/
+# LLM-bound tasks stay on the default "celery" queue (the main worker runs
+# `-Q celery`). Queues are auto-created (task_create_missing_queues default).
+RENDER_QUEUE = "render"
+RENDER_TASKS = (
+    "worker.tasks.render_clip",
+    "worker.tasks.render_video_clips",
+    "worker.tasks.clean_clip",
+    "worker.tasks.edit_clip",
+    "worker.tasks.render_summary",
+)
+
 celery.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
+    task_routes={name: {"queue": RENDER_QUEUE} for name in RENDER_TASKS},
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
