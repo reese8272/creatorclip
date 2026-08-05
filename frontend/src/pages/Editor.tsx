@@ -11,8 +11,8 @@ import { ShortFormEditor } from '@/components/editor/ShortFormEditor'
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
 import type { ReviewClip, ReviewClipListResponse, VideoListResponse } from '@/types'
-import { RectangleHorizontal, RectangleVertical } from '@/components/ui/icon'
-import { ICON_SIZE } from '@/components/ui/iconSizes'
+import { ArrowLeft, RectangleHorizontal, RectangleVertical } from '@/components/ui/icon'
+import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
 // ── Editor page ──────────────────────────────────────────────────────────────
 
@@ -126,37 +126,45 @@ export function Editor() {
     // workspace a definite height to divide up.
     <ToolShell scroll={false} className="flex flex-col gap-3 px-4 py-3 lg:px-6">
       <>
-        {/* Header + mode toggle (Issue 307) */}
-        <div className="flex shrink-0 flex-wrap items-end justify-between gap-4">
-          <div>
-            {/* text-h2, and the sub-line only at xl: the header is chrome above
-                the work, so it gives up ~30px of vertical budget to the panels. */}
-            <h1 className="font-display text-h2 text-fg">Editor</h1>
-            <p className="mt-1 hidden text-small text-muted xl:block">
-              Refine a single clip, or work the full source timeline.
-            </p>
-          </div>
-          <div
-            role="tablist"
-            aria-label="Editor mode"
-            className="inline-flex gap-0.5 rounded-md border border-strong bg-bg p-[3px]"
-          >
-            <button
-              role="tab"
-              aria-selected={editorMode === 'short'}
-              onClick={() => setEditorMode('short')}
-              className={cn(TAB_BASE, editorMode === 'short' ? TAB_ACTIVE : TAB_IDLE)}
+        {/* ONE toolbar strip (Issue 425): h1 + mode tablist + the short-mode
+            back-link merged into a single row — the header is chrome above the
+            work, and the old two-line header spent ~50px of the stage cell's
+            height budget on a sub-line nobody needed. */}
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <h1 className="font-display text-h2 text-fg">Editor</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            {editorMode === 'short' && clip && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate(`/review?video_id=${videoId}`)}
+              >
+                <ArrowLeft className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" /> Back
+                to Review
+              </Button>
+            )}
+            <div
+              role="tablist"
+              aria-label="Editor mode"
+              className="inline-flex gap-0.5 rounded-md border border-strong bg-bg p-[3px]"
             >
-              <RectangleVertical className={ICON_SIZE.sm} aria-hidden="true" /> Short-form clip
-            </button>
-            <button
-              role="tab"
-              aria-selected={editorMode === 'long'}
-              onClick={() => setEditorMode('long')}
-              className={cn(TAB_BASE, editorMode === 'long' ? TAB_ACTIVE : TAB_IDLE)}
-            >
-              <RectangleHorizontal className={ICON_SIZE.sm} aria-hidden="true" /> Long-form source
-            </button>
+              <button
+                role="tab"
+                aria-selected={editorMode === 'short'}
+                onClick={() => setEditorMode('short')}
+                className={cn(TAB_BASE, editorMode === 'short' ? TAB_ACTIVE : TAB_IDLE)}
+              >
+                <RectangleVertical className={ICON_SIZE.sm} aria-hidden="true" /> Short-form clip
+              </button>
+              <button
+                role="tab"
+                aria-selected={editorMode === 'long'}
+                onClick={() => setEditorMode('long')}
+                className={cn(TAB_BASE, editorMode === 'long' ? TAB_ACTIVE : TAB_IDLE)}
+              >
+                <RectangleHorizontal className={ICON_SIZE.sm} aria-hidden="true" /> Long-form source
+              </button>
+            </div>
           </div>
         </div>
 
@@ -189,7 +197,6 @@ export function Editor() {
             key={clip.id}
             className="min-h-0 flex-1"
             clip={clip}
-            videoId={videoId}
             hasPeaks={videoRow?.has_peaks ?? false}
           />
         )}

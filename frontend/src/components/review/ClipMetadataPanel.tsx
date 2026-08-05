@@ -7,18 +7,13 @@ import {
   useApplyClipMetadata,
   utf8ByteLength,
 } from '@/hooks/useApplyClipMetadata'
-import { FitBadge } from '@/components/ui/fit-badge'
-import { fitTier } from '@/lib/fit'
-import type {
-  CaptionHooksResponse,
-  ClipExplanationResponse,
-  ReviewClip,
-  TitleSuggestionsResponse,
-} from '@/types'
+import { AppliedDescriptionField } from '@/components/review/AppliedDescriptionField'
+import { AppliedTitleField } from '@/components/review/AppliedTitleField'
+import type { CaptionHooksResponse, ReviewClip, TitleSuggestionsResponse } from '@/types'
 import { Check } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Disclosure } from '@/components/ui/disclosure'
 
 // ── CopyButton — click-to-copy affordance ─────────────────────────────────────
@@ -76,9 +71,9 @@ function ApplyButton({
   )
 }
 
-// ── TitleSuggestionsCard (Issue 322) ──────────────────────────────────────────
+// ── RegenerateTitlesCard (Issue 322, relabeled by Issue 424) ─────────────────
 
-function TitleSuggestionsCard({ clip }: { clip: ReviewClip }) {
+function RegenerateTitlesCard({ clip }: { clip: ReviewClip }) {
   const [open, setOpen] = useState(false)
   const [applyError, setApplyError] = useState('')
   const mutation = useMutation({
@@ -108,7 +103,7 @@ function TitleSuggestionsCard({ clip }: { clip: ReviewClip }) {
   if (!open) {
     return (
       <Button variant="ghost" size="sm" onClick={() => { setOpen(true); mutation.mutate() }}>
-        Suggest titles / rewrite hook
+        Regenerate titles
       </Button>
     )
   }
@@ -165,9 +160,9 @@ function TitleSuggestionsCard({ clip }: { clip: ReviewClip }) {
   )
 }
 
-// ── CaptionHooksCard (Issue 323) ──────────────────────────────────────────────
+// ── RegenerateCaptionHooksCard (Issue 323, relabeled by Issue 424) ───────────
 
-function CaptionHooksCard({ clip }: { clip: ReviewClip }) {
+function RegenerateCaptionHooksCard({ clip }: { clip: ReviewClip }) {
   const [open, setOpen] = useState(false)
   const [applyError, setApplyError] = useState('')
   const mutation = useMutation({
@@ -188,7 +183,7 @@ function CaptionHooksCard({ clip }: { clip: ReviewClip }) {
   if (!open) {
     return (
       <Button variant="ghost" size="sm" onClick={() => { setOpen(true); mutation.mutate() }}>
-        Suggest caption / overlay text
+        Regenerate caption hooks
       </Button>
     )
   }
@@ -224,119 +219,159 @@ function CaptionHooksCard({ clip }: { clip: ReviewClip }) {
   )
 }
 
-// ── ExplainClipCard (Issue 325) ───────────────────────────────────────────────
+// ── MetadataRow — one truncating line + state chip ───────────────────────────
 
-function ExplainClipCard({ clipId }: { clipId: string }) {
-  const [open, setOpen] = useState(false)
-  const mutation = useMutation({
-    mutationFn: () =>
-      api<ClipExplanationResponse>(`/clips/${clipId}/explanation`, { method: 'POST' }),
-  })
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => { setOpen(true); mutation.mutate() }}
-        className="mt-2 text-xs text-accent-text underline-offset-2 hover:underline"
-        data-testid="explain-clip-trigger"
-      >
-        Why this clip? (detailed explanation)
-      </button>
-    )
-  }
-
+function MetadataRow({
+  label,
+  value,
+  applied,
+  pending,
+  onApply,
+  onEdit,
+}: {
+  label: string
+  value: string | null
+  /** True when the shown value is creator-applied (vs an engine suggestion). */
+  applied: boolean
+  pending: boolean
+  onApply: () => void
+  onEdit: () => void
+}) {
   return (
-    <div className="mt-3 rounded-md border border-default bg-surface p-3 text-xs" data-testid="explain-clip-card">
-      <div className="mb-2 font-semibold text-fg">Why this clip</div>
-      {mutation.isPending && <p className="text-muted">Generating…</p>}
-      {mutation.isError && (
-        <p className="text-danger">Could not load explanation. Try again.</p>
-      )}
-      {mutation.data && (
+    <div className="flex items-center gap-2 py-1" data-testid={`metadata-row-${label.toLowerCase()}`}>
+      <span className="w-9 shrink-0 text-label uppercase tracking-[0.04em] text-subtle">
+        {label}
+      </span>
+      {value ? (
         <>
-          <p className="mb-2 leading-relaxed text-fg">{mutation.data.explanation}</p>
-          <p className="mb-1 text-subtle">
-            Principle: <span className="text-accent-text">{mutation.data.cited_principle}</span>
-          </p>
-          <p className="text-subtle italic">{mutation.data.disclaimer}</p>
+          <span className="min-w-0 flex-1 truncate text-xs text-fg" title={value}>
+            {value}
+          </span>
+          {applied ? (
+            <span className="inline-flex shrink-0 items-center gap-1 text-xs text-success">
+              <Check className={ICON_SIZE.xs} aria-hidden="true" /> Applied
+            </span>
+          ) : (
+            <span className="inline-flex shrink-0 items-center gap-1 text-xs text-subtle">
+              Suggested ·
+              <button
+                onClick={onApply}
+                disabled={pending}
+                className="text-accent-text hover:underline disabled:opacity-50"
+              >
+                {pending ? 'Applying…' : 'Apply'}
+              </button>
+            </span>
+          )}
         </>
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-xs text-subtle">—</span>
       )}
+      <button
+        onClick={onEdit}
+        className="shrink-0 text-xs text-accent-text underline-offset-2 hover:underline"
+        aria-label={`Edit ${label.toLowerCase()}`}
+      >
+        Edit
+      </button>
     </div>
   )
 }
 
-// ── WhyThisClip (Issue 94 + 322 + 323 + 325) ─────────────────────────────────
+// ── ClipMetadataPanel (L26 Issue 424 — the metadata half of WhyThisClip) ─────
 
-// Issue 94 transparency: the named principle + Claude's reasoning + score/timing
-// the engine cited. The honest fit tier leads; the raw score stays below as the
-// transparency detail (fit estimate, not a promise).
-// Issues 322/323/325 add on-demand suggestion cards (lazy — no request until clicked).
-export function WhyThisClip({ clip }: { clip: ReviewClip }) {
-  const setupStart = clip.setup_start_s ?? clip.start_s
-  // Issue 373: a creator-made selection was never engine-scored — honest
-  // provenance framing instead of a principle citation + fit tier.
-  const isCreatorClip = clip.origin === 'creator'
+// The clip's publish metadata, compacted: title and hook are ONE truncating row
+// each, value precedence `applied_* ?? suggested_*` (creator-typed always wins;
+// the engine's pipeline drafts fill in behind — Issue 417). Apply promotes a
+// suggestion via the EXISTING useApplyClipMetadata PATCH; Edit opens the
+// applied-field editors. The on-demand LLM endpoints live on under "More
+// suggestions" as Regenerate, disclaimers intact. When no suggested_* exist
+// (Track A not landed / older rows) the rows fall back to today's behavior —
+// empty value, type-it-yourself — with no "Soon" placeholders.
+export function ClipMetadataPanel({ clip }: { clip: ReviewClip }) {
+  const apply = useApplyClipMetadata(clip)
+  const [applyError, setApplyError] = useState('')
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [editingDescription, setEditingDescription] = useState(false)
+
+  const title = clip.applied_title ?? clip.suggested_title ?? null
+  const hook = clip.applied_description ?? clip.suggested_description ?? null
+
+  function applySuggestedTitle() {
+    const suggested = clip.suggested_title
+    if (!suggested) return
+    if (suggested.length > TITLE_MAX_CHARS) {
+      setApplyError(`Titles are capped at ${TITLE_MAX_CHARS} characters on YouTube.`)
+      return
+    }
+    setApplyError('')
+    apply.mutate({ applied_title: suggested })
+  }
+
+  function applySuggestedDescription(text: string | null | undefined) {
+    if (!text) return
+    if (utf8ByteLength(text) > DESCRIPTION_MAX_BYTES) {
+      setApplyError(`Descriptions are capped at ${DESCRIPTION_MAX_BYTES} bytes on YouTube.`)
+      return
+    }
+    setApplyError('')
+    apply.mutate({ applied_description: text })
+  }
+
   return (
-    <div className="text-sm">
-      <div className="mb-3 flex items-center justify-between gap-3 border-b border-default pb-2">
-        {isCreatorClip ? (
-          <Badge variant="muted" casing="sentence">
-            Your selection
-          </Badge>
-        ) : (
-          <>
-            {/* Was `[principle] Open Loop` in bracketed monospace — which reads as
-                a log line, and a log line in a product surface reads as
-                unfinished. The tier leads; the principle is a named badge. */}
-            <Badge
-              variant="accent"
-              casing="sentence"
-              data-testid="principle-badge"
-              title="The storytelling principle this clip was selected for."
-            >
-              {clip.principle || '—'}
-            </Badge>
-            <FitBadge tier={fitTier(clip.score)} />
-          </>
-        )}
-      </div>
-      <div className="leading-relaxed text-fg">
-        {isCreatorClip
-          ? 'Created by you from the source timeline — not engine-scored.'
-          : clip.reasoning ||
-            'No reasoning recorded for this clip. The scoring engine still ranked it — the explanation is just not on file.'}
-      </div>
-      {/* The raw float and the setup→peak→end readout are internal
-          representations. They stay REACHABLE — the honesty constraint requires
-          the estimate framing to be available, and the wording below is
-          unchanged — but the fit tier in the header is what leads. */}
-      <div className="mt-3 border-t border-default pt-3">
-        <Disclosure summary="Scoring details">
-          <div className="flex justify-between font-mono text-mono text-muted">
-            <span>Score (fit estimate, not a guarantee)</span>
-            <strong className="text-fg">{clip.score != null ? clip.score.toFixed(2) : '—'}</strong>
-          </div>
-          <div className="flex justify-between font-mono text-mono text-muted">
-            <span>Setup → peak → end</span>
-            <strong className="text-fg">
-              {setupStart.toFixed(1)}s → {(clip.peak_s ?? clip.start_s).toFixed(1)}s →{' '}
-              {clip.end_s.toFixed(1)}s
-            </strong>
+    <Card className="p-4" data-testid="clip-metadata-panel">
+      <h3 className="mb-2 text-label uppercase tracking-[0.06em] text-muted">Publish metadata</h3>
+
+      {editingTitle ? (
+        <AppliedTitleField clip={clip} autoEdit onClose={() => setEditingTitle(false)} />
+      ) : (
+        <MetadataRow
+          label="Title"
+          value={title}
+          applied={clip.applied_title != null}
+          pending={apply.isPending}
+          onApply={applySuggestedTitle}
+          onEdit={() => setEditingTitle(true)}
+        />
+      )}
+
+      {editingDescription ? (
+        <AppliedDescriptionField clip={clip} autoEdit onClose={() => setEditingDescription(false)} />
+      ) : (
+        <MetadataRow
+          label="Hook"
+          value={hook}
+          applied={clip.applied_description != null}
+          pending={apply.isPending}
+          onApply={() => applySuggestedDescription(clip.suggested_description)}
+          onEdit={() => setEditingDescription(true)}
+        />
+      )}
+
+      {applyError && <p className="mt-1 text-xs text-danger">{applyError}</p>}
+      {apply.isError && <p className="mt-1 text-xs text-danger">Could not apply — try again.</p>}
+
+      <div className="mt-2 border-t border-default pt-2">
+        <Disclosure summary="More suggestions">
+          {clip.suggested_hook && (
+            <div className="mb-2 flex items-start gap-1 text-xs">
+              <span className="shrink-0 text-subtle">Suggested hook:</span>
+              <span className="flex-1 text-fg">{clip.suggested_hook}</span>
+              <ApplyButton
+                applied={clip.applied_description === clip.suggested_hook}
+                pending={apply.isPending}
+                onApply={() => applySuggestedDescription(clip.suggested_hook)}
+              />
+              <CopyButton text={clip.suggested_hook} />
+            </div>
+          )}
+          {/* Issues 322/323 — the on-demand generators, now the Regenerate path. */}
+          <div data-testid="clip-action-row" className="flex flex-wrap gap-2">
+            <RegenerateTitlesCard clip={clip} />
+            <RegenerateCaptionHooksCard clip={clip} />
           </div>
         </Disclosure>
       </div>
-
-      {/* Issue 325 — expandable Why-This-Clip narrative */}
-      <ExplainClipCard clipId={clip.id} />
-
-      {/* Issues 322/323 — on-demand title + caption suggestions */}
-      <div
-        data-testid="clip-action-row"
-        className="mt-3 flex flex-wrap gap-2 border-t border-default pt-3"
-      >
-        <TitleSuggestionsCard clip={clip} />
-        <CaptionHooksCard clip={clip} />
-      </div>
-    </div>
+    </Card>
   )
 }

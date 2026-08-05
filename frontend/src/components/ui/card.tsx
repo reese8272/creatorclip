@@ -24,6 +24,9 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 export function Card({ className, level = 'panel', interactive, ...props }: CardProps) {
   return (
     <div
+      // Structural hook for the one-primary-panel-per-screen rule (docs/UI.md
+      // "Hierarchy") — page tests count [data-elevation="primary"].
+      data-elevation={level}
       className={cn(
         'border shadow-sm inset-shadow-highlight',
         level === 'primary'

@@ -14,6 +14,7 @@ import type {
   Balance,
   BrandKit,
   ClipTranscript,
+  CropTrack,
   CurrentUser,
   DataGate,
   DnaResponse,
@@ -119,6 +120,12 @@ const REVIEW_CLIPS: ReviewClipListResponse = {
       cleaned_render_uri: null,
       applied_title: null,
       applied_description: null,
+      // L26 (Issue 417 contract): pipeline-suggested metadata, inert until the
+      // ClipMetadataPanel consumes it (Issue 424).
+      suggested_title: 'Watch This Keyboard Come Alive',
+      suggested_description:
+        'The moment the hand-built board powers on for the first time. #Shorts',
+      suggested_hook: 'It actually clicks on the downstroke',
     },
     {
       id: 'c2',
@@ -132,7 +139,10 @@ const REVIEW_CLIPS: ReviewClipListResponse = {
       principle: 'Payoff Proximity',
       reasoning: 'The build pays off within seconds of the cut-in, rewarding the scroll-stop fast.',
       render_status: 'done',
-      render_uri: null,
+      // Rendered so the crop-track overlay (Issue 426) has a playable host: c2
+      // is the ONE tracked clip; c1 stays the 404 case. Like c1, the path
+      // returns JSON, not media — <video> load noise is BENIGN-filtered.
+      render_uri: '/clips/c2/download',
       cleaned_render_uri: null,
       applied_title: null,
       applied_description: null,
@@ -393,6 +403,32 @@ const BRAND_KIT: BrandKit = {
   aspect: null,
 }
 
+// Crop track for c2 — the ONE tracked clip (L26 cross-track contract, Issue
+// 421 wire shape; consumed by the Issue 426 overlay). `x` values are clamped
+// LEFT edges in source px (max = 1920 - 608 = 1312); the cut at t=18.4 is a
+// speaker-change jump, so the preview must SNAP there, never lerp across it.
+const CROP_TRACK: CropTrack = {
+  version: 1,
+  mode: 'speaker_cut',
+  source: { width: 1920, height: 1080 },
+  crop: { width: 608, height: 1080 },
+  origin_s: 410,
+  duration_s: 38,
+  keyframes: [
+    { t: 0, x: 120 },
+    { t: 8, x: 120 },
+    { t: 12, x: 240 },
+    { t: 18, x: 240 },
+    { t: 18.4, x: 960 },
+    { t: 30, x: 960 },
+    { t: 38, x: 1010 },
+  ],
+  cuts: [{ t: 18.4, from_x: 240, to_x: 960, speaker: 1 }],
+  shots: [{ t: 18.4 }],
+  speakers: { count: 2, mapping_confidence: 0.74 },
+  meta: { sample_fps: 5, fallback: false },
+}
+
 // Word-level transcript for the short-form Editor (GET /clips/{id}/transcript)
 // so the transcript/timeline surface renders instead of the empty state.
 const TRANSCRIPT: ClipTranscript = {
@@ -543,6 +579,14 @@ async function dispatch(route: Route, seed: Seed, ctx: MockCtx): Promise<void> {
   // Word-level clip transcript for the short-form Editor (Issue 307).
   if (method === 'GET' && /^\/clips\/[^/]+\/transcript$/.test(pathname))
     return json(route, TRANSCRIPT)
+
+  // Crop track (L26 contract, Issue 421/426): c2 is the one tracked clip; every
+  // other clip — c1 included — 404s with the contract's structured code, the
+  // normal pre-pipeline state the overlay must render NOTHING for.
+  if (method === 'GET' && /^\/clips\/[^/]+\/crop-track$/.test(pathname))
+    return pathname === '/clips/c2/crop-track'
+      ? json(route, CROP_TRACK)
+      : json(route, { detail: { code: 'no_crop_track', message: 'No crop track for this clip' } }, 404)
 
   // Trim-cut re-render (Wave-1 trim-rerender lane): TaskQueued-shaped 202
   // mirroring routers/review.py trim_render.

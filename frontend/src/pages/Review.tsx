@@ -2,18 +2,22 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import { STAGE_CELL } from '@/lib/toolLayout'
 import { ToolMain, ToolShell } from '@/components/layout/ToolShell'
 import { Chip } from '@/components/Chip'
 import { ChipPersonalizing } from '@/components/chip/ChipStates'
-import { ClipPlayer } from '@/components/review/ClipPlayer'
+import { ClipCase } from '@/components/review/ClipCase'
+import { ClipMetadataPanel } from '@/components/review/ClipMetadataPanel'
 import { PublishPanel } from '@/components/review/PublishPanel'
-import { WhyThisClip } from '@/components/review/WhyThisClip'
+import { TrimFilmstrip } from '@/components/review/TrimFilmstrip'
 import { YourCall } from '@/components/review/YourCall'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { StyleReview } from '@/components/review/StyleReview'
 import { GenerateClipsButton, VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
+import { ShortStage } from '@/components/stage/ShortStage'
 import { Button } from '@/components/ui/button'
 import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '@/types'
 import { ArrowLeft, ArrowRight } from '@/components/ui/icon'
@@ -80,62 +84,57 @@ function ReviewClipView({
   // overstate the filmstrip/trim range for setup clips.
   const clipDur = clip.end_s - (clip.setup_start_s ?? clip.start_s)
   const [trim, setTrim] = useState({ start: 0, end: clipDur })
+  // Coalesced playhead (~4Hz) for the filmstrip's position marker — the same
+  // channel the Editor page uses; per-frame animation goes through
+  // subscribeTime, never page state.
+  const [currentTime, setCurrentTime] = useState(0)
 
-  // Three regions at lg (Issue 389): the argued case · the media · the decision.
-  // Promoting "Why this clip" out of the rail into its own column is what removes
-  // the 1440px dead space without inventing a feature — it is the most-read
-  // content on the page and it was sharing a rail with three other cards.
-  // grid-rows-[minmax(0,1fr)] is the grid analogue of min-h-0.
+  // Three regions at lg (L26 Issue 424): the argued case · the STAGE · the
+  // decision. DOM order is mobile-first (stage → decisions → case) per the
+  // stacked layout below lg; explicit col/row starts place them visually
+  // case | stage | decisions at lg. grid-rows-[minmax(0,1fr)] is the grid
+  // analogue of min-h-0.
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(280px,1.1fr)_auto_minmax(300px,26rem)] lg:grid-rows-[minmax(0,1fr)]">
-      {/* ── A · The case for this clip ── */}
-      <section
-        data-tool-scroll
-        aria-label="Why this clip"
-        className="min-h-0 lg:overflow-y-auto"
-      >
-        <CollapsibleTool
-          defaultOpen
-          plain
-          title={
-            <span className="flex items-center gap-2">
-              <Chip pose="think" size={24} />
-              Why this clip
-            </span>
-          }
-        >
-          <WhyThisClip clip={clip} />
-        </CollapsibleTool>
-
-        {/* Scoring CONTEXT, not a decision — so it lives under the case, not in
-            the actions rail. Moving it here also fills the void below the case
-            card that left column A ~60% empty canvas at 1080p (Issue 412). */}
-        {personalization && <PersonalizationCard status={personalization} />}
-      </section>
-
-      {/* ── B · The media — the ONE primary panel (L2), on an `auto` track ──
-          w-fit: the clip is 9:16, so a stretched card would frame a large empty
-          region beside the player — dominance should come from weight, not from
+    <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(260px,24rem)_minmax(0,1fr)_minmax(300px,26rem)] lg:grid-rows-[minmax(0,1fr)]">
+      {/* ── B · The stage — the ONE primary panel (L2). STAGE_CELL makes this
+          cell a size container: the stage derives the media size from the
+          cell's own height budget (the sizing inversion) instead of a page-
+          chrome subtraction. w-fit card: dominance from weight, not from
           enclosing dead space. */}
-      <section aria-label="Clip preview" className="flex min-h-0 justify-center lg:overflow-y-auto">
-        <Card level="primary" className="h-fit w-fit p-4">
-          <ClipPlayer
-            clip={clip}
-            trimStart={trim.start}
-            trimEnd={trim.end}
-            onTrimChange={(start, end) => setTrim({ start, end })}
-            onNext={onAdvance}
-          />
-        </Card>
+      <section
+        aria-label="Clip preview"
+        className={cn(
+          'flex min-h-0 justify-center lg:col-start-2 lg:row-start-1 lg:overflow-y-auto',
+          STAGE_CELL,
+        )}
+      >
+        <ShortStage
+          clip={clip}
+          autoPlay
+          onTimeChange={setCurrentTime}
+          below={
+            <TrimFilmstrip
+              duration={clipDur}
+              trimStart={trim.start}
+              trimEnd={trim.end}
+              currentTime={currentTime}
+              onChange={(start, end) => setTrim({ start, end })}
+            />
+          }
+        />
       </section>
 
-      {/* ── C · Your call ── */}
+      {/* ── C · Your call — the decision rail ── */}
       <section
         data-tool-scroll
         aria-label="Clip actions"
-        className="flex min-h-0 flex-col gap-4 lg:overflow-y-auto"
+        className="flex min-h-0 flex-col gap-4 lg:col-start-3 lg:row-start-1 lg:overflow-y-auto"
       >
         <YourCall clip={clip} trimStart={trim.start} trimEnd={trim.end} onAdvance={onAdvance} />
+
+        {/* The packaging: title/hook compacted to one truncating row each,
+            suggestions behind a disclosure (Issue 424). */}
+        <ClipMetadataPanel clip={clip} />
 
         {/* Collapsed by default. A rail of four open, equally-weighted cards is
             the composition problem; the strongest lever for making a secondary
@@ -163,6 +162,31 @@ function ReviewClipView({
             Refine in editor <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Button>
         </Card>
+      </section>
+
+      {/* ── A · The case for this clip ── */}
+      <section
+        data-tool-scroll
+        aria-label="Why this clip"
+        className="min-h-0 lg:col-start-1 lg:row-start-1 lg:overflow-y-auto"
+      >
+        <CollapsibleTool
+          defaultOpen
+          plain
+          title={
+            <span className="flex items-center gap-2">
+              <Chip pose="think" size={24} />
+              Why this clip
+            </span>
+          }
+        >
+          <ClipCase clip={clip} />
+        </CollapsibleTool>
+
+        {/* Scoring CONTEXT, not a decision — so it lives under the case, not in
+            the actions rail. Moving it here also fills the void below the case
+            card that left column A ~60% empty canvas at 1080p (Issue 412). */}
+        {personalization && <PersonalizationCard status={personalization} />}
       </section>
     </div>
   )
