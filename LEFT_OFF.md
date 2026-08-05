@@ -1,9 +1,12 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-05 (evening) · **Branch:** `main` @ `4e03269` + the ENTIRE 427–430 wave
-**UNCOMMITTED** (45 files: engine/render/config/frontend/docs + 5 new files) · in sync with
-`origin/main` until this wave is committed/pushed
-**Prod:** `https://autoclip.studio` — still running the pre-wave build (Issue 395 direct-to-R2 live).
+**Last updated:** 2026-08-05 (evening) · **Branch:** `main` @ `2797385` (wave committed + pushed) ·
+working tree clean after this close-out · in sync with `origin/main`
+**Prod:** `https://autoclip.studio` — **the 427–430 wave IS DEPLOYED AND LIVE** (docker-publish
+31034922676 green in 7m42s incl. the new mediapipe layer; deploy 31035542194 green; `/health` 200;
+worker imports `mediapipe 1.0.0` + `cv2 4.13.0`; live config verified: pool 12 / signal 12 /
+LLM 6 / top-8 render / Opus 5 / camera-region flag off). The VM `.env` had `CLIPS_PER_VIDEO_DEFAULT=8`
+pinned — updated to 12 and app+worker recreated.
 **Git note:** `stash@{0}` remains the owner's own "wip LEFT_OFF before research-branch checkout"
 stash — popping it onto this file WILL conflict; resolve by hand or drop deliberately.
 
@@ -14,36 +17,28 @@ stash — popping it onto this file WILL conflict; resolve by hand or drop delib
 ## CURRENT FOCUS
 
 **The Shorts clip-quality wave (Issues 427–430 + Opus 5 + 12-clip pool + caption position +
-Issue 422 unblock) is BUILT with all local gates green — it needs commit → push → deploy →
-live verification.** Ten rulings in `docs/DECISIONS.md` (2026-08-05 clip-quality wave entry);
-session log in `docs/PROJECT_STATE.md` top entry.
+Issue 422 unblock) is DEPLOYED TO PROD — what remains is live verification on a real video.**
+Ten rulings in `docs/DECISIONS.md` (2026-08-05 clip-quality wave entry); session log in
+`docs/PROJECT_STATE.md` top entry.
 
 ## → NEXT ACTIONS (in order)
 
-1. **Review + commit the wave** (working tree holds everything; suggested shape: one feature
-   commit). New files: `clip_engine/sentence_snap.py`, `clip_engine/camera_region.py`,
-   `tests/test_sentence_snap.py`, `tests/test_camera_region.py`, 3 eval fixtures under
-   `tests/eval/scenarios/`. Then `git push` → **watch `gh run list`**: this wave flips
-   `INSTALL_REFRAME` to true (mediapipe 1.0.0 now installs into the image) — **a failed image
-   build silently SKIPS deploy**, and this is the first build exercising the new pin. If the
-   image build fails on mediapipe/opencv resolution, the quick revert is
-   `ARG INSTALL_REFRAME=false` in the Dockerfile (code needs nothing else).
-2. **After deploy: regenerate clips on a real video** (audit video `e290e6f4` purges ~2026-08-08;
+1. **Live-verify on a real upload** (audit video `e290e6f4` purges ~2026-08-08;
    re-upload the 273 MB podcast if gone) and verify: **12 persisted clips / top 8 rendered**;
    every `setup_start_s` on a sentence start (psql audit method below); no contained duplicate
    pair; no clip > 90 s; hooks match the first ~5 s of speech; Opus 5 token logs + cache hits
    (`cache_read_input_tokens > 0` on the second video).
-3. **Issue 427 spot-check:** re-render one clip → presign → frame-extract → captions sit in the
+2. **Issue 427 spot-check:** re-render one clip → presign → frame-extract → captions sit in the
    lower band off the face; try `caption_position` top/middle/bottom from the CaptionStylePanel
    and the brand kit. Then check the last 427 acceptance box in `docs/issues.md`.
-4. **Issue 430 staging flip:** on the VM set `CAMERA_REGION_DETECT_ENABLED=true` (staging
+3. **Issue 430 staging flip:** on the VM set `CAMERA_REGION_DETECT_ENABLED=true` (staging
    compose), render the produced-layout podcast source, frame-check that no third-party chrome
    is truncated → flip prod → check the last 430 box.
-5. **Issue 422 staging checklist** (`docs/DEPLOYMENT.md` § staging rollout): step 0 is RESOLVED
-   (mediapipe 1.0.0); unlock #1 evidence comes free with the first green image build
-   (`import mediapipe` + `_create_face_detector()` in the worker container). Unlocks #2–#4 need
+4. **Issue 422 staging checklist** (`docs/DEPLOYMENT.md` § staging rollout): step 0 is RESOLVED
+   (mediapipe 1.0.0); unlock #1 half-verified live 2026-08-05 (`import mediapipe` → 1.0.0 in
+   the prod worker; still record `_create_face_detector() is not None`). Unlocks #2–#4 need
    the user's 2-speaker fixture on staging; flags stay off in prod until sign-off.
-6. **Parked:** Issue 431 ("Generate more clips" — filed, not built) · Issue-395 live drills
+5. **Parked:** Issue 431 ("Generate more clips" — filed, not built) · Issue-395 live drills
    (>2 GB, reload-resume, session-expiry) · operator punch-list (`docs/GO_LIVE.md`): #29 OAuth
    verification · #26/#28 friend beta · #282 uptime monitor · #255 key escrow.
 
