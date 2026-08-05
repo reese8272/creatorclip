@@ -363,6 +363,13 @@ class Settings(BaseSettings):
     # fall back to frame-center. Ignored when ACTIVE_SPEAKER_REFRAME_ENABLED=false.
     MEDIAPIPE_FACE_MODEL_PATH: str = ""
 
+    # scdet scene-change threshold for shot detection (Issue 419). ffmpeg's
+    # documented 0–100 scale; 10 is the filter's own suggested starting point —
+    # low enough to catch every hard cut in talking-head/multicam footage,
+    # high enough to ignore in-shot motion. Tune UP if slides/graphics false-
+    # positive on staging footage.
+    SHOT_DETECT_SCDET_THRESHOLD: float = 10.0
+
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     # ── Shortlist mode (Issue 377) ──────────────────────────────────────────────
     # How many of the ranked candidates the Review surface argues a case for by
