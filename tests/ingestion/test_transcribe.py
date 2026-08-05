@@ -44,14 +44,29 @@ def test_deepgram_prerecorded_options_use_valid_sdk_kwargs():
     Regression: `words=True` is not a valid Deepgram request param and raised
     TypeError('unexpected keyword argument words') on every prod upload. The
     mocked transcribe tests below can't see it — they replace PrerecordedOptions
-    with a MagicMock that swallows any kwargs. This builds it for real."""
+    with a MagicMock that swallows any kwargs. This builds it for real.
+
+    Extended for Issue 418: `diarize` must ALSO be a real SDK 3.7.7 field —
+    the same outage class would otherwise recur on every diarized upload."""
     pytest.importorskip("deepgram")
+    from config import settings
     from ingestion.transcribe import _deepgram_prerecorded_options
 
     opts = _deepgram_prerecorded_options()  # TypeErrors here if a kwarg is invalid
     assert opts.model == "nova-3"
     assert opts.smart_format is True
     assert opts.utterances is True
+    assert opts.diarize is settings.TRANSCRIPTION_DIARIZE_ENABLED
+
+
+def test_deepgram_diarize_respects_kill_switch(monkeypatch):
+    """TRANSCRIPTION_DIARIZE_ENABLED=False must be forwarded as diarize=False."""
+    pytest.importorskip("deepgram")
+    from config import settings
+    from ingestion.transcribe import _deepgram_prerecorded_options
+
+    monkeypatch.setattr(settings, "TRANSCRIPTION_DIARIZE_ENABLED", False)
+    assert _deepgram_prerecorded_options().diarize is False
 
 
 # ── mip_opt_out enforcement ───────────────────────────────────────────────────
@@ -258,3 +273,249 @@ def test_subprocessors_md_names_required_vendors():
     required_vendors = ["Anthropic", "Voyage AI", "Deepgram", "Cloudflare", "Stripe", "Google"]
     for vendor in required_vendors:
         assert vendor in content, f"SUBPROCESSORS.md is missing vendor: {vendor}"
+
+
+# ── Issue 418: speaker diarization — additive normalization ──────────────────
+
+
+def _diarized_deepgram_raw() -> dict:
+    """A trimmed diarized Deepgram response (utterances path, 2 speakers)."""
+    return {
+        "results": {
+            "utterances": [
+                {
+                    "start": 0.0,
+                    "end": 1.2,
+                    "transcript": "Hi there.",
+                    "speaker": 0,
+                    "words": [
+                        {
+                            "word": "hi",
+                            "punctuated_word": "Hi",
+                            "start": 0.0,
+                            "end": 0.5,
+                            "speaker": 0,
+                            "speaker_confidence": 0.91,
+                        },
+                        {
+                            "word": "there",
+                            "punctuated_word": "there.",
+                            "start": 0.5,
+                            "end": 1.2,
+                            "speaker": 0,
+                            "speaker_confidence": 0.88,
+                        },
+                    ],
+                },
+                {
+                    "start": 1.4,
+                    "end": 2.0,
+                    "transcript": "Hello.",
+                    "speaker": 1,
+                    "words": [
+                        {
+                            "word": "hello",
+                            "punctuated_word": "Hello.",
+                            "start": 1.4,
+                            "end": 2.0,
+                            "speaker": 1,
+                            "speaker_confidence": 0.97,
+                        },
+                    ],
+                },
+            ]
+        }
+    }
+
+
+def test_normalize_deepgram_diarized_adds_speaker_fields():
+    from ingestion.transcribe import _normalize_deepgram
+
+    out = _normalize_deepgram(_diarized_deepgram_raw())
+    segs = out["segments"]
+    assert [s["speaker"] for s in segs] == [0, 1]
+    first_word = segs[0]["words"][0]
+    assert first_word["speaker"] == 0
+    assert first_word["speaker_confidence"] == 0.91
+    assert segs[1]["words"][0]["speaker"] == 1
+
+
+def test_normalize_deepgram_undiarized_omits_speaker_keys():
+    """No diarization in the response → the pre-418 shape EXACTLY (keys omitted,
+    never null-filled) — old-transcript compatibility is the load-bearing rule."""
+    from ingestion.transcribe import _normalize_deepgram
+
+    raw = _diarized_deepgram_raw()
+    for u in raw["results"]["utterances"]:
+        u.pop("speaker")
+        for w in u["words"]:
+            w.pop("speaker")
+            w.pop("speaker_confidence")
+    out = _normalize_deepgram(raw)
+    for seg in out["segments"]:
+        assert "speaker" not in seg
+        for w in seg["words"]:
+            assert "speaker" not in w
+            assert "speaker_confidence" not in w
+
+
+def test_normalize_deepgram_tolerates_partial_speaker_fields():
+    """A word with speaker but no confidence (or vice versa) must not KeyError."""
+    from ingestion.transcribe import _normalize_deepgram
+
+    raw = _diarized_deepgram_raw()
+    words = raw["results"]["utterances"][0]["words"]
+    words[0].pop("speaker_confidence")
+    words[1].pop("speaker")
+    out = _normalize_deepgram(raw)
+    w0, w1 = out["segments"][0]["words"]
+    assert w0["speaker"] == 0 and "speaker_confidence" not in w0
+    assert "speaker" not in w1 and w1["speaker_confidence"] == 0.88
+
+
+def test_normalize_deepgram_channels_path_carries_word_speakers():
+    """The no-utterances fallback path must also normalize per-word speakers."""
+    from ingestion.transcribe import _normalize_deepgram
+
+    raw = {
+        "results": {
+            "channels": [
+                {
+                    "alternatives": [
+                        {
+                            "transcript": "hi hello",
+                            "words": [
+                                {"word": "hi", "start": 0.0, "end": 0.5, "speaker": 0},
+                                {"word": "hello", "start": 0.5, "end": 1.0, "speaker": 1},
+                            ],
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    out = _normalize_deepgram(raw)
+    seg = out["segments"][0]
+    # Mixed speakers in the single synthetic segment → NO segment-level key.
+    assert "speaker" not in seg
+    assert [w["speaker"] for w in seg["words"]] == [0, 1]
+
+
+def test_assemblyai_letter_labels_map_to_ints():
+    """AssemblyAI labels speakers "A"/"B"/… — normalized to 0-based ints."""
+    from ingestion.transcribe import _normalize_assemblyai
+
+    def _word(text: str, start: int, end: int, speaker: str | None) -> MagicMock:
+        w = MagicMock()
+        w.text, w.start, w.end, w.speaker = text, start, end, speaker
+        return w
+
+    transcript = MagicMock()
+    transcript.text = "hi hello again"
+    transcript.words = [
+        _word("hi", 0, 500, "A"),
+        _word("hello", 500, 1000, "B"),
+        _word("again", 1000, 1500, None),  # missing label → key omitted
+    ]
+    out = _normalize_assemblyai(transcript)
+    words = out["segments"][0]["words"]
+    assert words[0]["speaker"] == 0
+    assert words[1]["speaker"] == 1
+    assert "speaker" not in words[2]
+
+
+def test_assemblyai_speaker_int_mapping_edges():
+    from ingestion.transcribe import _assemblyai_speaker_int
+
+    assert _assemblyai_speaker_int("A") == 0
+    assert _assemblyai_speaker_int("Z") == 25
+    assert _assemblyai_speaker_int(3) == 3  # already an int passes through
+    assert _assemblyai_speaker_int(None) is None
+    assert _assemblyai_speaker_int("AA") is None  # unknown shape → omitted
+    assert _assemblyai_speaker_int("a") is None
+
+
+def test_assemblyai_transcribe_passes_speaker_labels_config():
+    """speaker_labels must ride the same kill-switch as Deepgram's diarize."""
+    transcript = MagicMock()
+    transcript.status = "completed"
+    transcript.words = []
+    transcript.text = ""
+    fake_aai = _make_fake_aai_module(transcript)
+
+    with (
+        patch.dict("sys.modules", {"assemblyai": fake_aai}),
+        patch("ingestion.transcribe.settings") as mock_settings,
+    ):
+        mock_settings.ASSEMBLYAI_API_KEY = "fake-key"
+        mock_settings.TRANSCRIPTION_HTTP_TIMEOUT_S = 30
+        mock_settings.TRANSCRIPTION_DIARIZE_ENABLED = True
+        from ingestion.transcribe import _transcribe_assemblyai
+
+        _transcribe_assemblyai("/fake/audio.wav")
+
+    fake_aai.TranscriptionConfig.assert_called_once_with(speaker_labels=True)
+    call = fake_aai.Transcriber.return_value.transcribe.call_args
+    assert call.args[1] is fake_aai.TranscriptionConfig.return_value
+
+
+# ── Issue 418: consumers ignore speaker fields (regression guards) ───────────
+#
+# The speaker fields are additive; captions and filler MUST produce
+# byte-identical output whether or not a transcript carries them.
+
+
+def _segments_with_and_without_speakers() -> tuple[list[dict], list[dict]]:
+    plain = [
+        {
+            "start": 0.0,
+            "end": 3.0,
+            "text": "well um this is a test sentence",
+            "words": [
+                {"word": "well", "start": 0.0, "end": 0.3},
+                {"word": "um", "start": 0.4, "end": 0.6},
+                {"word": "this", "start": 0.7, "end": 0.9},
+                {"word": "is", "start": 1.0, "end": 1.1},
+                {"word": "a", "start": 1.2, "end": 1.3},
+                {"word": "test", "start": 1.4, "end": 1.8},
+                {"word": "sentence", "start": 2.6, "end": 3.0},
+            ],
+        }
+    ]
+    import copy
+
+    speaker_bearing = copy.deepcopy(plain)
+    speaker_bearing[0]["speaker"] = 0
+    for i, w in enumerate(speaker_bearing[0]["words"]):
+        w["speaker"] = i % 2
+        w["speaker_confidence"] = 0.9
+    return plain, speaker_bearing
+
+
+def test_captions_output_identical_on_speaker_bearing_transcript(tmp_path):
+    """build_ass_subtitles (karaoke styles) must ignore speaker fields."""
+    from clip_engine.captions import VALID_STYLES, build_ass_subtitles
+
+    plain, speaker_bearing = _segments_with_and_without_speakers()
+    for style in sorted(VALID_STYLES):
+        out_a = tmp_path / f"plain_{style}.ass"
+        out_b = tmp_path / f"speaker_{style}.ass"
+        build_ass_subtitles(plain, style, 0.0, 3.0, out_a, 1080, 1920)
+        build_ass_subtitles(speaker_bearing, style, 0.0, 3.0, out_b, 1080, 1920)
+        assert out_a.exists() and out_b.exists(), f"style {style} produced no file"
+        assert out_a.read_bytes() == out_b.read_bytes(), (
+            f"caption style {style} output changed when speaker fields were present"
+        )
+
+
+def test_filler_cuts_identical_on_speaker_bearing_transcript():
+    """detect_cut_segments must ignore speaker fields."""
+    from clip_engine.filler import detect_cut_segments
+
+    plain, speaker_bearing = _segments_with_and_without_speakers()
+    cuts_plain = detect_cut_segments(plain[0]["words"], 0.0, 3.0)
+    cuts_speaker = detect_cut_segments(speaker_bearing[0]["words"], 0.0, 3.0)
+    assert [(c.start_s, c.end_s, c.reason) for c in cuts_plain] == [
+        (c.start_s, c.end_s, c.reason) for c in cuts_speaker
+    ]
+    assert cuts_plain, "fixture must actually produce at least one cut (um + silence)"

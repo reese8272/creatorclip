@@ -155,11 +155,13 @@ class Settings(BaseSettings):
     # base input rate (1h-TTL is 2×; callers using ttl:"1h" — e.g. clip_engine/scoring.py —
     # pass cache_write_multiplier=2.0 explicitly). Source: same pricing page. (cost ledger)
     COST_CACHE_WRITE_MULTIPLIER: float = 1.25
-    # Deepgram Nova-3 pre-recorded transcription cost per minute (pay-as-you-go).
-    # Prod transcribes with nova-3 (ingestion/transcribe.py) — the previous 0.0043
-    # figure was delisted nova-2 pricing and under-billed every minute (Issue 293).
-    # Source: deepgram.com/pricing (fetched 2026-07-02).
-    COST_PER_MIN_DEEPGRAM: float = 0.0077
+    # Deepgram Nova-3 pre-recorded transcription cost per minute (pay-as-you-go),
+    # INCLUDING the speaker-diarization add-on: $0.0077 base + $0.0020 diarize
+    # surcharge = $0.0097/min. Diarization defaults ON (Issue 418,
+    # TRANSCRIPTION_DIARIZE_ENABLED), so the all-in rate is the honest figure —
+    # the previous 0.0043 was delisted nova-2 pricing (Issue 293) and 0.0077
+    # omitted the surcharge. Source: deepgram.com/pricing (fetched 2026-08-04).
+    COST_PER_MIN_DEEPGRAM: float = 0.0097
     # Voyage AI voyage-3.5 embedding cost per million tokens.
     # Source: docs.voyageai.com/docs/pricing (fetched 2026-06-23).
     COST_PER_MTOK_VOYAGE: float = 0.06
@@ -179,7 +181,7 @@ class Settings(BaseSettings):
     # Version stamp for the price book. Update this string whenever any rate changes —
     # a version mismatch between a stored cost_estimate and this stamp signals a
     # rate-change event (FinOps Foundation cost-per-unit standard; finops.org/framework/phases/).
-    PRICE_BOOK_VERSION: str = "2026-07-02"
+    PRICE_BOOK_VERSION: str = "2026-08-04"
     # --- Pro chatbot (Issue 152) ---
     # Per-creator daily message cap — the load-bearing margin guard. Bounds
     # worst-case spend to ≈ CHAT_DAILY_MESSAGE_LIMIT × ~$0.04/heavy message per
@@ -222,6 +224,13 @@ class Settings(BaseSettings):
     # fail fast with a clear error rather than buffer a pathological file. A normal
     # 16 kHz mono WAV is ~115 MB/hour, so the default allows ~9h. (Issue 76)
     TRANSCRIPTION_MAX_MB: int = 1024
+    # Speaker diarization kill-switch (Issue 418). When True, hosted backends
+    # request per-word speaker labels (Deepgram `diarize`, AssemblyAI
+    # `speaker_labels`) and the normalizers add ADDITIVE `speaker` /
+    # `speaker_confidence` fields (keys omitted when absent — old transcripts
+    # and WhisperX carry no speaker fields and every consumer must tolerate
+    # that). Feeds the speaker-aware reframe ladder (clip_engine/speaker_map.py).
+    TRANSCRIPTION_DIARIZE_ENABLED: bool = True
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""
     WHISPER_MODEL: str = "large-v3"
