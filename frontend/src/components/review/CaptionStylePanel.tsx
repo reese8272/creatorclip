@@ -27,6 +27,14 @@ const BACKGROUND_OPTIONS: SelectOption[] = [
   { value: 'blur', label: 'Blur' },
   { value: 'black', label: 'Black' },
 ]
+// Issue 427 — where the captions sit in the frame. Default keeps them in the
+// lower band, below the speaker's face and above the Shorts UI overlays.
+const POSITION_OPTIONS: SelectOption[] = [
+  { value: '', label: 'Auto — lower band, avoids the face (default)' },
+  { value: 'top', label: 'Top — under the title area' },
+  { value: 'middle', label: 'Middle — centered on frame' },
+  { value: 'bottom', label: 'Bottom — lower band' },
+]
 
 // POST /clips/{id}/render response envelope (routers/clips.py RenderQueuedOut).
 interface RenderQueued {
@@ -52,6 +60,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
   const [zoomOnPeak, setZoomOnPeak] = useState(false)
   const [denoise, setDenoise] = useState(false)
   const [aspect, setAspect] = useState('')
+  const [captionPosition, setCaptionPosition] = useState('')
   const [status, setStatus] = useState('')
   const [rendering, setRendering] = useState(false)
 
@@ -91,6 +100,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
         setZoomOnPeak(kit.zoom_on_peak)
         setDenoise(kit.denoise)
         setAspect(kit.aspect ?? '')
+        setCaptionPosition(kit.caption_position ?? '')
       })
       .catch(() => {
         // Brand-kit load failure is non-fatal — keep empty defaults.
@@ -109,6 +119,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
           zoom_on_peak: zoomOnPeak,
           denoise: denoise,
           aspect: aspect || null,
+          caption_position: captionPosition || null,
         },
       })
       if (queued.stream_url) {
@@ -145,6 +156,17 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
           value={aspect}
           onValueChange={setAspect}
           options={ASPECT_OPTIONS}
+          size="sm"
+          className="w-[62%]"
+        />
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="caption-position">Caption position</label>
+        <Select
+          id="caption-position"
+          value={captionPosition}
+          onValueChange={setCaptionPosition}
+          options={POSITION_OPTIONS}
           size="sm"
           className="w-[62%]"
         />

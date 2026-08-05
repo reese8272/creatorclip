@@ -285,7 +285,7 @@ docker compose logs --tail 100 app worker
 - Google OAuth app verification completed (Issue 29 — external Google review, still open)
 - ✅ Account deletion (right-to-erasure: token revocation + media purge) — endpoint `DELETE /auth/me` plus the Profile "Danger zone" UI affordance (Issue 158)
 - Billing: ✅ beta model wired (Issue 21 minute packs + Stripe Checkout; webhook `payment_status` verification Issue 206; ledger reconciliation Issue 205; spend guard Issue 290). Plan tiers beyond minute packs remain an open product/pricing decision (Stage B in `docs/GO_LIVE.md`).
-- ✅ Eval harness hardened with adversarial/edge cases — Issue 199: 8 adversarial geometry scenarios (false-peak/cold-open/interrupted-setup/very-long-setup/two-beats/loud-aftermath/dead-air/no-transcript) + a ranking-aware fixture, an aggregate 100%-pass-rate gate, and `SCENARIO_FLOOR=14` (`tests/eval/scenarios/`, `tests/test_clip_engine.py`)
+- ✅ Eval harness hardened with adversarial/edge cases — Issue 199: 8 adversarial geometry scenarios (false-peak/cold-open/interrupted-setup/very-long-setup/two-beats/loud-aftermath/dead-air/no-transcript) + a ranking-aware fixture, an aggregate 100%-pass-rate gate, and a ratcheting scenario floor (`SCENARIO_FLOOR=21` as of 2026-08-05 — mid-sentence-open, LLM-length-clamp, and contained-duplicate fixtures added by Issues 428/429) (`tests/eval/scenarios/`, `tests/test_clip_engine.py`)
 
 ---
 

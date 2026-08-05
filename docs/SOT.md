@@ -132,14 +132,16 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── clip_engine/
 │   ├── window.py               # Rolling 60–90s context window
 │   ├── candidates.py           # Peak detection + backward look for setup start
-│   ├── scoring.py              # Multi-signal + DNA-weighted scoring (Claude + features)
-│   ├── ranking.py              # DNA-weighted + preference-model rerank; merges LLM moments pre-scoring + post-ranking trim (Issue 416)
-│   ├── merge.py                # Hybrid candidate merge — LLM moments ∪ signal peaks under signal-priority NMS (Issue 416)
-│   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex; flag-gated per-frame reframe path (Issue 189, ACTIVE_SPEAKER_REFRAME_ENABLED)
+│   ├── sentence_snap.py        # (NEW Issue 428) segment-aware sentence snapping: utterance-derived sentence index; post-extraction start/end snap (never-open-mid-sentence guard) + CLIP_TARGET_MAX_S 90s clamp for LLM windows
+│   ├── scoring.py              # Multi-signal + DNA-weighted scoring (Claude Opus 5 + features)
+│   ├── ranking.py              # DNA-weighted + preference-model rerank; merges LLM moments pre-scoring + suppress_contained (IoMin≥0.8 dedup, Issue 429) + post-ranking trim (Issue 416)
+│   ├── merge.py                # Hybrid candidate merge — LLM moments ∪ signal peaks under signal-priority NMS (Issue 416); sentence-snap + 90s clamp on LLM windows (Issue 428)
+│   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex; flag-gated per-frame reframe (Issue 189) + camera-region pre-crop (Issue 430, CAMERA_REGION_DETECT_ENABLED); Haar face BOX feeds caption avoidance (Issue 427)
+│   ├── camera_region.py        # (NEW Issue 430) cv2 temporal-variance camera-region detection for produced layouts (static chrome vs moving camera); fail-open gates keep plain sources byte-identical
 │   ├── reframe.py              # (Issue 189, extended Issue 420/421) speaker-aware dynamic crop: single-VideoCapture detection pass (BlazeFace boxes + keypoints + mouth patches) → shots/turns/mapping → plan_crop_directives (J-cut, snap, punch-in suppression) → segmented-EMA sendcmd + unified wire-contract track JSON (compute_dynamic_crop); lazy imports; gated by ACTIVE_SPEAKER_REFRAME_ENABLED (default False — staging pending, Issue 422)
 │   ├── shots.py                # (NEW Issue 419) shot-change detection: ffmpeg scdet pass (lavfi.scd.time from stderr) + numpy histogram-diff fallback over the 5fps samples; total failure → [] = one shot
 │   ├── speaker_map.py          # (NEW Issue 420) PURE speaker→face mapping: per-shot greedy-NN face tracks, diarized turns (gap-merge/backchannel absorb), mouth-motion energy, weighted-vote mapping w/ margin-ratio confidence, fallback ladder speaker_cut→face_pan→static
-│   ├── captions.py             # Animated word-level ASS subtitles (Issue 133 — bold_pop / gradient_slide / minimal via pysubs2 + libass)
+│   ├── captions.py             # Animated word-level ASS subtitles (Issue 133; Issue 427: 70%-band karaoke default, face avoidance, 3-word groups, caption_position top|middle|bottom via style_preset/brand kit)
 │   ├── filler.py               # Filler-word + silence cut-list generator (Issue 134 — Tier1 unconditional + Tier2 pause-flanked + 800ms silence w/150ms tail)
 │   └── edits.py                # User-supplied cut-list validator (Issue 135 — bounds, overlap, 5s/85% caps, sub-frame floor) for text-based editor
 │

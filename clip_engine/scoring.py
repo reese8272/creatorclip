@@ -392,16 +392,17 @@ async def score_candidates(
     vlog_llm_request(
         "clip_scoring",
         model=settings.ANTHROPIC_MODEL_SCORING,
-        # 1200 → 1800 (Issue 416): the merged pool is ≤8 signal + ≤4 LLM
-        # candidates — 50% more rows than the pre-merge cap needs headroom.
-        max_tokens=1800,
+        # 1800 → 8000 (2026-08-05): Opus 5 thinks by default and max_tokens caps
+        # thinking + response text together; the wider pool (≤12 signal + ≤6 LLM)
+        # also needs more response rows. Headroom, not a target.
+        max_tokens=8000,
         system=system_blocks,
         messages=[{"role": "user", "content": user_text}],
     )
     try:
         response = await _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_SCORING,
-            max_tokens=1800,
+            max_tokens=8000,
             system=system_blocks,  # type: ignore[arg-type]  # dict[str, Any] → TextBlockParam at runtime
             messages=[{"role": "user", "content": user_text}],
         )
@@ -432,14 +433,24 @@ async def score_candidates(
     )
     record_llm_metric(settings.ANTHROPIC_MODEL_SCORING, response.usage)
     warn_if_truncated(settings.ANTHROPIC_MODEL_SCORING, getattr(response, "stop_reason", None))
+    if getattr(response, "stop_reason", None) == "refusal":
+        # Opus 5 safety classifiers can decline (HTTP 200, empty content) —
+        # the "[]" default below keeps signal-derived scores intact.
+        logger.warning("clip_scoring: model returned stop_reason=refusal — keeping signal scores")
 
     if creator_id is not None and ledger_session_factory is not None:
         try:
+            from billing.ledger import model_rates
+
+            # Rates follow the CONFIGURED model (Opus 5 by default since the
+            # 2026-08-05 clip-quality upgrade) — hardcoded Sonnet rates would
+            # silently under-bill any other family.
+            rate_in, rate_out, _tier = model_rates(settings.ANTHROPIC_MODEL_SCORING)
             cost = _estimate_cost_usd(
                 _tokens_in,
                 _tokens_out,
-                settings.COST_PER_MTOK_IN_SONNET,
-                settings.COST_PER_MTOK_OUT_SONNET,
+                rate_in,
+                rate_out,
                 cache_read_tokens=_cache_read_tokens,
                 cache_creation_tokens=_cache_write_tokens,
                 # 2× write premium applies only when the ttl:"1h" marker was sent

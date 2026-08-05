@@ -19,7 +19,14 @@ note); locked in DECISIONS 2026-08-04, L26 decision 3.
 
 import logging
 
-from clip_engine.candidates import MIN_CLIP_S, snap_to_sentence_boundary
+from clip_engine.candidates import MIN_CLIP_S
+from clip_engine.sentence_snap import (
+    CLIP_TARGET_MAX_S,
+    build_sentence_index,
+    clamp_window_to_target,
+    snap_end,
+    snap_start,
+)
 from clip_engine.window import RESOLUTION_S, build_signal_array
 
 logger = logging.getLogger(__name__)
@@ -39,13 +46,16 @@ def _window_iou(a: dict, b: dict) -> float:
 def llm_moments_to_candidates(
     moments: list[dict],
     timeline: dict,
-    words: list[dict] | None = None,
+    segments: list[dict] | None = None,
 ) -> list[dict]:
     """Convert validated VideoContext moments into candidates.py-shaped dicts.
 
     Applies the same geometry discipline as ``extract_candidates``:
-      - cut points sentence-snapped via ``snap_to_sentence_boundary`` (#12
-        Clean Context Boundary) when word timings are available,
+      - cut points sentence-snapped via the segment-aware ``sentence_snap``
+        pass (#12 Clean Context Boundary) when transcript segments are
+        available (Issue 428),
+      - length hard-clamped to ``CLIP_TARGET_MAX_S`` at the latest sentence
+        end inside the target window (the 110 s live case — Issue 428),
       - bounds clamped to the timeline duration,
       - ``MIN_CLIP_S`` enforced (re-extend, then drop when impossible),
       - ``setup_start_s < peak_s`` invariant held.
@@ -66,16 +76,21 @@ def llm_moments_to_candidates(
 
     times, signal = build_signal_array(timeline)
     duration_s = float(timeline.get("duration_s", times[-1] if len(times) else 0.0))
-    events = timeline.get("events")
+    sentences = build_sentence_index(segments) if segments else []
 
     out: list[dict] = []
     for m in moments:
         start = float(m["start_s"])
         end = float(m["end_s"])
 
-        if words:
-            start = snap_to_sentence_boundary(start, words, "backward", timeline_events=events)
-            end = snap_to_sentence_boundary(end, words, "forward", timeline_events=events)
+        if sentences:
+            start = snap_start(start, sentences)
+            end = snap_end(end, sentences)
+
+        # Hard length clamp to the 60–90 s target (validate_context admits up to
+        # 120 s): cut at the latest sentence end inside the window, or the bare
+        # ceiling when no sentence index exists.
+        end = clamp_window_to_target(start, end, sentences, max_len_s=CLIP_TARGET_MAX_S)
 
         start = max(0.0, start)
         if duration_s > 0:

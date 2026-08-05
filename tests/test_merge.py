@@ -74,18 +74,64 @@ def test_min_clip_s_re_extends_then_drops() -> None:
     assert dropped == []
 
 
-def test_sentence_snapping_applied_when_words_present() -> None:
-    words = [
-        {"word": "before.", "start": 118.0, "end": 119.0},
-        {"word": "mid", "start": 150.0, "end": 150.5},
-        {"word": "done.", "start": 181.0, "end": 182.0},
-    ]
-    cands = llm_moments_to_candidates([_moment(120.0, 180.0)], _FLAT_TIMELINE, words=words)
+def _seg(words: list[tuple[str, float, float]]) -> dict:
+    return {
+        "start": words[0][1],
+        "end": words[-1][2],
+        "text": " ".join(w for w, _, _ in words),
+        "words": [{"word": w, "start": s, "end": e} for w, s, e in words],
+    }
+
+
+_STORY_SEGMENTS = [
+    _seg([("before.", 118.0, 119.0)]),
+    _seg(
+        [
+            ("It", 119.5, 119.7),
+            ("starts", 119.8, 121.0),
+            ("here.", 121.1, 122.0),
+            ("Then", 122.5, 123.0),
+            ("more.", 123.1, 178.0),
+            ("And", 178.5, 179.0),
+            ("ends.", 179.1, 182.0),
+        ]
+    ),
+]
+
+
+def test_sentence_snapping_applied_when_segments_present() -> None:
+    cands = llm_moments_to_candidates(
+        [_moment(120.0, 180.0)], _FLAT_TIMELINE, segments=_STORY_SEGMENTS
+    )
     assert len(cands) == 1
-    # Backward snap to the end of the previous sentence; forward snap to the
-    # next terminal-punct word (both within the 3s snap window).
-    assert cands[0]["setup_start_s"] == 119.0
+    # Start snaps back to its sentence start (119.5) with the 0.3 s lead-in
+    # floored at the previous sentence end (119.0); end finishes the sentence
+    # in progress (182.0).
+    assert cands[0]["setup_start_s"] == 119.2
     assert cands[0]["end_s"] == 182.0
+
+
+def test_llm_window_hard_clamped_to_target_max() -> None:
+    from clip_engine.sentence_snap import CLIP_TARGET_MAX_S
+
+    # A 110 s validated moment (validate_context admits up to 120 s) must
+    # emerge no longer than CLIP_TARGET_MAX_S — the live 960d9331 case.
+    cands = llm_moments_to_candidates([_moment(100.0, 210.0)], _FLAT_TIMELINE)
+    assert len(cands) == 1
+    assert cands[0]["end_s"] - cands[0]["setup_start_s"] <= CLIP_TARGET_MAX_S
+    assert cands[0]["end_s"] == 100.0 + CLIP_TARGET_MAX_S  # bare ceiling, no sentence index
+
+
+def test_llm_window_clamp_cuts_at_sentence_end() -> None:
+    segments = [
+        _seg([("One", 100.0, 100.4), ("beat.", 100.5, 140.0)]),
+        _seg([("Second", 141.0, 141.5), ("beat.", 141.6, 175.0)]),
+        _seg([("Third", 176.0, 176.5), ("beat.", 176.6, 230.0)]),
+    ]
+    cands = llm_moments_to_candidates([_moment(100.0, 210.0)], _FLAT_TIMELINE, segments=segments)
+    assert len(cands) == 1
+    # Latest sentence end within (100, 190] is 175.0 — sentence-aligned cut.
+    assert cands[0]["end_s"] == 175.0
 
 
 def test_empty_moments_no_op() -> None:
@@ -173,7 +219,8 @@ def test_twelve_principles_citable_and_consistent() -> None:
 
 async def test_payload_carries_origin_and_wrapped_llm_reason(mocker) -> None:
     """DNA-path payload: every entry carries origin; llm entries carry the
-    wrap_untrusted-wrapped llm_reason (user-turn only); max_tokens is 1800."""
+    wrap_untrusted-wrapped llm_reason (user-turn only); max_tokens is 8000
+    (Opus 5 thinks by default — the cap covers thinking + text, 2026-08-05)."""
     import clip_engine.scoring as scoring
 
     captured: dict = {}
@@ -200,7 +247,7 @@ async def test_payload_carries_origin_and_wrapped_llm_reason(mocker) -> None:
     sig = _signal_cand(300.0, 340.0, 320.0)
     await scoring.score_candidates([sig, llm], _FLAT_TIMELINE, dna_brief="A real DNA brief.")
 
-    assert captured["max_tokens"] == 1800
+    assert captured["max_tokens"] == 8000
     user_text = captured["messages"][0]["content"]
     payload = json.loads(user_text.split("Candidates:\n", 1)[1])
     origins = [e["origin"] for e in payload]
@@ -325,6 +372,90 @@ async def test_absent_context_is_byte_identical_to_today(mocker) -> None:
     )
     assert len(ranked) == 1
     assert merge_spy.call_count == 0
+
+
+# ── Post-ranking containment pass (Issue 429) ────────────────────────────────
+
+
+def _ranked(cands: list[dict], scores: list[float]) -> list[dict]:
+    from clip_engine.ranking import rank_candidates
+
+    for c, s in zip(cands, scores, strict=True):
+        c["score"] = s
+    return rank_candidates(cands)
+
+
+def test_contained_duplicate_dropped_cross_origin() -> None:
+    """The live pair: signal clip 1438.0–1481.2 sits ENTIRELY inside LLM clip
+    1390–1500 (IoU ≈ 0.39, under the NMS threshold; IoMin = 1.0)."""
+    from clip_engine.ranking import suppress_contained, window_containment
+
+    llm = _llm_cand(1390.0, 1500.0, 0.9)
+    signal = _signal_cand(1438.0, 1481.2, 1450.0)
+    assert window_containment(signal, llm) == pytest.approx(1.0)
+
+    out = suppress_contained(_ranked([llm, signal], [0.9, 0.5]))
+    assert len(out) == 1
+    assert out[0].get("origin") == "llm"
+    assert out[0]["rank"] == 1
+
+
+def test_partial_overlap_admitted_by_nms_is_kept() -> None:
+    """Two equal-length windows at IoU 0.5 reach IoMin ≈ 0.67 < 0.8 — the pass
+    never re-litigates what the signal-priority union deliberately kept."""
+    from clip_engine.ranking import suppress_contained
+
+    a = _signal_cand(0.0, 60.0, 30.0)
+    b = _signal_cand(20.0, 80.0, 50.0)  # 40 s overlap / 60 s shorter → 0.67
+    out = suppress_contained(_ranked([a, b], [0.8, 0.7]))
+    assert len(out) == 2
+
+
+def test_survivor_ranks_renumbered_dense() -> None:
+    from clip_engine.ranking import suppress_contained
+
+    outer = _signal_cand(100.0, 200.0, 150.0)
+    inner = _signal_cand(120.0, 180.0, 150.0)
+    tail = _signal_cand(300.0, 360.0, 330.0)
+    out = suppress_contained(_ranked([outer, inner, tail], [0.9, 0.8, 0.2]))
+    assert [(c["setup_start_s"], c["rank"]) for c in out] == [(100.0, 1), (300.0, 2)]
+
+
+def test_containment_threshold_pinned() -> None:
+    from clip_engine.ranking import _CONTAINMENT_THRESHOLD
+
+    assert _CONTAINMENT_THRESHOLD == 0.8
+
+
+async def test_dropped_duplicate_slot_refills_from_pool(mocker) -> None:
+    """Suppression runs BEFORE the trim: with max_candidates=2 and the top-2
+    containing a duplicate, the third pool candidate refills the freed slot."""
+    from clip_engine import ranking
+
+    cands = [
+        _signal_cand(100.0, 200.0, 150.0),
+        _signal_cand(120.0, 180.0, 150.0),  # contained in the first
+        _signal_cand(300.0, 360.0, 330.0),
+    ]
+    mocker.patch.object(ranking, "extract_candidates", return_value=cands)
+    scores = {100.0: 0.9, 120.0: 0.8, 300.0: 0.4}
+
+    async def _fake_score(candidates, *args, **kwargs):
+        for c in candidates:
+            c["score"] = scores[c["setup_start_s"]]
+        return candidates
+
+    mocker.patch.object(ranking, "score_candidates", new=AsyncMock(side_effect=_fake_score))
+
+    ranked = await ranking.score_and_rank(
+        video_id=uuid.uuid4(),
+        creator_id=uuid.uuid4(),
+        timeline=_FLAT_TIMELINE,
+        dna_brief="brief",
+        max_candidates=2,
+    )
+    assert [c["setup_start_s"] for c in ranked] == [100.0, 300.0]
+    assert [c["rank"] for c in ranked] == [1, 2]
 
 
 def test_extract_candidates_is_byte_untouched() -> None:

@@ -626,6 +626,7 @@ class CreatorStyle(Base):
         zoom_on_peak     : bool
         denoise          : bool
         aspect           : str | None   — "9:16" | "1:1" | "16:9"
+        caption_position : str | None   — "top" | "middle" | "bottom" (Issue 427)
     """
 
     __tablename__ = "creator_style"

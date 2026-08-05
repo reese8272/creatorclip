@@ -123,6 +123,8 @@ class BrandKitStyleIn(BaseModel):
     zoom_on_peak: bool | None = None
     denoise: bool | None = None
     aspect: str | None = None
+    # Caption band default for every render (Issue 427): top | middle | bottom.
+    caption_position: str | None = None
 
 
 class BrandKitOut(BaseModel):
@@ -132,6 +134,7 @@ class BrandKitOut(BaseModel):
     zoom_on_peak: bool
     denoise: bool
     aspect: str | None
+    caption_position: str | None
 
 
 class BrandKitSuggestionOut(BaseModel):
@@ -160,6 +163,7 @@ def _style_row_to_dict(row: CreatorStyle | None) -> dict:
         "zoom_on_peak": bool(style.get("zoom_on_peak", False)),
         "denoise": bool(style.get("denoise", False)),
         "aspect": style.get("aspect"),
+        "caption_position": style.get("caption_position"),
     }
 
 
@@ -254,6 +258,10 @@ async def put_brand_kit(
         updates["denoise"] = body.denoise
     if body.aspect is not None:
         updates["aspect"] = body.aspect
+    if body.caption_position is not None:
+        if body.caption_position not in {"top", "middle", "bottom"}:
+            raise HTTPException(status_code=422, detail="caption_position must be top|middle|bottom")
+        updates["caption_position"] = body.caption_position
 
     row.style = {**row.style, **updates}
     await session.commit()

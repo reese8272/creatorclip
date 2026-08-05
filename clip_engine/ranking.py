@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from clip_engine.candidates import extract_candidates
 from clip_engine.scoring import score_candidates
+from clip_engine.sentence_snap import snap_candidates_to_sentences
 from models import Clip, ClipFormat, RenderStatus
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,61 @@ def rank_candidates(candidates: list[dict]) -> list[dict]:
     for i, c in enumerate(ranked):
         c["rank"] = i + 1
     return ranked
+
+
+# Overlap coefficient (intersection-over-minimum) threshold for the post-ranking
+# containment pass (Issue 429). IoU under-reports engulfed windows — the live
+# contained pair scored IoU 0.39 (under the 0.5 NMS threshold) but IoMin 1.0.
+# 0.8 fires only on the asymmetric-containment blind spot: two equal-length
+# windows admitted by IoU-0.5 NMS reach at most IoMin ≈ 0.67, so the pass never
+# re-litigates what the signal-priority union deliberately kept.
+_CONTAINMENT_THRESHOLD = 0.8
+
+
+def window_containment(a: dict, b: dict) -> float:
+    """Overlap coefficient of two candidates' [setup_start_s, end_s] windows:
+    intersection / min(length). 1.0 whenever one window contains the other,
+    regardless of the size difference; 0.0 on degenerate windows."""
+    a_start, a_end = a["setup_start_s"], a["end_s"]
+    b_start, b_end = b["setup_start_s"], b["end_s"]
+    shorter = min(a_end - a_start, b_end - b_start)
+    if shorter <= 0.0:
+        return 0.0
+    inter = max(0.0, min(a_end, b_end) - max(a_start, b_start))
+    return inter / shorter
+
+
+def suppress_contained(ranked: list[dict], threshold: float = _CONTAINMENT_THRESHOLD) -> list[dict]:
+    """Drop lower-ranked candidates whose window is (near-)contained in a kept
+    one (Issue 429 — the creator saw 8 "clips" but 7 stories).
+
+    Runs POST-ranking and PRE-trim: the union in merge.py and
+    ``extract_candidates`` are untouched, dropped slots refill from the pool on
+    merit, and — because it runs before persistence — the preference reranker
+    can never resurrect a dropped duplicate. Rank 1 is always kept, so a
+    non-empty input can never come back empty. Survivor ranks are renumbered
+    1..n (``persist_ranked_clips`` requires a dense rank sequence).
+    """
+    kept: list[dict] = []
+    for cand in ranked:
+        dup_of = next((k for k in kept if window_containment(cand, k) >= threshold), None)
+        if dup_of is not None:
+            logger.info(
+                "containment pass dropped [%.1f, %.1f] (origin=%s) — %.0f%% inside "
+                "kept [%.1f, %.1f] (origin=%s)",
+                cand["setup_start_s"],
+                cand["end_s"],
+                cand.get("origin", "signal"),
+                window_containment(cand, dup_of) * 100,
+                dup_of["setup_start_s"],
+                dup_of["end_s"],
+                dup_of.get("origin", "signal"),
+            )
+            continue
+        kept.append(cand)
+    for i, c in enumerate(kept):
+        c["rank"] = i + 1
+    return kept
 
 
 def is_shortlisted(rank: int | None, size: int | None = None) -> bool:
@@ -184,11 +240,21 @@ async def score_and_rank(
     # duration/0.5 samples). Offload it so it can't stall the API event loop and the
     # other concurrent requests on this worker. (Issue C)
     #
-    # Flat word list extracted from transcript segments for sentence-boundary snapping
-    # (principle #12). Empty list → snapping skipped gracefully. (Issue 127)
-    words = [w for seg in (transcript_segments or []) for w in seg.get("words", [])]
+    # Sentence snapping moved to the segment-aware post-extraction pass (Issue 428):
+    # extract_candidates no longer receives words — sentence_snap is the single
+    # snapping authority, working on utterance segments instead of a flat word list.
+    from config import settings
+
+    # Signal pool cap decoupled from the persisted count (2026-08-05): the pool
+    # (CLIP_SIGNAL_POOL_MAX signal + LLM_CANDIDATES_MAX llm) feeds the scored
+    # merge; the [:max_candidates] trim below decides what persists.
+    segments = list(transcript_segments or [])
+    duration_s = float(timeline.get("duration_s", 0.0))
+    signal_pool_max = max(settings.CLIP_SIGNAL_POOL_MAX, max_candidates)
     candidates = await asyncio.to_thread(
-        lambda: extract_candidates(timeline, max_candidates, words=words or None)
+        lambda: snap_candidates_to_sentences(
+            extract_candidates(timeline, signal_pool_max), segments, duration_s
+        )
     )
 
     moments = (video_context or {}).get("moments") or []
@@ -196,7 +262,7 @@ async def score_and_rank(
         from clip_engine.merge import llm_moments_to_candidates, merge_candidates
 
         llm_candidates = await asyncio.to_thread(
-            lambda: llm_moments_to_candidates(moments, timeline, words=words or None)
+            lambda: llm_moments_to_candidates(moments, timeline, segments=segments or None)
         )
         if llm_candidates:
             candidates = merge_candidates(candidates, llm_candidates)
@@ -214,11 +280,11 @@ async def score_and_rank(
         ledger_session_factory=ledger_session_factory,
         style_notes=style_notes,
     )
-    # Post-ranking trim (Issue 416): the merged pool can exceed max_candidates
-    # (≤8 signal + ≤4 LLM); displacement happens HERE on scored merit, never
-    # pre-scoring. A no-op without merged LLM candidates (extract_candidates
-    # already caps at max_candidates), preserving pre-416 behavior exactly.
-    return rank_candidates(scored)[:max_candidates]
+    # Containment pass (Issue 429) then post-ranking trim (Issue 416): the
+    # merged pool can exceed max_candidates; near-duplicate contained windows
+    # are dropped first (freed slots refill from the pool below the cut), then
+    # displacement happens HERE on scored merit, never pre-scoring.
+    return suppress_contained(rank_candidates(scored))[:max_candidates]
 
 
 async def persist_ranked_clips(

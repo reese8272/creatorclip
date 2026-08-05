@@ -37,16 +37,22 @@ WORKDIR /app
 
 # ── Dependency layer (cached until requirements*.txt change) ─────────────────
 # INSTALL_REFRAME=true additionally installs requirements-image.txt (mediapipe
-# for the speaker-aware reframe, Issue 422). Default FALSE: mediapipe==0.10.21
-# requires numpy<2 and the app pins numpy==2.1.3 — the combination is
-# pip-unresolvable, so the reframe image needs its own resolution story first
-# (tracked in docs/DEPLOYMENT.md § staging checklist step 0). Prod runs with
-# ACTIVE_SPEAKER_REFRAME_ENABLED=false and never imports mediapipe.
+# for the speaker-aware reframe, Issue 422). Default TRUE since 2026-08-05:
+# mediapipe 1.0.0 dropped the numpy<2 pin, dissolving the old conflict with
+# the app's numpy==2.1.3 (docs/DEPLOYMENT.md § staging checklist step 0 —
+# resolved). The runtime path stays gated by ACTIVE_SPEAKER_REFRAME_ENABLED
+# (false in prod until the staging unlock criteria pass), so installing the
+# package changes no behavior. The final force-reinstall makes
+# opencv-contrib-python (mediapipe's hard dep, a strict superset at the same
+# pinned version as the app's opencv-python) the deterministic owner of the
+# cv2 module path — two opencv wheels otherwise race for it.
 FROM base AS builder
-ARG INSTALL_REFRAME=false
+ARG INSTALL_REFRAME=true
 COPY requirements.txt requirements-image.txt ./
 RUN if [ "$INSTALL_REFRAME" = "true" ]; then \
-      pip install --no-cache-dir --user -r requirements-image.txt; \
+      pip install --no-cache-dir --user -r requirements-image.txt \
+      && pip install --no-cache-dir --user --force-reinstall --no-deps \
+         opencv-contrib-python==4.13.0.92; \
     else \
       pip install --no-cache-dir --user -r requirements.txt; \
     fi

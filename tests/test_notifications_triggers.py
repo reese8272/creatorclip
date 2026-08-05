@@ -72,7 +72,10 @@ class TestClipsReadyTrigger:
         mock_signals = MagicMock()
         mock_signals.timeline_jsonb = {}
 
-        mock_clips = [MagicMock(), MagicMock()]  # 2 clips
+        # Real int ranks: the auto-render fan-out sorts by rank when
+        # AUTO_RENDER_TOP_N > 0 (default 8 since 2026-08-05), and MagicMock
+        # ranks are unorderable.
+        mock_clips = [MagicMock(rank=1), MagicMock(rank=2)]  # 2 clips
 
         mock_session = AsyncMock()
         # Video, Creator, Signals, Transcript (None), VideoContext (None — Issue 416).

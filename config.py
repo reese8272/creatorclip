@@ -105,10 +105,16 @@ class Settings(BaseSettings):
     # route to Haiku 4.5 while reasoning-heavy or streaming tasks stay on Sonnet
     # 4.6. Use bare aliases (no date suffix) per Anthropic docs. Override any
     # individual key via env var without touching the others. Defaults:
-    #   Sonnet 4.6 — scoring, dna_brief, analysis, titles, thumbnails, chat, intake, improvement
+    #   Opus 5     — scoring, video_context, clip_metadata (the clip-quality chain —
+    #                user directive 2026-08-05: clip nuance/duplication judgment is
+    #                worth the ~2× cost, ≈$0.12/video total; DECISIONS 2026-08-05)
+    #   Sonnet 4.6 — dna_brief, analysis, titles, thumbnails, chat, intake, improvement
     #   Haiku 4.5  — hooks, chapters, performer (cheap classify calls)
-    # Source: https://platform.claude.com/docs/en/about-claude/models/overview (2026-06-26)
-    ANTHROPIC_MODEL_SCORING: str = "claude-sonnet-4-6"
+    # Source: /claude-api model catalog (claude-opus-5 $5/$25 per MTok, 2026-08-05)
+    # Opus 5 notes: thinking is ON by default and max_tokens caps thinking+text
+    # (call sites raised accordingly); sampling params are rejected; structured
+    # output supported; 512-token prompt-cache minimum.
+    ANTHROPIC_MODEL_SCORING: str = "claude-opus-5"
     ANTHROPIC_MODEL_DNA_BRIEF: str = "claude-sonnet-4-6"
     ANTHROPIC_MODEL_ANALYSIS: str = "claude-sonnet-4-6"
     ANTHROPIC_MODEL_TITLES: str = "claude-sonnet-4-6"
@@ -129,14 +135,14 @@ class Settings(BaseSettings):
     # Source: /claude-api model reference (claude-haiku-4-5, $1/$5 per MTok, 2026-07-30).
     ANTHROPIC_MODEL_STYLE_DISTILL: str = "claude-haiku-4-5"
     # Issue 415 — whole-video context pass: ONE full-transcript reasoning call
-    # per video (~26K tok for 120 min) proposing LLM clip moments. Sonnet tier —
-    # this is the deepest reasoning call in the pipeline (locked in DECISIONS
-    # 2026-08-04, L26 decision 2).
-    ANTHROPIC_MODEL_VIDEO_CONTEXT: str = "claude-sonnet-4-6"
+    # per video (~26K tok for 120 min) proposing LLM clip moments. Opus 5 —
+    # the deepest reasoning call in the pipeline and the one that decides which
+    # stories become clips (DECISIONS 2026-08-05, supersedes 2026-08-04 L26 d2).
+    ANTHROPIC_MODEL_VIDEO_CONTEXT: str = "claude-opus-5"
     # Issue 417 — batched auto-metadata: ONE structured-output call per video
     # writing suggested title/description/hook for every ranked clip
-    # (DNA-grounded per-clip reasoning → Sonnet tier).
-    ANTHROPIC_MODEL_CLIP_METADATA: str = "claude-sonnet-4-6"
+    # (DNA-grounded per-clip reasoning → Opus 5, DECISIONS 2026-08-05).
+    ANTHROPIC_MODEL_CLIP_METADATA: str = "claude-opus-5"
     # web_search_20260209 is the GA version with dynamic filtering: Claude
     # writes code to pre-filter search results before they reach the context
     # window, reducing tokens read and improving accuracy. Same tool API
@@ -396,7 +402,58 @@ class Settings(BaseSettings):
     # below this a cut reads as a stutter (the EMA pan covers small moves).
     REFRAME_CUT_MIN_DISTANCE_FRAC: float = 0.25
 
-    CLIPS_PER_VIDEO_DEFAULT: int = 8
+    # ── Caption placement (Issue 427) ───────────────────────────────────────────
+    # Karaoke captions were burned dead-center — on the speaker's face. The new
+    # default band puts the baseline at ~70% of frame height: below a talking
+    # head's chin, above the Shorts bottom-UI zone (avoid top ~20% / bottom ~25%
+    # per Opus Clip's caption guidance). px values are at 1920 canvas height and
+    # scale with other export presets. The creator overrides the band per clip or
+    # brand kit via style_preset["caption_position"] (top | middle | bottom).
+    CAPTION_BASELINE_FRAC: float = 0.70
+    # Floor for bottom-band MarginV — face avoidance may push captions down but
+    # never into the Shorts bottom-UI overlay zone (baseline ≥ 75% is the limit).
+    CAPTION_MIN_BOTTOM_MARGIN_PX: int = 480
+    # "top" position: clearance below the Shorts title/channel overlay.
+    CAPTION_TOP_MARGIN_PX: int = 200
+    # Minimum gap between a detected face box's bottom and the caption top.
+    CAPTION_FACE_AVOID_PAD_PX: int = 40
+    # Karaoke words shown per caption event. 3 is the Shorts readability norm
+    # (karaoke tools group 3-6 words); 1 restores the legacy per-word style.
+    CAPTION_WORDS_PER_GROUP: int = 3
+    # A silence longer than this splits a word group early.
+    CAPTION_GROUP_MAX_GAP_S: float = 0.6
+
+    # ── Camera-region detection (Issue 430) ─────────────────────────────────────
+    # Detect the active camera in produced source layouts (temporal variance —
+    # static chrome vs moving camera) and crop into it before the 9:16
+    # composition. Off by default: repo convention for never-rendered paths
+    # (cf. ACTIVE_SPEAKER_REFRAME_ENABLED) — flip after the staging
+    # frame-extraction check on a produced-layout source. Fail-open: any
+    # detection uncertainty keeps today's full-height crop.
+    CAMERA_REGION_DETECT_ENABLED: bool = False
+    # Frames sampled (one ffmpeg call) across the clip window for the variance stack.
+    CAMERA_REGION_SAMPLE_FRAMES: int = 10
+    # Per-pixel temporal std (gray levels) above which a pixel counts as moving —
+    # above codec noise, below any real camera motion.
+    CAMERA_REGION_MOTION_THRESH: float = 6.0
+    # Gates: region must cover ≥ this fraction of the frame area…
+    CAMERA_REGION_MIN_AREA_FRAC: float = 0.30
+    # …and ≥ this fraction of the frame height…
+    CAMERA_REGION_MIN_HEIGHT_FRAC: float = 0.55
+    # …and ≤ this fraction (near-full frame ⇒ no chrome ⇒ skip the no-op crop).
+    CAMERA_REGION_FULL_FRAME_FRAC: float = 0.92
+    # Padding added around the detected region, per side, as a frame fraction.
+    CAMERA_REGION_PAD_FRAC: float = 0.02
+
+    # Persisted clips per video (post-dedup, post-trim). 8 → 12 (2026-08-05,
+    # user directive): one ingest, wider option set — feedback on un-rendered
+    # clips still trains the preference model, so more options = better DNA
+    # signal at zero extra minute cost. Only the top AUTO_RENDER_TOP_N render
+    # automatically; the rest render on demand from Review.
+    CLIPS_PER_VIDEO_DEFAULT: int = 12
+    # Signal-candidate pool cap passed to extract_candidates (its signature
+    # default stays 8 — byte-identical constraint; the call site passes this).
+    CLIP_SIGNAL_POOL_MAX: int = 12
     # ── Whole-video context pass (Issue 415, L26 Track A) ───────────────────────
     # Kill switch for the analyze_video_context chain member. False restores
     # today's signal-only pipeline exactly: the task short-circuits before any
@@ -408,8 +465,9 @@ class Settings(BaseSettings):
     # tail). Well inside Sonnet 4.6's context window.
     VIDEO_CONTEXT_TRANSCRIPT_MAX_CHARS: int = 360_000
     # Max LLM-proposed clip moments kept per video (validation drops the rest by
-    # confidence). Bounds the hybrid merge pool (Issue 416): ≤8 signal + ≤4 LLM.
-    LLM_CANDIDATES_MAX: int = 4
+    # confidence). Bounds the hybrid merge pool (Issue 416): ≤CLIP_SIGNAL_POOL_MAX
+    # signal + ≤LLM_CANDIDATES_MAX LLM. 4 → 6 with the wider pool (2026-08-05).
+    LLM_CANDIDATES_MAX: int = 6
     # Issue 417 — auto-generate suggested title/description/hook for every
     # ranked clip right after clip generation (one batched call, parallel with
     # render). False disables the sibling task entirely; on-demand suggestion
@@ -432,9 +490,10 @@ class Settings(BaseSettings):
     # When False, clips stay pending until the creator triggers a render. (auto-render)
     AUTO_RENDER_CLIPS: bool = True
     # Cap on how many of the ranked clips auto-render per video. 0 = all
-    # generated candidates (≤ CLIPS_PER_VIDEO_DEFAULT). Set >0 to render only
-    # the top-N highest-fit clips immediately and leave the rest on demand.
-    AUTO_RENDER_TOP_N: int = 0
+    # generated candidates (≤ CLIPS_PER_VIDEO_DEFAULT). 0 → 8 (2026-08-05):
+    # with 12 persisted clips, the top 8 render immediately and the remaining
+    # options render on demand from Review (POST /clips/{id}/render).
+    AUTO_RENDER_TOP_N: int = 8
     # ── Stream-VOD recap (Issue 190) ───────────────────────────────────────────
     # Target total-duration bounds (seconds) for a recap built from an uploaded
     # past-stream VOD. MAX is the hard budget the segment selector packs

@@ -421,32 +421,32 @@ Decision: log in `docs/DECISIONS.md` when made.
 > `config.py` — the flip is an env change on staging first, prod last.
 
 **What ships in the image (this issue's code side, already landed):**
-`requirements-image.txt` (`-r requirements.txt` + `mediapipe==0.10.21`) behind the Dockerfile
-build arg **`INSTALL_REFRAME=true`** (default false — see step 0); the BlazeFace hub asset at
+`requirements-image.txt` (`-r requirements.txt` + `mediapipe==1.0.0` +
+`opencv-contrib-python==4.13.0.92`) behind the Dockerfile build arg
+**`INSTALL_REFRAME=true`** (default TRUE since 2026-08-05 — step 0 resolved); the BlazeFace hub asset at
 `/usr/share/mediapipe-models/blaze_face_short_range.tflite` (`MEDIAPIPE_FACE_MODEL_PATH`);
 per-stage vlog timings emitted by `clip_engine.reframe.compute_dynamic_crop` as the
 `reframe_stages` event (`reframe_detect_ms` / `reframe_shots_ms` / `reframe_plan_ms`).
 Local dev is untouched — mediapipe is a lazy import and every reframe unit test is synthetic.
 
-### Step 0 — resolve the mediapipe × numpy conflict (BLOCKS unlock #1)
+### Step 0 — resolve the mediapipe × numpy conflict (RESOLVED 2026-08-05)
 
-**Discovered at the 2026-08-05 L26 deploy:** `mediapipe==0.10.21` pins `numpy<2` on its official
-wheels while the app pins `numpy==2.1.3` → `pip ResolutionImpossible`, which failed the first
-`docker-publish` run on main. The unconditional install was therefore gated behind
-`--build-arg INSTALL_REFRAME=true` (default false) so the prod image builds and deploys without
-mediapipe — safe because `ACTIVE_SPEAKER_REFRAME_ENABLED=false` means the import never happens.
-The constraint is reportedly a wheel-metadata limitation more than a runtime incompatibility
-(most of mediapipe works on numpy 2; see google-ai-edge/mediapipe#5676/#6023 and the
-cansik/mediapipe-numpy2 patch tool). Options to evaluate WHEN doing this checklist, in order:
-1. **Newest mediapipe release** (≥0.10.31 existed as of late 2025) — check whether the numpy pin
-   was lifted AND that the Tasks `FaceDetector` API (`clip_engine/reframe.py` uses Tasks, not
-   `mediapipe.solutions`) still ships; update the pin in `requirements-image.txt` if so.
-2. **Patched wheel** (`cansik/mediapipe-numpy2`-style metadata patch, vendored/pinned by hash) —
-   acceptable for the staging verification image; record a DECISIONS entry if it ends up in prod.
-3. **Dedicated worker image on numpy<2** — last resort; diverges scipy/librosa resolution and
-   doubles the dependency-audit surface.
-- [ ] Resolution chosen, `requirements-image.txt` updated, `docker build --build-arg
-      INSTALL_REFRAME=true` succeeds, and a DECISIONS entry records the choice.
+**Resolution: option 1 — upgrade the pin to `mediapipe==1.0.0`.** mediapipe dropped the
+`numpy<2` requirement from **0.10.30** (2025-12-16); verified against PyPI's dependency
+metadata — 1.0.0's `requires_dist` is exactly unconstrained `numpy` + `opencv-contrib-python`
+(https://pypi.org/pypi/mediapipe/1.0.0/json, checked live 2026-08-05; numpy-2 support
+tracked in google-ai-edge/mediapipe#6078). From 0.10.30 the wheels are `py3-none` (native
+code moved into a bundled C library), so there is no numpy C-API linkage left to conflict.
+1.0.0 removed the legacy `mediapipe.solutions` API (#6192) — no impact: `clip_engine/reframe.py`
+uses only the Tasks API (`mp.tasks.vision.FaceDetector`, `mp.Image`, `ImageFormat.SRGB`).
+The `opencv-contrib-python` hard dep is pinned to the app's own opencv version (4.13.0.92,
+same release train → identical ABI) and force-reinstalled last in the Dockerfile so contrib
+deterministically owns the shared `cv2` module path. `INSTALL_REFRAME` now defaults **true**;
+runtime behavior is unchanged until `ACTIVE_SPEAKER_REFRAME_ENABLED` flips per the sequence below.
+- [x] Resolution chosen (`mediapipe==1.0.0`), `requirements-image.txt` updated, DECISIONS
+      entry recorded (2026-08-05).
+- [ ] First `docker-publish` run on main after the bump confirmed green (`gh run list` —
+      a failed image build silently SKIPS deploy).
 
 ### Issue 189's four unlock criteria (each needs recorded evidence)
 

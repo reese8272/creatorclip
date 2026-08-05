@@ -5,6 +5,100 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-05 — Shorts clip-quality wave (Issues 427–430 + Opus upgrade + wider pool + 422 unblock)
+
+Ten rulings from the wave fixing the four clip-audit defects plus the user's four directives
+(Opus for clip quality · more clips narrowed down · user-selectable caption position ·
+active-speaker lens).
+
+**(1) Sentence snapping is a segment-aware post-extraction pass, not a change to
+`extract_candidates` (Issue 428).** New `clip_engine/sentence_snap.py` rebuilds SENTENCE spans
+from Deepgram utterances (utterances are semantic units; `punctuated_word` carries terminal
+punctuation) and re-snaps candidate edges after extraction; `ranking.score_and_rank` no longer
+passes `words` into `extract_candidates` (single snapping authority — the legacy 3 s word-level
+snap was the root cause: it only knew sentence ENDS within 3 s, so a start 4.8 s into "I don't
+really think…" survived and inverted the meaning). `extract_candidates` and
+`snap_to_sentence_boundary` stay byte-identical (tripwire test intact). Sources:
+https://developers.deepgram.com/docs/utterances · /docs/punctuation · /docs/paragraphs.
+
+**(2) Start-snap rule: backward-preferred within a 10 s radius; forward only for run-ons;
+NEVER left mid-sentence.** Deviation from the drafted "nearer target wins": the sentence
+containing the detected setup point IS setup content — backward only adds ≤10 s of context,
+forward would discard the sentence (the negation case). Lead-in 0.3 s floored at the previous
+sentence's end (capped at the chosen start under overlapping diarized utterances).
+
+**(3) LLM windows: sentence-snap both edges + hard 90 s clamp in `merge.py`; `validate_context`
+untouched.** `CLIP_TARGET_MAX_S=90` cuts at the latest sentence end within `start+90`
+(bare ceiling without segments) — kills the 110 s live clip. MIN stays 30 s (no force-extension
+— extending injects content the LLM never vouched for). Prompt nudged ("target 60-90 s",
+sentence-boundary edges), `PROMPT_VERSION` 1→2.
+
+**(4) Issue 429 dedup: overlap coefficient (IoMin) ≥ 0.8, post-ranking, DROP with refill.**
+IoU under-reports engulfed windows (live pair IoU 0.39 < the 0.5 NMS threshold, IoMin 1.0);
+IoMin-0.8 fires only on the containment blind spot (equal-length IoU-0.5 survivors max ≈0.67).
+Runs between `rank_candidates` and the trim: pre-trim so the pool refills on merit, pre-persist
+so `rerank_with_preference` can never resurrect a drop. Drop, not demote: with auto-render a
+demoted duplicate still costs a render and still reads "8 clips, 7 stories". Sources:
+https://en.wikipedia.org/wiki/Overlap_coefficient · https://arxiv.org/pdf/2011.12482.
+
+**(5) suggested_hook grounded in the ACTUAL first ~5 s.** New word-level
+`extract_transcript_opening` (midpoint-rule windows are too coarse at 5 s granularity); payload
+carries `opening_text` per clip; the metadata prompt pins the hook to it. One-time prompt-cache
+invalidation of the static block accepted.
+
+**(6) Opus 5 for the clip-quality chain (user directive).** `ANTHROPIC_MODEL_VIDEO_CONTEXT`,
+`ANTHROPIC_MODEL_SCORING`, `ANTHROPIC_MODEL_CLIP_METADATA` → `claude-opus-5` ($5/$25 per MTok,
+≈2× Sonnet — ~$0.12/video total; env-overridable). Opus 5 sweep applied: max_tokens raised
+(video_context/scoring 8000, clip_metadata 6000 — thinking is ON by default and the cap covers
+thinking + text), refusal stop_reason logged with safe degradation on all three (empty-content
+parse paths already fail open), billing switched from hardcoded Sonnet rates to
+`billing.ledger.model_rates(configured_model)`. Source: /claude-api model catalog 2026-08-05.
+**Deviation from plan:** the 1024-token cache-floor gates were NOT lowered to Opus 5's 512
+minimum — the floor helpers are shared with Sonnet callers (512 would emit inert 2× cache
+writes there); a 512–1024-token prefix on Opus merely misses caching, same as today.
+
+**(7) Wider pool (user directive): 12 persisted / top-8 auto-rendered.**
+`CLIPS_PER_VIDEO_DEFAULT` 8→12, new `CLIP_SIGNAL_POOL_MAX=12` (passed at the call site —
+signature untouched), `LLM_CANDIDATES_MAX` 4→6 (pool ≤18 scored in the one call, scoring
+max_tokens raised accordingly), `AUTO_RENDER_TOP_N` 0→8. Minutes charge once at ingest; renders
+add no user cost; feedback works on un-rendered clips and trains the preference model. The
+"Generate more clips" regenerate affordance is FILED as Issue 431, not built.
+
+**(8) Caption placement (Issue 427): karaoke default moves from dead-center (an5/marginv 0) to
+a bottom band at 70% of frame height, style-level MarginV + alignment (never `\pos`), 3-word
+groups, face avoidance, and a creator-selectable `caption_position` (top|middle|bottom) through
+style panel + brand kit (JSONB — no migration).** Face box comes from the legacy Haar keyframe
+pass (now returns the full box); avoidance pushes the band down below the chin, floored at
+marginv 480 (baseline ≤75%) so captions never enter the Shorts bottom-UI zone; "middle"
+restores the old look as an explicit choice. `words_per_group=1` reproduces the legacy output
+byte-identically (pinned). Sources:
+https://www.opus.pro/blog/youtube-shorts-caption-subtitle-best-practices ·
+https://postplanify.com/tools/youtube-shorts-safe-zone-checker ·
+https://vidno.ai/blog/karaoke-style-word-highlight-captions ·
+https://aegi.vmoe.info/docs/3.1/ASS_Tags/.
+
+**(9) Issue 430: cv2-only temporal-variance camera-region detection, flag-gated off
+(`CAMERA_REGION_DETECT_ENABLED`), rejected Haar-box expansion and mediapipe/AutoFlip.**
+Per-pixel temporal std across ~10 sampled frames separates static chrome from the moving camera
+(patent-documented standard: US 11710315, US 7483484); AutoFlip solves subject choice (Issue
+422's job), Haar-box expansion guesses the camera rect and fails on two-shots. Fail-open gates
+(area ≥30%, height ≥55%, ≤92% full-frame, face-inside sanity) keep plain sources byte-identical
+(pinned by tests). Skipped entirely under `ACTIVE_SPEAKER_REFRAME_ENABLED` — sendcmd x-commands
+and `reframe_track_jsonb` are full-frame-coordinate contracts; the 422 integration passes the
+region into `compute_dynamic_crop` instead (documented seam).
+
+**(10) Issue 422 step-0 resolved: `mediapipe==0.10.21` → `1.0.0`; `INSTALL_REFRAME` defaults
+true.** mediapipe dropped the `numpy<2` pin from 0.10.30 (verified live against PyPI metadata:
+1.0.0 `requires_dist` = unconstrained `numpy` + `opencv-contrib-python`); 1.0.0 is
+Tasks-API-only, which is all `clip_engine/reframe.py` uses. `opencv-contrib-python` pinned to
+the app's opencv version (4.13.0.92, verified on PyPI) and force-reinstalled last in the
+Dockerfile so contrib deterministically owns the shared `cv2` path. Runtime flags stay off in
+prod until the DEPLOYMENT.md unlock criteria pass. Sources:
+https://pypi.org/pypi/mediapipe/json · https://github.com/google-ai-edge/mediapipe/issues/6078
+· /issues/6192.
+
+---
+
 ## 2026-08-04 — L26 Track A build (414–417): three small build-time deviations
 
 **(1) Migration 0053 uses the 0045-hardened GUC, not a byte-verbatim 0044 copy.** The locked plan

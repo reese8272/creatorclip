@@ -33,7 +33,9 @@ _TASK_MODEL_KEYS = [
 # Bare alias pattern for Claude model names: claude-<family>-<major>-<minor>
 # Examples: claude-sonnet-4-6, claude-haiku-4-5, claude-opus-4-5
 # Source: https://platform.claude.com/docs/en/about-claude/models/overview (2026-06-26)
-_BARE_ALIAS_RE = re.compile(r"^claude-[a-z]+-[0-9]+-[0-9]+$")
+# Bare aliases: 'claude-sonnet-4-6' (major-minor) or 'claude-opus-5' (the
+# Claude 5 family carries a single version number — /claude-api catalog 2026-08-05).
+_BARE_ALIAS_RE = re.compile(r"^claude-[a-z]+-[0-9]+(-[0-9]+)?$")
 
 # Date-suffix pattern to explicitly reject: e.g. claude-haiku-4-5-20251001
 _DATE_SUFFIX_RE = re.compile(r"^claude-[a-z]+-[0-9]+-[0-9]+-[0-9]{8}$")
@@ -134,16 +136,29 @@ def test_all_task_model_keys_resolve() -> None:
 
 
 def test_default_models_are_expected_tier() -> None:
-    """Verify the default routing: Haiku for cheap classify, Sonnet for reasoning."""
+    """Verify the default routing: Haiku for cheap classify, Opus for the
+    clip-quality chain (2026-08-05 user directive), Sonnet for the rest."""
     from config import settings
 
     haiku_tasks = {"ANTHROPIC_MODEL_HOOKS", "ANTHROPIC_MODEL_CHAPTERS", "ANTHROPIC_MODEL_PERFORMER"}
-    sonnet_tasks = set(_TASK_MODEL_KEYS) - haiku_tasks
+    opus_tasks = {
+        "ANTHROPIC_MODEL_SCORING",
+        "ANTHROPIC_MODEL_VIDEO_CONTEXT",
+        "ANTHROPIC_MODEL_CLIP_METADATA",
+    }
+    sonnet_tasks = set(_TASK_MODEL_KEYS) - haiku_tasks - opus_tasks
 
     for key in haiku_tasks:
         value = getattr(settings, key)
         assert "haiku" in value.lower(), (
             f"settings.{key}={value!r} should default to a Haiku model (cheap classify task)."
+        )
+
+    for key in opus_tasks:
+        value = getattr(settings, key)
+        assert "opus" in value.lower(), (
+            f"settings.{key}={value!r} should default to an Opus model "
+            "(clip-quality chain — DECISIONS 2026-08-05)."
         )
 
     for key in sonnet_tasks:

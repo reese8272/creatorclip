@@ -7,6 +7,7 @@ import json
 
 from knowledge.util import (
     extract_json_block,
+    extract_transcript_opening,
     extract_transcript_range,
     extract_transcript_window,
     wrap_untrusted,
@@ -266,6 +267,45 @@ class TestExtractTranscriptWindow:
 
     def test_empty_when_no_segment_midpoint_in_window(self) -> None:
         assert extract_transcript_window(self._SEGMENTS, 200.0, 260.0) == ""
+
+
+class TestExtractTranscriptOpening:
+    """Issue 428 — word-level extraction of the clip's actual first ~5 s, so
+    the suggested hook reflects the real open rather than the story summary."""
+
+    _SEGMENTS = {
+        "segments": [
+            {
+                "start": 70.0,
+                "end": 90.0,
+                "text": "Earlier words. I don't really think it's gonna happen.",
+                "words": [
+                    {"word": "Earlier", "start": 70.0, "end": 70.4},
+                    {"word": "words.", "start": 70.5, "end": 71.2},
+                    {"word": "I", "start": 71.5, "end": 71.7},
+                    {"word": "don't", "start": 71.8, "end": 72.3},
+                    {"word": "really", "start": 72.4, "end": 76.2},
+                    {"word": "think", "start": 76.3, "end": 76.9},
+                    {"word": "it's", "start": 77.0, "end": 77.3},
+                    {"word": "gonna", "start": 77.4, "end": 77.8},
+                    {"word": "happen.", "start": 77.9, "end": 90.0},
+                ],
+            },
+        ]
+    }
+
+    def test_returns_only_words_spoken_in_span(self) -> None:
+        text = extract_transcript_opening(self._SEGMENTS, 71.5, span_s=5.0)
+        assert text == "I don't really think"  # words starting in [71.5, 76.5)
+        assert "Earlier" not in text
+
+    def test_falls_back_to_segment_text_without_word_timings(self) -> None:
+        segments = {"segments": [{"start": 10.0, "end": 30.0, "text": "No words here."}]}
+        assert extract_transcript_opening(segments, 12.0) == "No words here."
+
+    def test_empty_for_missing_transcript_or_silent_span(self) -> None:
+        assert extract_transcript_opening(None, 0.0) == ""
+        assert extract_transcript_opening(self._SEGMENTS, 200.0) == ""
 
     def test_truncates_to_max_chars(self) -> None:
         long_segments = {"segments": [{"start": 0.0, "end": 5.0, "text": "y" * 3000}]}

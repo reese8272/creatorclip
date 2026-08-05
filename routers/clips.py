@@ -195,6 +195,9 @@ class RenderStyleIn(BaseModel):
     zoom_on_peak: bool | None = None  # opt-in punch-in at peak (Issue 184)
     denoise: bool | None = None  # opt-in noise reduction (Issue 185)
     aspect: Literal["9:16", "1:1", "16:9"] | None = None  # export preset (Issue 182)
+    # Caption band (Issue 427). Omitted/None → per-style default (karaoke at the
+    # ~70% bottom band with face avoidance; minimal/gradient lower-third).
+    caption_position: Literal["top", "middle", "bottom"] | None = None
 
 
 class ClipMetadataPatch(BaseModel):
@@ -770,6 +773,8 @@ async def render_clip(
             merged["denoise"] = body.denoise
         if body.aspect is not None:
             merged["aspect"] = body.aspect
+        if body.caption_position is not None:
+            merged["caption_position"] = body.caption_position
         clip.style_preset = merged or None
 
     # Issue 353: a render request on a `done` clip is an explicit re-render —

@@ -4,6 +4,55 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-05 — Shorts clip-quality wave BUILT: Issues 428 + 429 done, 427 + 430 code-complete (live spot-checks owed), Opus 5 + 12-clip pool + caption position + 422 unblock
+
+The four clip-audit defects from the first live A→B run, plus four user directives, in one
+wave. Ten rulings + sources in `docs/DECISIONS.md` (2026-08-05, clip-quality wave entry).
+
+- **Issue 428 (mid-sentence opens):** new `clip_engine/sentence_snap.py` — segment-aware
+  sentence index from Deepgram utterances; `score_and_rank` re-snaps candidate edges
+  post-extraction (words no longer flow into `extract_candidates`, which stays byte-identical;
+  tripwire intact). Absolute never-open-mid-sentence guard (backward-preferred, 10 s radius,
+  0.3 s lead-in). LLM windows sentence-snap both edges + hard 90 s clamp in `merge.py`
+  (`CLIP_TARGET_MAX_S`); context prompt nudged, `PROMPT_VERSION` 1→2. `suggested_hook` now
+  grounded in the clip's ACTUAL first ~5 s (`extract_transcript_opening` + `clip_opening_*`
+  prompt envelope). Eval: `kind: snap` + `mid_sentence_open.yaml` (verified RED on the legacy
+  path — setup stayed at 76.0 mid-sentence; new pass opens at 71.2 preserving the negation) +
+  `llm_window_length_clamp.yaml` (`len_s_max`).
+- **Issue 429 (contained duplicates):** post-ranking `suppress_contained` at the
+  `rank→trim` seam — overlap coefficient (IoMin) ≥ 0.8, drop + refill from the pool,
+  dense re-rank; pre-persist so the preference reranker can't resurrect drops. Eval:
+  `kind: containment` + `contained_duplicate_suppressed.yaml` (models the live 1390–1500 /
+  1438–1481 pair). `SCENARIO_FLOOR` 18→**21**.
+- **Issue 427 (captions on face) — code-complete:** karaoke styles move from dead-center to a
+  70%-height bottom band (style-level MarginV/an2), Haar face-box avoidance (pushdown floored
+  at the Shorts bottom-UI zone), 3-word karaoke groups (`words_per_group=1` byte-identical,
+  pinned), and a creator-selectable `caption_position` (top|middle|bottom) through
+  `RenderStyleIn` → style_preset → brand kit (JSONB, no migration) + CaptionStylePanel +
+  BrandKitSection. **Owed:** re-rendered frame-extraction spot-check on prod.
+- **Issue 430 (chrome in crop) — code-complete, flag OFF:** new `clip_engine/camera_region.py`
+  (cv2 temporal-variance chrome detection, fail-open gates) + region-space crop rewiring in
+  `render_clip_file` (`CAMERA_REGION_DETECT_ENABLED=false`; byte-identical vf when off/no-hit,
+  pinned; skipped under the reframe flag — 422 integration seam documented). **Owed:** staging
+  frame check on a produced-layout source, then flag flip.
+- **Opus 5 upgrade (user directive):** video_context / scoring / clip_metadata →
+  `claude-opus-5`; max_tokens raised (8000/8000/6000 — thinking on by default), refusal
+  stop_reason handled fail-open, billing now follows the configured model via `model_rates`.
+- **Wider pool (user directive):** 12 persisted clips (`CLIPS_PER_VIDEO_DEFAULT`), pool ≤18
+  (`CLIP_SIGNAL_POOL_MAX=12` + `LLM_CANDIDATES_MAX=6`), top-8 auto-render
+  (`AUTO_RENDER_TOP_N=8`), rest on demand; "Generate more clips" filed as **Issue 431**.
+- **Issue 422 unblocked (step 0):** `mediapipe==1.0.0` (numpy-2 compatible from 0.10.30,
+  PyPI-verified) + `opencv-contrib-python==4.13.0.92` pin; `INSTALL_REFRAME` defaults true.
+  Staging unlock criteria (2-speaker visual, timings, cleanup) remain open; runtime flags off.
+- **Gates:** backend **2850/0** (new `tests/test_sentence_snap.py` + `test_camera_region.py`;
+  eval 25/25 with 22 fixtures) · Layer-0 ALL GREEN (ruff 0 · mypy 0 · coverage **84.16** ·
+  bandit 0/0 · pip-audit 0) · frontend (node 22): vitest **637/637**, `tsc -b` clean, eslint
+  0 errors. Landing-page public eval-scenario claim updated 19→22 (structural test caught it).
+- **Off-course:** pre-existing local `test_render_summary_file_real_ffmpeg_smoke` failure
+  logged (fails on pristine base; local ffmpeg env).
+
+---
+
 ## 2026-08-05 — Issue 395 BUILT: presigned direct-to-R2 multipart upload (BETA BLOCKER; live acceptance deploy-gated)
 
 Triggered live: the user's L26 stress test hit every predicted failure of the proxy upload —
@@ -54,7 +103,7 @@ config default 2026-08-04. CropTrack wire contract verified field-for-field betw
   mypy clean (142 files). The Track-A-reported pre-existing `test_response_models` failure did
   NOT reproduce here — it is environment-dependent (vacuous-pass under fastapi 0.137.1 lazy
   router include; see `docs/OFF_COURSE_BUGS.md`, still open).
-- Eval harness: **22/22** `eval_scenario`, `SCENARIO_FLOOR=18`.
+- Eval harness: **22/22** `eval_scenario`, `SCENARIO_FLOOR=18` (raised to 21 on 2026-08-05).
 - Frontend (node 22): vitest **624/624**, `tsc -b` clean, eslint **0 errors** (1 pre-existing
   logged warning). E2e passed 83/0/11 on the C branch; frontend files untouched by the merge.
 

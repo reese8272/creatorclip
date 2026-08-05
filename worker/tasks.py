@@ -630,12 +630,16 @@ async def _video_context_async(video_id: str, creator_id: str | None = None) -> 
     context, usage = await build_video_context(segments, duration_s, dna_brief, identity_text)
 
     # Bill AFTER the round-trip (scoring.py pattern). record_llm_usage is
-    # best-effort and opens its own short-lived session.
+    # best-effort and opens its own short-lived session. Rates follow the
+    # CONFIGURED model — Opus 5 by default since 2026-08-05.
+    from billing.ledger import model_rates
+
+    _vc_rate_in, _vc_rate_out, _ = model_rates(settings.ANTHROPIC_MODEL_VIDEO_CONTEXT)
     await record_llm_usage(
         uuid.UUID(creator_id),
         usage,
-        settings.COST_PER_MTOK_IN_SONNET,
-        settings.COST_PER_MTOK_OUT_SONNET,
+        _vc_rate_in,
+        _vc_rate_out,
         # ttl:"1h" cache writes bill 2× base input; the flag is set only when
         # the floor-gated marker actually attached.
         cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
@@ -717,7 +721,7 @@ async def _clip_metadata_async(video_id: str, creator_id: str | None = None) -> 
     from config import settings
     from dna.profile import get_active
     from knowledge.clip_metadata import generate_clip_metadata_batch
-    from knowledge.util import extract_transcript_window
+    from knowledge.util import extract_transcript_opening, extract_transcript_window
     from models import Creator as _Creator
     from models import Transcript, VideoContext
     from worker.progress import aemit
@@ -774,6 +778,10 @@ async def _clip_metadata_async(video_id: str, creator_id: str | None = None) -> 
                     "window_text": extract_transcript_window(
                         segments_jsonb, window_start, clip.end_s
                     ),
+                    # The words actually spoken in the clip's first ~5 s — the
+                    # hook must reflect the real open, not the story summary
+                    # (Issue 428).
+                    "opening_text": extract_transcript_opening(segments_jsonb, window_start),
                 }
             )
 
@@ -782,12 +790,16 @@ async def _clip_metadata_async(video_id: str, creator_id: str | None = None) -> 
         channel_title, dna_brief, context_summary, clip_payloads
     )
 
-    # Bill AFTER the round-trip; best-effort, opens its own session.
+    # Bill AFTER the round-trip; best-effort, opens its own session. Rates
+    # follow the CONFIGURED model — Opus 5 by default since 2026-08-05.
+    from billing.ledger import model_rates
+
+    _cm_rate_in, _cm_rate_out, _ = model_rates(settings.ANTHROPIC_MODEL_CLIP_METADATA)
     await record_llm_usage(
         uuid.UUID(creator_id),
         usage,
-        settings.COST_PER_MTOK_IN_SONNET,
-        settings.COST_PER_MTOK_OUT_SONNET,
+        _cm_rate_in,
+        _cm_rate_out,
         cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
     )
 

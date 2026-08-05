@@ -1,0 +1,30 @@
+scenario: llm_window_length_clamp
+kind: merge
+description: >
+  Issue 428: validate_context admits moments up to 120 s, but the live LLM
+  clip 960d9331 shipped at 110 s — well past the 60-90 s target. The merge
+  layer must hard-clamp the window to CLIP_TARGET_MAX_S (90 s): with no
+  transcript segments available the cut is the bare ceiling start + 90.
+  Principle: "Native length over generic length"
+
+input:
+  timeline:
+    version: 1
+    duration_s: 600.0
+    events: []
+  moments:
+    - start_s: 100.0
+      end_s: 210.0
+      reason: "A long story arc the model refused to trim itself."
+      principle: "Front-load value"
+      confidence: 0.9
+
+expected:
+  min_total: 1
+  llm_candidates: 1
+  candidates:
+    - origin: llm
+      setup_start_s_min: 95.0
+      setup_start_s_max: 105.0
+      len_s_max: 90.0
+      end_s_max: 190.0

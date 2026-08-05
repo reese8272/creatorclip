@@ -26,6 +26,13 @@ const BACKGROUND_OPTIONS: SelectOption[] = [
   { value: 'blur', label: 'Blur' },
   { value: 'black', label: 'Black' },
 ]
+// Issue 427 — caption band default for every render.
+const POSITION_OPTIONS: SelectOption[] = [
+  { value: '', label: 'Auto — lower band, avoids the face (default)' },
+  { value: 'top', label: 'Top — under the title area' },
+  { value: 'middle', label: 'Middle — centered on frame' },
+  { value: 'bottom', label: 'Bottom — lower band' },
+]
 
 const defaultKit: BrandKit = {
   subtitle: null,
@@ -34,6 +41,7 @@ const defaultKit: BrandKit = {
   zoom_on_peak: false,
   denoise: false,
   aspect: null,
+  caption_position: null,
 }
 
 interface StyleSuggestion {
@@ -144,6 +152,19 @@ export function BrandKitSection() {
               value={kit.aspect ?? ''}
               onValueChange={(v) => setKit({ ...kit, aspect: v || null })}
               options={ASPECT_OPTIONS}
+              className="w-[58%]"
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-3 text-sm text-fg">
+            <label htmlFor="kit-caption-position">Caption position</label>
+            <Select
+              id="kit-caption-position"
+              value={kit.caption_position ?? ''}
+              onValueChange={(v) =>
+                setKit({ ...kit, caption_position: (v || null) as BrandKit['caption_position'] })
+              }
+              options={POSITION_OPTIONS}
               className="w-[58%]"
             />
           </div>

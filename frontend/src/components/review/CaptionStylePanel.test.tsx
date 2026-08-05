@@ -34,6 +34,7 @@ const kit: BrandKit = {
   zoom_on_peak: false,
   denoise: false,
   aspect: null,
+  caption_position: null,
 }
 
 function makeClip(): ReviewClip {

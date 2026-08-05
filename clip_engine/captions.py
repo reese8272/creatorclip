@@ -23,13 +23,16 @@ Output is consumed by ffmpeg via ``subtitles=/path/to/file.ass:fontsdir=…`` (l
 PlayResX/PlayResY match the 1080×1920 vertical Shorts output of
 ``clip_engine/render.py``.
 
-References (Phase-1 research, ``docs/DECISIONS.md`` 2026-06-07):
+References (Phase-1 research, ``docs/DECISIONS.md`` 2026-06-07 + 2026-08-05):
   - libass + pysubs2 is the production standard (Submagic/Opus.pro/CapCut pattern).
   - ASS colors are ``&HBBGGRR&`` — reversed from HTML hex.
   - ``\\t(start_ms,end_ms, tags)`` is the ASS animated-transform override.
   - Style ScaleX/ScaleY MUST be 100 baseline or ``\\t(\\fscx120)`` multiplies wrong.
-  - Lower-third (~y=1350 at PlayResY=1920) keeps captions clear of the Shorts
-    subscribe-overlay zone and the speaker's face.
+  - Placement (Issue 427): karaoke styles default to a ~70%-height baseline —
+    below a talking head's chin, above the Shorts bottom-UI zone (avoid the top
+    ~20% and bottom ~25% per Opus Clip's caption guidance). Style-level
+    ``MarginV`` + alignment (never ``\\pos``) so libass keeps line wrapping.
+    ``caption_position`` (top/middle/bottom) is the creator's override.
 """
 
 from __future__ import annotations
@@ -168,6 +171,16 @@ _STOPWORDS = frozenset(
 
 VALID_STYLES = frozenset({"bold_pop", "bold_pop_highlight", "gradient_slide", "minimal"})
 
+VALID_POSITIONS = frozenset({"top", "middle", "bottom"})
+
+# Placement defaults (Issue 427) — render.py passes the configured values; these
+# keep the module usable standalone. All px values are at PlayResY=1920 and are
+# scaled proportionally for other canvas heights.
+_DEFAULT_BASELINE_FRAC = 0.70  # karaoke baseline at 70% of frame height
+_DEFAULT_MIN_BOTTOM_MARGIN_PX = 480  # never sink into the Shorts bottom-UI zone
+_DEFAULT_TOP_MARGIN_PX = 200  # "top" position: below the title/channel overlay
+_DEFAULT_FACE_AVOID_PAD_PX = 40  # min gap between face-box bottom and caption top
+
 
 def build_ass_subtitles(
     segments: list[dict] | None,
@@ -177,6 +190,15 @@ def build_ass_subtitles(
     out_path: Path,
     play_res_x: int = _PLAY_RES_X,
     play_res_y: int = _PLAY_RES_Y,
+    *,
+    caption_position: str | None = None,
+    face_bottom_px: int | None = None,
+    words_per_group: int = 1,
+    group_max_gap_s: float = 0.6,
+    baseline_frac: float = _DEFAULT_BASELINE_FRAC,
+    min_bottom_margin_px: int = _DEFAULT_MIN_BOTTOM_MARGIN_PX,
+    top_margin_px: int = _DEFAULT_TOP_MARGIN_PX,
+    face_avoid_pad_px: int = _DEFAULT_FACE_AVOID_PAD_PX,
 ) -> Path | None:
     """Render an ASS subtitle file for the clip window.
 
@@ -184,6 +206,15 @@ def build_ass_subtitles(
     segment carries ``start``, ``end``, ``text``, optional ``words``). Word-level
     timing drives ``bold_pop`` / ``gradient_slide``; when absent the renderer falls
     back to segment-level lines (Minimal style).
+
+    Placement (Issue 427): ``caption_position`` is the creator's choice
+    (``top`` / ``middle`` / ``bottom``); ``None`` keeps the per-style default —
+    karaoke styles at the ``baseline_frac`` bottom band, minimal/gradient at the
+    legacy lower-third. ``face_bottom_px`` (output-canvas pixels, from the
+    render pipeline's face detection) pushes a bottom-band caption below the
+    chin, clamped so it never enters the bottom ``min_bottom_margin_px`` UI
+    zone. ``words_per_group`` > 1 groups karaoke words into multi-word events
+    (``1`` reproduces the legacy per-word output byte-identically).
 
     Returns the written path, or ``None`` when there is no usable text in the
     clip window or the style is unknown — callers must handle ``None`` by
@@ -217,9 +248,22 @@ def build_ass_subtitles(
         return None
 
     if style == "bold_pop":
-        events = _build_bold_pop(clipped, clip_start_s, clip_end_s)
+        events = _build_bold_pop(
+            clipped,
+            clip_start_s,
+            clip_end_s,
+            words_per_group=words_per_group,
+            group_max_gap_s=group_max_gap_s,
+        )
     elif style == "bold_pop_highlight":
-        events = _build_bold_pop(clipped, clip_start_s, clip_end_s, highlight=True)
+        events = _build_bold_pop(
+            clipped,
+            clip_start_s,
+            clip_end_s,
+            highlight=True,
+            words_per_group=words_per_group,
+            group_max_gap_s=group_max_gap_s,
+        )
     elif style == "gradient_slide":
         events = _build_gradient_slide(clipped, clip_start_s, clip_end_s)
     else:
@@ -243,7 +287,16 @@ def build_ass_subtitles(
     # edge cases (e.g. someone overrides _OUTPUT_W/_OUTPUT_H later).
     subs.info["ScaledBorderAndShadow"] = "yes"
 
-    subs.styles["Default"] = _base_style(style, play_res_y)
+    subs.styles["Default"] = _base_style(
+        style,
+        play_res_y,
+        caption_position=caption_position,
+        face_bottom_px=face_bottom_px,
+        baseline_frac=baseline_frac,
+        min_bottom_margin_px=min_bottom_margin_px,
+        top_margin_px=top_margin_px,
+        face_avoid_pad_px=face_avoid_pad_px,
+    )
     subs.events = events
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -251,14 +304,93 @@ def build_ass_subtitles(
     return out_path
 
 
-_CENTERED_STYLES = {"bold_pop", "bold_pop_highlight"}
+# Karaoke styles — historically rendered dead-center (an5, the Issue-427
+# defect); their default is now the bottom band at ``baseline_frac``.
+_KARAOKE_STYLES = {"bold_pop", "bold_pop_highlight"}
 
 
-def _base_style(style: str, play_res_y: int = _PLAY_RES_Y) -> pysubs2.SSAStyle:
+def _scale_px(px: int | float, play_res_y: int) -> int:
+    """Scale a PlayResY=1920 pixel value to the actual canvas height."""
+    return round(px * play_res_y / _PLAY_RES_Y)
+
+
+def _bottom_marginv(
+    style: str,
+    play_res_y: int,
+    face_bottom_px: int | None,
+    baseline_frac: float,
+    min_bottom_margin_px: int,
+    face_avoid_pad_px: int,
+) -> int:
+    """MarginV for a bottom-band caption: baseline at ``baseline_frac`` of the
+    canvas height, pushed DOWN below a detected face when the face's chin
+    intrudes into the caption line, and floored at ``min_bottom_margin_px`` so
+    the block never sinks into the Shorts bottom-UI zone (~bottom 25%)."""
+    font_size = _FONT_SIZE_ANIMATED if style in _KARAOKE_STYLES else _FONT_SIZE_MINIMAL
+    # Conservative single-line height: font size + pop overshoot + outline.
+    line_h = _scale_px(font_size * 1.5, play_res_y)
+    marginv = round((1.0 - baseline_frac) * play_res_y)
+    if face_bottom_px is not None:
+        caption_top = play_res_y - marginv - line_h
+        needed_top = face_bottom_px + _scale_px(face_avoid_pad_px, play_res_y)
+        if needed_top > caption_top:
+            marginv = play_res_y - needed_top - line_h
+    floor = _scale_px(min_bottom_margin_px, play_res_y)
+    if marginv < floor:
+        if face_bottom_px is not None:
+            logger.warning(
+                "captions: face bottom %dpx too low for the caption band — "
+                "clamping to the bottom-UI floor (face may overlap)",
+                face_bottom_px,
+            )
+        marginv = floor
+    return marginv
+
+
+def _base_style(
+    style: str,
+    play_res_y: int = _PLAY_RES_Y,
+    *,
+    caption_position: str | None = None,
+    face_bottom_px: int | None = None,
+    baseline_frac: float = _DEFAULT_BASELINE_FRAC,
+    min_bottom_margin_px: int = _DEFAULT_MIN_BOTTOM_MARGIN_PX,
+    top_margin_px: int = _DEFAULT_TOP_MARGIN_PX,
+    face_avoid_pad_px: int = _DEFAULT_FACE_AVOID_PAD_PX,
+) -> pysubs2.SSAStyle:
     is_animated = style in {"bold_pop", "bold_pop_highlight", "gradient_slide"}
-    # Lower-third margin scales with the canvas height so the safe-zone fraction
-    # holds across export presets (Issue 182). At 1920 this is 290 (unchanged).
-    lower_third_marginv = round(290 * play_res_y / _PLAY_RES_Y)
+    if caption_position is not None and caption_position not in VALID_POSITIONS:
+        logger.warning(
+            "captions: unknown caption_position %r — using the style default", caption_position
+        )
+        caption_position = None
+
+    if caption_position == "middle":
+        # The pre-427 karaoke look, now an explicit creator choice.
+        alignment, marginv = pysubs2.Alignment.MIDDLE_CENTER, 0
+        if face_bottom_px is not None:
+            logger.info("captions: middle position chosen — face avoidance does not apply")
+    elif caption_position == "top":
+        alignment = pysubs2.Alignment.TOP_CENTER
+        marginv = _scale_px(top_margin_px, play_res_y)
+    elif caption_position == "bottom" or style in _KARAOKE_STYLES:
+        # Karaoke default (the Issue-427 fix) and the explicit bottom choice:
+        # baseline at ~70% height with face avoidance.
+        alignment = pysubs2.Alignment.BOTTOM_CENTER
+        marginv = _bottom_marginv(
+            style,
+            play_res_y,
+            face_bottom_px,
+            baseline_frac,
+            min_bottom_margin_px,
+            face_avoid_pad_px,
+        )
+    else:
+        # minimal / gradient_slide legacy default: lower-third margin scales
+        # with the canvas height (Issue 182). At 1920 this is 290 (unchanged).
+        alignment = pysubs2.Alignment.BOTTOM_CENTER
+        marginv = _scale_px(290, play_res_y)
+
     return pysubs2.SSAStyle(
         fontname=_FONT_NAME,
         fontsize=_FONT_SIZE_ANIMATED if is_animated else _FONT_SIZE_MINIMAL,
@@ -271,14 +403,8 @@ def _base_style(style: str, play_res_y: int = _PLAY_RES_Y) -> pysubs2.SSAStyle:
         # be 100 or the Bold Pop pop lands at the wrong size.
         scalex=100.0,
         scaley=100.0,
-        # an5 = middle-center (Bold Pop's centered-on-face placement).
-        # an2 = bottom-center (Minimal / Gradient Slide — lower-third).
-        alignment=pysubs2.Alignment.MIDDLE_CENTER
-        if style in _CENTERED_STYLES
-        else pysubs2.Alignment.BOTTOM_CENTER,
-        # MarginV lifts bottom-aligned text into the lower-third safe zone,
-        # clear of the Shorts subscribe button overlay (~y=70% of 1920).
-        marginv=0 if style in _CENTERED_STYLES else lower_third_marginv,
+        alignment=alignment,
+        marginv=marginv,
     )
 
 
@@ -363,18 +489,76 @@ def _keyword_indices(words: list[dict], clip_freq: Counter[str], top_n: int) -> 
     return {i for _, i in scored[:top_n]}
 
 
+def _group_words(words: list[dict], n: int, max_gap_s: float) -> Iterator[list[dict]]:
+    """Split one segment's in-window words into karaoke groups of at most ``n``,
+    breaking early when the inter-word silence exceeds ``max_gap_s``. Groups
+    never cross segments — the caller iterates per segment (segment = phrase)."""
+    group: list[dict] = []
+    for w in words:
+        if group and (
+            len(group) >= n or w.get("start", 0.0) - group[-1].get("end", 0.0) > max_gap_s
+        ):
+            yield group
+            group = []
+        group.append(w)
+    if group:
+        yield group
+
+
+def _grouped_pop_event(
+    group: list[dict],
+    clip_start_s: float,
+    clip_end_s: float,
+    kw_words: set[int],
+) -> pysubs2.SSAEvent | None:
+    """One scale-pop Dialogue for a word group: on screen from the first word's
+    start to the last word's end. ``kw_words`` holds id()s of keyword-highlighted
+    word dicts — highlighted inline with an explicit white RESET so the yellow
+    never bleeds onto the rest of the group."""
+    parts: list[str] = []
+    for w in group:
+        text = (w.get("word") or "").strip()
+        if not text:
+            continue
+        if id(w) in kw_words:
+            parts.append(f"{{\\c{_COLOR_HIGHLIGHT_ASS}}}{text}{{\\c{_COLOR_WHITE_ASS}}}")
+        else:
+            parts.append(text)
+    if not parts:
+        return None
+    start_ms = _to_ms(max(0.0, group[0]["start"] - clip_start_s))
+    end_ms = _to_ms(min(clip_end_s, group[-1]["end"]) - clip_start_s)
+    if end_ms <= start_ms:
+        return None
+    return pysubs2.SSAEvent(
+        start=start_ms, end=end_ms, style="Default", text=f"{_POP_OVERRIDE}{' '.join(parts)}"
+    )
+
+
 def _build_bold_pop(
-    segments: list[dict], clip_start_s: float, clip_end_s: float, *, highlight: bool = False
+    segments: list[dict],
+    clip_start_s: float,
+    clip_end_s: float,
+    *,
+    highlight: bool = False,
+    words_per_group: int = 1,
+    group_max_gap_s: float = 0.6,
 ) -> list[pysubs2.SSAEvent]:
-    """One Dialogue per word, scale-pop animation. Falls back to Minimal when
-    word-level timing is missing (per acceptance criterion).
+    """Scale-pop Dialogue events — one per word (``words_per_group=1``, the
+    legacy byte-identical output) or one per multi-word group (Issue 427:
+    2-3-word groups are the Shorts readability norm). Falls back to Minimal
+    when word-level timing is missing (per acceptance criterion).
 
     When ``highlight`` is set (``bold_pop_highlight``, Issue 183) the most salient
     token in each phrase is rendered in a punch-yellow ``\\c`` override; phrases
-    with no salient token render as plain Bold Pop. With ``highlight=False`` the
-    output is byte-identical to the original Bold Pop."""
+    with no salient token render as plain Bold Pop."""
     if not _has_word_timing(segments):
         return _build_minimal(segments, clip_start_s, clip_end_s)
+
+    if words_per_group > 1:
+        return _build_bold_pop_grouped(
+            segments, clip_start_s, clip_end_s, highlight, words_per_group, group_max_gap_s
+        )
 
     if not highlight:
         return [
@@ -403,6 +587,38 @@ def _build_bold_pop(
         for i, w in enumerate(words_in_clip):
             prefix = highlight_prefix if i in kw_idx else ""
             ev = _bold_pop_event(w, clip_start_s, clip_end_s, prefix)
+            if ev is not None:
+                events.append(ev)
+    return events
+
+
+def _build_bold_pop_grouped(
+    segments: list[dict],
+    clip_start_s: float,
+    clip_end_s: float,
+    highlight: bool,
+    words_per_group: int,
+    group_max_gap_s: float,
+) -> list[pysubs2.SSAEvent]:
+    """Grouped karaoke events (Issue 427): each group pops on appearance and
+    stays until its last word ends. Groups never cross segment boundaries."""
+    kw_words: set[int] = set()
+    if highlight:
+        clip_freq: Counter[str] = Counter(
+            norm
+            for w in _iter_clipped_words(segments, clip_start_s, clip_end_s)
+            if (norm := _normalize_token(w.get("word") or "")) and norm not in _STOPWORDS
+        )
+    events: list[pysubs2.SSAEvent] = []
+    for seg in segments:
+        seg_words = list(_iter_clipped_words([seg], clip_start_s, clip_end_s))
+        if not seg_words:
+            continue
+        if highlight:
+            kw_idx = _keyword_indices(seg_words, clip_freq, _HIGHLIGHT_TOP_N)
+            kw_words = {id(seg_words[i]) for i in kw_idx}
+        for group in _group_words(seg_words, words_per_group, group_max_gap_s):
+            ev = _grouped_pop_event(group, clip_start_s, clip_end_s, kw_words)
             if ev is not None:
                 events.append(ev)
     return events

@@ -1,0 +1,35 @@
+scenario: contained_duplicate_suppressed
+kind: containment
+description: >
+  Issue 429, modeled on the live pair: signal clip 1438.0-1481.2 ("Terry knows
+  something") sits ENTIRELY inside LLM clip 1390-1500 ("Terry & Diggs"). IoU
+  is only 0.39 — under the 0.5 NMS threshold — but the overlap coefficient
+  (intersection over the shorter window) is 1.0. The post-ranking containment
+  pass must keep exactly one of the pair (the higher-ranked container) and
+  renumber survivor ranks densely. Principle: "One idea per Short"
+
+input:
+  candidates:
+    - setup_start_s: 1390.0
+      start_s: 1390.0
+      peak_s: 1445.0
+      end_s: 1500.0
+      origin: llm
+      score: 0.62
+    - setup_start_s: 1438.0
+      start_s: 1438.0
+      peak_s: 1450.0
+      end_s: 1481.2
+      score: 0.50
+    - setup_start_s: 200.0
+      start_s: 200.0
+      peak_s: 230.0
+      end_s: 260.0
+      score: 0.45
+
+expected:
+  survivors: 2
+  candidates:
+    - origin: llm
+      setup_start_s_min: 1385.0
+      setup_start_s_max: 1395.0

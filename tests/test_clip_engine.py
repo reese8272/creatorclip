@@ -198,8 +198,10 @@ SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "eval", "scenarios")
 # raising a visible failure. Raise this number whenever a new scenario is added;
 # never lower it. (Issue 265; raised 6 → 14 when the adversarial scenarios landed — Issue 199;
 # 14 → 15 when the stream-recap budget scenario landed — Issue 190;
-# 15 → 18 when the three kind:merge hybrid-candidate scenarios landed — Issue 416)
-SCENARIO_FLOOR = 18
+# 15 → 18 when the three kind:merge hybrid-candidate scenarios landed — Issue 416;
+# 18 → 21 when the mid-sentence-open, LLM-length-clamp, and contained-duplicate
+# scenarios landed — Issues 428/429)
+SCENARIO_FLOOR = 21
 
 # Scenario files that are explicitly allowed to carry a pytest skip/xfail marker
 # (e.g. a known-broken scenario under active investigation). Add the YAML filename
@@ -386,6 +388,96 @@ def _assert_merge_scenario(scenario: dict) -> None:
             assert matched["end_s"] <= exp_c["end_s_max"], (
                 f"[{name}] end_s={matched['end_s']} > {exp_c['end_s_max']}"
             )
+        if "len_s_max" in exp_c:
+            length = matched["end_s"] - matched["setup_start_s"]
+            assert length <= exp_c["len_s_max"] + 1e-6, (
+                f"[{name}] window length {length:.1f}s > {exp_c['len_s_max']}s — "
+                "LLM window escaped the CLIP_TARGET_MAX_S clamp"
+            )
+
+
+def _assert_snap_scenario(scenario: dict) -> None:
+    """Snap-kind scenario assertions (Issue 428): signal candidates flow through
+    the segment-aware sentence pass and must open on sentence boundaries — never
+    strictly inside a sentence (the meaning-inverting mid-sentence cut)."""
+    from clip_engine.sentence_snap import (
+        _containing_index,
+        build_sentence_index,
+        snap_candidates_to_sentences,
+    )
+
+    inp = scenario["input"]
+    expected = scenario.get("expected", {})
+    name = scenario["scenario"]
+    timeline = inp["timeline"]
+    segments = inp.get("segments", [])
+    duration_s = float(timeline.get("duration_s", 0.0))
+
+    candidates = snap_candidates_to_sentences(
+        extract_candidates(timeline, max_candidates=8), segments, duration_s
+    )
+
+    min_c = expected.get("min_candidates", 0)
+    assert len(candidates) >= min_c, f"[{name}] expected >= {min_c} candidates, got {len(candidates)}"
+
+    if expected.get("starts_on_sentence_start", False):
+        sentences = build_sentence_index(segments)
+        for c in candidates:
+            assert _containing_index(c["setup_start_s"], sentences) is None, (
+                f"[{name}] setup_start_s={c['setup_start_s']} opens strictly inside a "
+                "sentence — the clip starts mid-sentence"
+            )
+
+    for exp_c in expected.get("candidates", []):
+        anchor = exp_c.get("setup_start_s_min", exp_c.get("setup_start_s_max", 0.0))
+        assert candidates, f"[{name}] no candidates to match against"
+        matched = min(candidates, key=lambda c: abs(c["setup_start_s"] - anchor))
+        for key, op, msg in (
+            ("setup_start_s_min", lambda v, e: v >= e, "<"),
+            ("setup_start_s_max", lambda v, e: v <= e, ">"),
+            ("end_s_min", lambda v, e: v >= e, "<"),
+            ("end_s_max", lambda v, e: v <= e, ">"),
+        ):
+            if key in exp_c:
+                field = key.rsplit("_", 1)[0]
+                assert op(matched[field], exp_c[key]), (
+                    f"[{name}] {field}={matched[field]} {msg} expected {exp_c[key]}"
+                )
+
+
+def _assert_containment_scenario(scenario: dict) -> None:
+    """Containment-kind scenario assertions (Issue 429): pre-scored candidates
+    flow through rank → suppress_contained; a (near-)contained lower-ranked
+    window must not survive to the persisted set."""
+    from clip_engine.ranking import rank_candidates, suppress_contained
+
+    inp = scenario["input"]
+    expected = scenario.get("expected", {})
+    name = scenario["scenario"]
+
+    survivors = suppress_contained(rank_candidates([dict(c) for c in inp["candidates"]]))
+
+    if "survivors" in expected:
+        assert len(survivors) == expected["survivors"], (
+            f"[{name}] expected {expected['survivors']} survivor(s), got {len(survivors)} — "
+            "a contained near-duplicate was rendered alongside its container"
+        )
+    assert [c["rank"] for c in survivors] == list(range(1, len(survivors) + 1)), (
+        f"[{name}] survivor ranks not dense: {[c['rank'] for c in survivors]}"
+    )
+    for exp_c in expected.get("candidates", []):
+        anchor = exp_c.get("setup_start_s_min", exp_c.get("setup_start_s_max", 0.0))
+        assert survivors, f"[{name}] no survivors to match against"
+        matched = min(survivors, key=lambda c: abs(c["setup_start_s"] - anchor))
+        if "setup_start_s_min" in exp_c:
+            assert matched["setup_start_s"] >= exp_c["setup_start_s_min"]
+        if "setup_start_s_max" in exp_c:
+            assert matched["setup_start_s"] <= exp_c["setup_start_s_max"]
+        if "origin" in exp_c:
+            assert matched.get("origin", "signal") == exp_c["origin"], (
+                f"[{name}] surviving candidate origin {matched.get('origin', 'signal')!r} "
+                f"!= expected {exp_c['origin']!r}"
+            )
 
 
 def _assert_scenario(scenario: dict) -> None:
@@ -396,6 +488,12 @@ def _assert_scenario(scenario: dict) -> None:
         return
     if scenario.get("kind") == "merge":
         _assert_merge_scenario(scenario)
+        return
+    if scenario.get("kind") == "snap":
+        _assert_snap_scenario(scenario)
+        return
+    if scenario.get("kind") == "containment":
+        _assert_containment_scenario(scenario)
         return
     timeline = scenario["input"]["timeline"]
     expected = scenario.get("expected", {})

@@ -242,6 +242,155 @@ def test_play_res_defaults_to_vertical_short(tmp_path):
     assert subs.styles["Default"].marginv == 290  # unchanged default
 
 
+# ── Issue 427: caption placement, face avoidance, position choice, grouping ──
+
+
+def _load_style(tmp_path, **kwargs) -> pysubs2.SSAStyle:
+    out_path = tmp_path / "placement.ass"
+    build_ass_subtitles(
+        segments=_segments(),
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=out_path,
+        **kwargs,
+    )
+    return pysubs2.load(str(out_path)).styles["Default"]
+
+
+def test_karaoke_default_is_bottom_band_not_center(tmp_path):
+    """The Issue-427 fix itself: bold_pop moves off the face — bottom-center
+    with the baseline at 70% of 1920 (marginv 576), no longer an5/marginv 0."""
+    style = _load_style(tmp_path, style="bold_pop")
+    assert style.alignment == pysubs2.Alignment.BOTTOM_CENTER
+    assert style.marginv == 576  # (1 - 0.70) * 1920
+
+
+def test_face_bottom_pushes_captions_down(tmp_path):
+    # Face bottom at 1250 + 40 pad = 1290 needed top; default caption top is
+    # 1920 - 576 - round(95*1.5) = 1201 < 1290 → marginv shrinks to clear it.
+    style = _load_style(tmp_path, style="bold_pop", face_bottom_px=1250)
+    assert style.marginv == 1920 - (1250 + 40) - round(95 * 1.5)
+    assert style.marginv < 576
+
+
+def test_face_avoidance_clamped_at_bottom_ui_floor(tmp_path):
+    # An absurdly low face cannot push captions into the Shorts bottom-UI zone.
+    style = _load_style(tmp_path, style="bold_pop", face_bottom_px=1700)
+    assert style.marginv == 480
+
+
+def test_caption_position_middle_restores_centered_look(tmp_path):
+    style = _load_style(tmp_path, style="bold_pop", caption_position="middle")
+    assert style.alignment == pysubs2.Alignment.MIDDLE_CENTER
+    assert style.marginv == 0
+
+
+def test_caption_position_top(tmp_path):
+    style = _load_style(tmp_path, style="minimal", caption_position="top")
+    assert style.alignment == pysubs2.Alignment.TOP_CENTER
+    assert style.marginv == 200
+
+
+def test_caption_position_bottom_applies_to_minimal_too(tmp_path):
+    style = _load_style(tmp_path, style="minimal", caption_position="bottom")
+    assert style.alignment == pysubs2.Alignment.BOTTOM_CENTER
+    assert style.marginv == 576
+
+
+def test_unknown_position_falls_back_to_style_default(tmp_path):
+    style = _load_style(tmp_path, style="minimal", caption_position="sideways")
+    assert style.marginv == 290  # legacy lower-third
+
+
+def test_grouped_karaoke_event_timing_and_text(tmp_path):
+    """words_per_group=3: one event per group, first-word start → last-word end,
+    words joined with spaces, pop override still present."""
+    out_path = tmp_path / "grouped.ass"
+    build_ass_subtitles(
+        segments=_segments(),  # 2 segments × 3 words
+        style="bold_pop",
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=out_path,
+        words_per_group=3,
+    )
+    subs = pysubs2.load(str(out_path))
+    assert len(subs.events) == 2  # one group per segment — never across segments
+    first = subs.events[0]
+    assert first.start == 0  # w0 starts at 0.0
+    assert first.end == 1450  # w2 ends at 1.45 s
+    assert "w0 w1 w2" in first.text
+    assert "\\fscx120" in first.text  # pop override retained
+
+
+def test_group_splits_on_silence_gap(tmp_path):
+    words = [
+        {"word": "quick", "start": 0.0, "end": 0.4},
+        {"word": "pause", "start": 0.5, "end": 0.9},
+        # 1.5 s gap > 0.6 default → new group despite room in the current one.
+        {"word": "resume", "start": 2.4, "end": 2.8},
+    ]
+    segments = [{"start": 0.0, "end": 2.8, "text": "quick pause resume", "words": words}]
+    out_path = tmp_path / "gap.ass"
+    build_ass_subtitles(
+        segments=segments,
+        style="bold_pop",
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=out_path,
+        words_per_group=3,
+    )
+    subs = pysubs2.load(str(out_path))
+    assert len(subs.events) == 2
+    assert "quick pause" in subs.events[0].text
+    assert "resume" in subs.events[1].text
+
+
+def test_grouped_highlight_carries_reset_tag(tmp_path):
+    """In a multi-word event the keyword's yellow must RESET to white after the
+    word, or the colour bleeds onto the rest of the group."""
+    words = [
+        {"word": "The", "start": 0.0, "end": 0.4},
+        {"word": "amazing", "start": 0.5, "end": 0.9},
+        {"word": "breakthrough", "start": 1.0, "end": 1.6},
+    ]
+    segments = [{"start": 0.0, "end": 1.6, "text": "The amazing breakthrough", "words": words}]
+    out_path = tmp_path / "hl.ass"
+    build_ass_subtitles(
+        segments=segments,
+        style="bold_pop_highlight",
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=out_path,
+        words_per_group=3,
+    )
+    text = out_path.read_text()
+    assert "\\c&H00d4ff&}breakthrough{\\c&Hffffff&}" in text.replace("\\\\", "\\")
+
+
+def test_words_per_group_one_is_byte_identical_to_legacy(tmp_path):
+    """The regression guarantee: words_per_group=1 reproduces the per-word
+    output exactly (same events as an unparameterized call)."""
+    legacy_path = tmp_path / "legacy.ass"
+    grouped_path = tmp_path / "one.ass"
+    build_ass_subtitles(
+        segments=_segments(),
+        style="bold_pop",
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=legacy_path,
+    )
+    build_ass_subtitles(
+        segments=_segments(),
+        style="bold_pop",
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=grouped_path,
+        words_per_group=1,
+    )
+    assert legacy_path.read_bytes() == grouped_path.read_bytes()
+
+
 def test_gradient_slide_emits_indigo_to_white_color_animation(tmp_path):
     """ASS color byte order is &HBBGGRR& — #5e6ad2 indigo becomes &Hd26a5e&.
     Confirm we did NOT accidentally write the HTML-hex byte order."""

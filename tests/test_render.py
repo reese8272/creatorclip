@@ -492,6 +492,58 @@ def test_no_punch_in_when_peak_outside_window(tmp_path):
     assert _PUNCH_MARKER not in vf
 
 
+# ── Camera-region pre-crop (Issue 430) ───────────────────────────────────────
+
+
+def _render_vf_with_region(tmp_path, *, region, flag=True, reframe=False) -> str:
+    """Render with the camera-region flag toggled and detection patched."""
+    from config import settings as _settings
+
+    with (
+        patch.object(_settings, "CAMERA_REGION_DETECT_ENABLED", flag),
+        patch.object(_settings, "ACTIVE_SPEAKER_REFRAME_ENABLED", reframe),
+        patch("clip_engine.camera_region.detect_camera_region", return_value=region) as det,
+    ):
+        if reframe:
+            from clip_engine.reframe import ReframeResult
+
+            with patch(
+                "clip_engine.reframe.compute_dynamic_crop",
+                return_value=ReframeResult(
+                    track_points=[], sendcmd_text="", mode="static", track_json=None
+                ),
+            ):
+                vf = _render_vf(tmp_path)
+        else:
+            vf = _render_vf(tmp_path)
+    if reframe:
+        assert det.call_count == 0  # per-frame reframe owns geometry — no detection
+    return vf
+
+
+def test_camera_region_prepends_pre_crop_and_rescopes_geometry(tmp_path):
+    # Region 1400×900 at (200, 100): pre-crop first, then the 9:16 crop uses
+    # region height (900) and region-space x, then the scale.
+    vf = _render_vf_with_region(tmp_path, region=(200, 100, 1400, 900))
+    parts = vf.split(",")
+    assert parts[0] == "crop=1400:900:200:100"
+    crop_w = int(900 * 1080 / 1920)  # 506
+    x_offset = max(0, min(1400 // 2 - crop_w // 2, 1400 - crop_w))
+    assert parts[1] == f"crop={crop_w}:900:{x_offset}:0"
+    assert parts[2] == "scale=1080:1920"
+
+
+def test_camera_region_none_is_byte_identical(tmp_path):
+    with_flag = _render_vf_with_region(tmp_path, region=None)
+    baseline = _render_vf(tmp_path)
+    assert with_flag == baseline
+
+
+def test_camera_region_skipped_under_reframe_flag(tmp_path):
+    vf = _render_vf_with_region(tmp_path, region=(200, 100, 1400, 900), reframe=True)
+    assert "crop=1400:900" not in vf
+
+
 # ── opt-in noise reduction (Issue 185) ────────────────────────────────────────
 
 

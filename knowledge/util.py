@@ -212,6 +212,41 @@ def extract_transcript_window(
     return " ".join(parts)[:max_chars]
 
 
+def extract_transcript_opening(
+    segments_jsonb: dict | None, start_s: float, span_s: float = 5.0, max_chars: int = 300
+) -> str:
+    """Extract the words actually SPOKEN in ``[start_s, start_s + span_s)``.
+
+    Word-level (Issue 428): the midpoint rule of ``extract_transcript_window``
+    is far too coarse for a ~5 s span over ~20 s utterances — a hook grounded
+    on it can describe content that arrives well after the clip opens. Falls
+    back to the text of the first overlapping segment when word timings are
+    absent (pre-Deepgram transcripts). Empty string when nothing is spoken in
+    the span.
+    """
+    if not segments_jsonb:
+        return ""
+    cutoff = start_s + span_s
+    words: list[str] = []
+    fallback = ""
+    for seg in segments_jsonb.get("segments", []):
+        seg_start = float(seg.get("start", 0.0))
+        seg_end = float(seg.get("end", seg_start))
+        if seg_end < start_s or seg_start >= cutoff:
+            continue
+        seg_words = seg.get("words") or []
+        if seg_words:
+            words.extend(
+                str(w.get("word", ""))
+                for w in seg_words
+                if start_s <= float(w.get("start", 0.0)) < cutoff
+            )
+        elif not fallback:
+            fallback = seg.get("text", "").strip()
+    text = " ".join(w for w in words if w) or fallback
+    return text[:max_chars]
+
+
 def get_transcript_segments(segments_jsonb: dict | None) -> list[dict]:
     """Return the raw segments list from segments_jsonb, or empty list."""
     if not segments_jsonb:

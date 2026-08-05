@@ -127,11 +127,14 @@ def test_validate_drops_bad_span_geometry() -> None:
 
 
 def test_validate_caps_moments_by_confidence() -> None:
+    # One more moment than the cap (6 since 2026-08-05) — the lowest-confidence
+    # one must be the drop.
+    n = settings.LLM_CANDIDATES_MAX + 1
     moments = [
-        _moment(i * 100.0, i * 100.0 + 60.0, "Front-load value", 0.5 + i * 0.1) for i in range(5)
+        _moment(i * 100.0, i * 100.0 + 60.0, "Front-load value", 0.5 + i * 0.05) for i in range(n)
     ]
-    ctx = validate_context(_payload(moments), duration_s=1000.0)
-    assert len(ctx["moments"]) == settings.LLM_CANDIDATES_MAX == 4
+    ctx = validate_context(_payload(moments), duration_s=100.0 * n + 100.0)
+    assert len(ctx["moments"]) == settings.LLM_CANDIDATES_MAX == 6
     # The lowest-confidence moment (0.5, at start 0) was the one dropped.
     assert all(m["confidence"] > 0.5 for m in ctx["moments"])
     # Survivors are returned chronologically.
@@ -237,7 +240,7 @@ async def test_build_video_context_round_trip(mocker) -> None:
     )
 
     assert captured["model"] == settings.ANTHROPIC_MODEL_VIDEO_CONTEXT
-    assert captured["max_tokens"] == 2000
+    assert captured["max_tokens"] == 8000  # Opus 5: cap covers thinking + text (2026-08-05)
     fmt = captured["output_config"]["format"]
     assert fmt["type"] == "json_schema"
     assert fmt["schema"]["additionalProperties"] is False

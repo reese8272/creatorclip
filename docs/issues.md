@@ -238,16 +238,18 @@ LEFT edge, exact sendcmd values), cuts:[{t,from_x,to_x,speaker?}], shots, speake
       (0052→0055→0052→0055, column jsonb NULLABLE verified)
 
 ### Issue 422: Worker image (mediapipe) + staging rollout + flag flip
-- [ ] **Status:** code-side PREPARED 2026-08-04 (`requirements-image.txt` + Dockerfile +
-  `reframe_stages` vlog timings + staging checklist in `docs/DEPLOYMENT.md`); **staging
-  verification OPEN** — no Docker locally, the four unlock criteria below need staging
-  evidence; flags stay off in prod · **Track:** B · **Size:** M · **Depends:** 421
+- [ ] **Status:** step-0 dependency conflict RESOLVED 2026-08-05 (`mediapipe==1.0.0` supports
+  numpy 2 from 0.10.30 — verified against PyPI metadata; `INSTALL_REFRAME` now defaults true;
+  see `docs/DEPLOYMENT.md` step 0 + DECISIONS 2026-08-05); **staging verification OPEN** —
+  the four unlock criteria below need staging evidence; runtime flags stay off in prod ·
+  **Track:** B · **Size:** M · **Depends:** 421
 
-**What.** `requirements-image.txt` (`-r requirements.txt` + `mediapipe==0.10.21`), Dockerfile
-installs it; local dev untouched (lazy imports). Flag sequencing: neutral deploy →
-`TRANSCRIPTION_DIARIZE_ENABLED=true` → staging reframe-on/cuts-off (verify pan rung) → staging cuts
-on vs a real 2-speaker fixture → prod flip. Closes **Issue 189's four unlock criteria with recorded
-evidence**; per-stage vlog timings (budget est. +12–24s per 60s clip vs 240s timeout).
+**What.** `requirements-image.txt` (`-r requirements.txt` + `mediapipe==1.0.0` +
+`opencv-contrib-python==4.13.0.92`), Dockerfile installs it by default; local dev untouched
+(lazy imports). Flag sequencing: neutral deploy → `TRANSCRIPTION_DIARIZE_ENABLED=true` →
+staging reframe-on/cuts-off (verify pan rung) → staging cuts on vs a real 2-speaker fixture →
+prod flip. Closes **Issue 189's four unlock criteria with recorded evidence**; per-stage vlog
+timings (budget est. +12–24s per 60s clip vs 240s timeout).
 
 **Acceptance**
 - [ ] Image builds with mediapipe + model asset verified (unlock #1)
@@ -1929,21 +1931,21 @@ reading-proficiency research, whose width also works against the void-heavy layo
 
 ### Issue 427: Caption placement collides with the speaker's face
 
-- [ ] **Status:** open · **Size:** S · **BETA-visible**
+- [ ] **Status:** CODE-COMPLETE 2026-08-05 (427-430 wave) — only the live frame-extraction spot-check remains · **Size:** S · **BETA-visible**
 
 The karaoke captions (one word at a time) render at ~50% frame height — in every sampled frame
 of all 3 audited clips the word sits ON the host's face (over the sunglasses/nose). Standard
 Shorts placement is lower-third, inside title-safe, BELOW the subject's chin.
 
 **Acceptance**
-- [ ] Caption baseline moved to ~68–75% frame height (below typical talking-head chin line), configurable
-- [ ] Never overlaps the detected face box when face data exists (reframe pipeline already detects faces)
-- [ ] Consider 2–3-word grouping vs single-word (readability at Shorts pacing); keep style tokens
+- [x] Caption baseline moved to ~68–75% frame height (below typical talking-head chin line), configurable (`CAPTION_BASELINE_FRAC=0.70`; creator override `caption_position` top|middle|bottom via panel + brand kit)
+- [x] Never overlaps the detected face box when face data exists (Haar box → pushdown, floored at the bottom-UI zone; per-frame-reframe box threading lands with Issue 422)
+- [x] 3-word karaoke grouping (`CAPTION_WORDS_PER_GROUP=3`, gap-split 0.6 s; `1` = legacy byte-identical, pinned); style tokens kept (highlight gains the required reset tag)
 - [ ] Frame-extraction spot-check on a re-rendered clip shows no face overlap
 
 ### Issue 428: Clips open mid-sentence — word-boundary snap instead of sentence-boundary snap (one meaning-INVERTING cut)
 
-- [ ] **Status:** open · **Size:** M · **Clip-quality core**
+- [x] **Status:** DONE 2026-08-05 (427-430 wave) — sentence_snap.py + merge clamp + hook grounding; eval red→green verified · **Size:** M · **Clip-quality core**
 
 5 of 8 clips open on a sentence fragment. Worst case `84b362b0` (1438.01): source audio is
 "I don't **really think it's gonna happen** …" and the clip opens at "really think it's gonna
@@ -1957,27 +1959,27 @@ ahead and close this one out… oh, before we get out of here —") before its s
 (over the 60–90 s target) — LLM moment validation should sentence-snap AND clamp length.
 
 **Acceptance**
-- [ ] `setup_start_s` snaps to the nearest SENTENCE start (transcript segments carry punctuation/sentence boundaries; word timestamps exist) with a small lead-in tolerance
-- [ ] Negation-preserving guard: never cut inside a clause (minimum: never start mid-segment)
-- [ ] LLM-proposed windows: sentence-snap both edges + hard clamp to the length target
-- [ ] `suggested_hook` generated from the ACTUAL first ~5 s of the final window, not the story summary
-- [ ] Eval scenario added: mid-sentence-open fixture must fail pre-fix, pass post-fix (SCENARIO_FLOOR bump)
+- [x] `setup_start_s` snaps to the nearest SENTENCE start (`clip_engine/sentence_snap.py`, 0.3 s lead-in floored at the previous sentence end)
+- [x] Negation-preserving guard: a start is NEVER left mid-sentence (backward-preferred within 10 s; forward only for run-ons; backward regardless when forward is invalid)
+- [x] LLM-proposed windows: sentence-snap both edges + hard 90 s clamp (`CLIP_TARGET_MAX_S`, sentence-aligned cut)
+- [x] `suggested_hook` generated from the ACTUAL first ~5 s (`extract_transcript_opening` + `clip_opening_*` prompt envelope + prompt rule)
+- [x] Eval scenario added: `mid_sentence_open.yaml` verified RED on the legacy path (setup stayed 76.0 mid-sentence) and green post-fix (71.2); `SCENARIO_FLOOR` 18→21
 
 ### Issue 429: Near-duplicate overlapping clips both rendered (cross-origin NMS gap)
 
-- [ ] **Status:** open · **Size:** S
+- [x] **Status:** DONE 2026-08-05 (427-430 wave) — suppress_contained at the rank→trim seam · **Size:** S
 
 `84b362b0` (1438.0–1481.2, signal, "Terry knows something") sits ENTIRELY inside LLM clip
 `960d3931`'s window (1390–1500, "Terry & Diggs") — ~43 s of identical content rendered twice
 (IoU ≈ 0.39, under the NMS threshold). The creator reviews 8 "clips" but only 7 stories.
 
 **Acceptance**
-- [ ] Post-ranking containment/diversity pass: if a lower-ranked clip's window is ≥N% contained in a kept clip's window, drop or demote it (cross-origin, after scoring — preserves the signal-priority union pre-scoring)
-- [ ] Eval fixture with a contained-window pair asserts only one survives
+- [x] Post-ranking containment pass: overlap coefficient (IoMin) ≥ 0.8 → DROP with refill from the pool (cross-origin, after scoring, before trim/persist — union untouched, preference reranker can't resurrect)
+- [x] Eval fixture `contained_duplicate_suppressed.yaml` (the live 1390-1500 / 1438-1481 pair) asserts one of the pair survives
 
 ### Issue 430: Static crop slices the source video's own layout chrome — detect the camera region
 
-- [ ] **Status:** open · **Size:** M · interacts with Issue 422 (reframe staging)
+- [ ] **Status:** CODE-COMPLETE 2026-08-05 (427-430 wave), flag OFF (`CAMERA_REGION_DETECT_ENABLED`) — staging frame check then flip · **Size:** M · interacts with Issue 422 (reframe staging)
 
 The source was a produced podcast layout (show logo card top-right, guest name chip left,
 "@WSHCARTER" social banner bottom). The full-height center crop keeps all of it: logo cut off
@@ -1986,9 +1988,34 @@ the bottom ~20% of every rendered Short. The face framing itself is good — the
 crop treats the whole 16:9 frame as camera when much of it is chrome.
 
 **Acceptance**
-- [ ] Detect the active camera region (static-region/edge detection or face-box expansion) and crop/zoom INTO it before the 9:16 composition, instead of full-height slicing
-- [ ] Falls back to today's full-height crop when no chrome is detected (plain camera sources unchanged)
-- [ ] Frame-extraction check on a produced-layout source shows no truncated third-party chrome
+- [x] Detect the active camera region (`clip_engine/camera_region.py`, cv2 temporal variance) and crop/zoom INTO it before the 9:16 composition (region-space crop chain in `render_clip_file`)
+- [x] Falls back to today's full-height crop when no chrome is detected (fail-open gates; byte-identical vf pinned by tests; skipped under the reframe flag — 422 seam documented)
+- [ ] Frame-extraction check on a produced-layout source shows no truncated third-party chrome (staging, then flag flip)
+
+### Issue 431: "Generate more clips" — user-triggered regeneration excluding existing windows
+
+- [ ] **Status:** open · **Size:** M · filed 2026-08-05 (user directive during the 427–430 wave)
+
+Generation is deliberately one-shot idempotent (`POST /videos/{id}/clips/generate` short-circuits
+when clips exist — Issue 61). With the wider pool (12 persisted / top-8 rendered, shipped in the
+427–430 wave) the creator has more options per ingest, but no way to ask for MORE clips from the
+same video after reviewing. A regenerate affordance closes the loop: like/dislike feedback trains
+the preference model, then "more clips" surfaces fresh windows ranked by the updated model —
+"this keeps ingestion to one and helps the DNA out when they like or don't like a particular clip."
+
+**Sketch (research in Phase 1 — CHECK)**
+- New endpoint (e.g. `POST /videos/{id}/clips/generate-more`): re-runs `score_and_rank` and
+  excludes windows ≥N% contained in EXISTING clips via the Issue-429 `suppress_contained` pass
+  (seed the kept-list with the persisted windows); appends new rows at ranks n+1…
+- No minute charge (minutes were charged at ingest); LLM scoring call is the only new spend —
+  gate behind the existing spend guard + a per-video regeneration cap.
+- Review-screen button ("Generate more clips") shown once feedback exists or all clips reviewed.
+
+**Acceptance**
+- [ ] Regeneration never duplicates an existing clip window (containment vs persisted set)
+- [ ] Existing clips, feedback, and renders are untouched (append-only)
+- [ ] No minute deduction; LLM spend guarded + capped
+- [ ] Button in Review; disabled state explains when nothing new can be found
 
 ---
 
@@ -2065,4 +2092,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **414**.
+- Next free issue number: **432**.

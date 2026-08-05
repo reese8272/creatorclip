@@ -69,7 +69,7 @@ def test_clamp_hook_caps() -> None:
 
 def _payloads() -> list[dict]:
     return [
-        {"clip_id": "clip-a", "rank": 1, "window_text": "WINDOW A ONLY"},
+        {"clip_id": "clip-a", "rank": 1, "window_text": "WINDOW A ONLY", "opening_text": "OPEN A"},
         {"clip_id": "clip-b", "rank": 2, "window_text": "WINDOW B ONLY"},
     ]
 
@@ -88,6 +88,20 @@ def test_build_request_each_clip_owns_its_window() -> None:
     # Context summary is an uncached block AFTER the DNA cache breakpoint.
     assert system[2]["text"].startswith("VIDEO CONTEXT:")
     assert "cache_control" not in system[2]
+
+
+def test_build_request_opening_text_wrapped_when_present() -> None:
+    """Issue 428 — the clip's first-5s speech rides its own untrusted envelope,
+    and the static prompt pins the hook to it."""
+    from knowledge.clip_metadata import _SYSTEM_INSTRUCTIONS
+
+    _, messages = _build_request("Chan", "brief", "summary", _payloads())
+    user = messages[0]["content"]
+    assert '<untrusted name="clip_opening_clip-a">' in user
+    assert json.dumps("OPEN A") in user
+    # No opening_text for clip-b → no empty envelope emitted.
+    assert '<untrusted name="clip_opening_clip-b">' not in user
+    assert "first ~5 seconds" in _SYSTEM_INSTRUCTIONS
 
 
 def test_static_block_byte_identical_across_calls() -> None:

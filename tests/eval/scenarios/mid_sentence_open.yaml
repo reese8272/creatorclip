@@ -1,0 +1,51 @@
+scenario: mid_sentence_open
+kind: snap
+description: >
+  The Issue-428 live defect: a silence boundary at 73-76s puts the raw setup
+  at 76.0s, which is 4.8 seconds INTO the sentence "I don't really think it's
+  gonna happen." (71.5-78.5). The previous sentence ends at 71.2 — beyond the
+  legacy 3-second word-snap radius, so the pre-fix engine opened the clip at
+  "really think it's gonna happen", cutting the negation and INVERTING the
+  speaker's meaning. The segment-aware pass must move the open to the sentence
+  start (71.5 with the 0.3 s lead-in floored at 71.2) and never leave any
+  setup strictly inside a sentence. Principle: "Clean Context Boundary"
+
+input:
+  timeline:
+    version: 1
+    duration_s: 180.0
+    events:
+      - {type: silence,         start_s: 73.0, end_s: 76.0}
+      - {type: energy_spike,    start_s: 76.0, end_s: 91.0, value: 0.9}
+      - {type: retention_spike, start_s: 91.0, end_s: 93.0, value: 1.6}
+  segments:
+    - start: 60.0
+      end: 78.5
+      text: "So that's the situation. I don't really think it's gonna happen."
+      words:
+        - {word: "So",         start: 60.0, end: 60.4}
+        - {word: "that's",     start: 60.5, end: 60.9}
+        - {word: "the",        start: 61.0, end: 61.2}
+        - {word: "situation.", start: 61.3, end: 71.2}
+        - {word: "I",          start: 71.5, end: 71.7}
+        - {word: "don't",      start: 71.8, end: 72.3}
+        - {word: "really",     start: 72.4, end: 76.2}
+        - {word: "think",      start: 76.3, end: 76.9}
+        - {word: "it's",       start: 77.0, end: 77.3}
+        - {word: "gonna",      start: 77.4, end: 77.8}
+        - {word: "happen.",    start: 77.9, end: 78.5}
+    - start: 79.0
+      end: 120.0
+      text: "But here's the thing."
+      words:
+        - {word: "But",    start: 79.0,  end: 79.3}
+        - {word: "here's", start: 79.4,  end: 79.8}
+        - {word: "the",    start: 79.9,  end: 80.0}
+        - {word: "thing.", start: 80.1,  end: 120.0}
+
+expected:
+  min_candidates: 1
+  starts_on_sentence_start: true
+  candidates:
+    - setup_start_s_min: 70.9
+      setup_start_s_max: 71.5

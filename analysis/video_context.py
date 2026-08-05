@@ -55,7 +55,7 @@ _ANTHROPIC = AsyncAnthropic(
 )
 
 # Bump whenever the prompt or context_jsonb schema changes (stored on the row).
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2  # v2 (Issue 428): 60-90 s target + sentence-boundary edges in MOMENT SELECTION
 
 # Paragraph granularity for the rendered transcript (seconds).
 _PARAGRAPH_S = 30.0
@@ -112,9 +112,11 @@ MOMENT SELECTION — the part only you can do:
   calmly is exactly what you must surface — the signal pipeline already
   catches loud moments.
 - Each moment must be a self-contained 30-90 second span: the setup AND the
-  payoff both inside [start_s, end_s].
+  payoff both inside [start_s, end_s]. Target 60-90 seconds per moment; spans
+  over 90 seconds are hard-trimmed downstream, losing your chosen ending.
 - start_s begins at the setup of the idea, never mid-thought and never at the
-  aftermath or reaction.
+  aftermath or reaction. Start and end on sentence boundaries — never open on
+  housekeeping, outro talk, or the tail of a previous thought.
 - principle: cite EXACTLY one named principle from the list above.
 - reason: one sentence on why THIS span works for THIS creator's audience.
 - confidence: 0.0-1.0 — your estimate of fit for this creator, not a promise
@@ -360,17 +362,19 @@ async def build_video_context(
 
     from verbose import vlog_llm_request, vlog_llm_response
 
+    # 2000 → 8000 (2026-08-05): Opus 5 thinks by default and max_tokens caps
+    # thinking + response text together — a tight cap truncates the JSON mid-array.
     vlog_llm_request(
         "video_context",
         model=settings.ANTHROPIC_MODEL_VIDEO_CONTEXT,
-        max_tokens=2000,
+        max_tokens=8000,
         system=system,
         messages=messages,
     )
     try:
         response = await _ANTHROPIC.messages.create(  # type: ignore[call-overload]
             model=settings.ANTHROPIC_MODEL_VIDEO_CONTEXT,
-            max_tokens=2000,
+            max_tokens=8000,
             system=system,
             messages=messages,
             output_config={"format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}},
@@ -401,6 +405,10 @@ async def build_video_context(
     warn_if_truncated(
         settings.ANTHROPIC_MODEL_VIDEO_CONTEXT, getattr(response, "stop_reason", None)
     )
+    if getattr(response, "stop_reason", None) == "refusal":
+        # Opus 5 safety classifiers can decline a request (HTTP 200, empty
+        # content). The empty-parse path below degrades to context_skipped.
+        logger.warning("video_context: model returned stop_reason=refusal — context will skip")
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
     data = json.loads(extract_json_block(raw))  # ValueError/JSONDecodeError → caller degrades

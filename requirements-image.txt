@@ -1,13 +1,29 @@
 # Container-image-only dependencies (Issue 422).
 #
-# mediapipe is a ~200 MB native package needed ONLY by the render worker's
+# mediapipe is a large native package needed ONLY by the render worker's
 # speaker-aware reframe path (clip_engine/reframe.py — lazy import, gated by
 # ACTIVE_SPEAKER_REFRAME_ENABLED). It is deliberately NOT in requirements.txt:
 # local dev boxes and CI run the full unit suite without it (every reframe
 # test is synthetic), and installing it there would slow every venv build for
 # a package the code never imports outside the worker image.
 #
+# mediapipe 0.10.21 → 1.0.0 (2026-08-05, Issue 422 step-0 resolution):
+# 0.10.30+ dropped the numpy<2 pin (requires_dist is unconstrained "numpy"),
+# dissolving the pip-unresolvable conflict with the app's numpy==2.1.3.
+# 1.0.0 is Tasks-API-only (legacy mediapipe.solutions removed) — fine, the
+# repo uses only mp.tasks.vision.FaceDetector / mp.Image / ImageFormat.SRGB.
+# Sources: https://pypi.org/pypi/mediapipe/json ·
+# https://github.com/google-ai-edge/mediapipe/issues/6078 (numpy 2) ·
+# https://github.com/google-ai-edge/mediapipe/issues/6192 (solutions removal).
+#
+# opencv-contrib-python: mediapipe declares it as a hard dependency, which
+# would co-install alongside the app's opencv-python pin — two packages
+# owning the same cv2 module path. Pin contrib to the SAME version as the
+# app's opencv-python (contrib is a strict superset, identical ABI) and let
+# the Dockerfile force-reinstall it LAST so contrib owns cv2 deterministically.
+#
 # The Dockerfile installs THIS file, which chains the base requirements, so
 # the image = base deps + image-only deps with one pip invocation.
 -r requirements.txt
-mediapipe==0.10.21
+mediapipe==1.0.0
+opencv-contrib-python==4.13.0.92

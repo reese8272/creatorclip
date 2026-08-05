@@ -568,6 +568,9 @@ export interface BrandKit {
   zoom_on_peak: boolean
   denoise: boolean
   aspect: string | null
+  // Caption band (Issue 427): where captions sit in the frame. null = the
+  // engine default (karaoke at the lower band with face avoidance).
+  caption_position: 'top' | 'middle' | 'bottom' | null
 }
 
 // ── Notifications (Issue 245) ────────────────────────────────────────────────

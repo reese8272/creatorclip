@@ -65,7 +65,9 @@ scannable in a feed, fitted to THIS creator's channel style and audience.
   - description: 1-3 sentences plus at most 3 hashtags INCLUDING #Shorts. No links, \
 no angle brackets, ≤4500 characters.
   - hook: a spoken/overlay opening line for the clip (≤{HOOK_MAX_CHARS} chars) that \
-front-loads the clip's value.
+front-loads the clip's value. The hook MUST reflect what is actually spoken in the \
+clip's first ~5 seconds (the clip_opening text when provided) — never tease content \
+that arrives later in the clip.
 
 Honesty constraints (strictly enforced):
   - Ground every field in the clip's OWN transcript window — never invent claims \
@@ -169,6 +171,10 @@ def _build_request(
     for p in clip_payloads:
         parts.append(f"clip_id: {p['clip_id']} (rank {p.get('rank')})\n")
         parts.append(wrap_untrusted(f"clip_transcript_{p['clip_id']}", p.get("window_text", "")))
+        # The words actually spoken in the clip's first ~5 s — grounds the hook
+        # in the real open (Issue 428).
+        if p.get("opening_text"):
+            parts.append(wrap_untrusted(f"clip_opening_{p['clip_id']}", p["opening_text"]))
     parts.append("Write title/description/hook for every clip above. Return the JSON object.")
     messages: list[dict] = [{"role": "user", "content": "".join(parts)}]
     return system, messages
@@ -231,17 +237,19 @@ async def generate_clip_metadata_batch(
 
     from verbose import vlog_llm_request, vlog_llm_response
 
+    # 2000 → 6000 (2026-08-05): Opus 5 thinks by default and max_tokens caps
+    # thinking + response text together; 12 persisted clips also need more rows.
     vlog_llm_request(
         "clip_metadata_batch",
         model=settings.ANTHROPIC_MODEL_CLIP_METADATA,
-        max_tokens=2000,
+        max_tokens=6000,
         system=system,
         messages=messages,
     )
     try:
         response = await _ANTHROPIC.messages.create(  # type: ignore[call-overload]
             model=settings.ANTHROPIC_MODEL_CLIP_METADATA,
-            max_tokens=2000,
+            max_tokens=6000,
             system=system,
             messages=messages,
             output_config={"format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}},
@@ -270,6 +278,10 @@ async def generate_clip_metadata_batch(
     warn_if_truncated(
         settings.ANTHROPIC_MODEL_CLIP_METADATA, getattr(response, "stop_reason", None)
     )
+    if getattr(response, "stop_reason", None) == "refusal":
+        # Opus 5 safety classifiers can decline (HTTP 200, empty content) —
+        # the empty-parse path leaves suggested_* NULL; clips stay usable.
+        logger.warning("clip_metadata_batch: model returned stop_reason=refusal")
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
     expected_ids = {str(p["clip_id"]) for p in clip_payloads}

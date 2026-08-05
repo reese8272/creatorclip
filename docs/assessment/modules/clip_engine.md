@@ -55,7 +55,7 @@ locations (unchanged). `pytest tests/test_clip_engine.py tests/test_scoring.py`
   back to exactly 111.0 (commit verified the raw snap reaches 112.5 pre-clamp,
   so the test fails without the fix). Covers the clamp branch; the defensive
   drop branch is unreachable by construction, per 80/20 left untested.
-- **Eval-harness integrity re-confirmed:** `SCENARIO_FLOOR = 15`
+- **Eval-harness integrity re-confirmed:** `SCENARIO_FLOOR = 21` (as of 2026-08-05)
   (tests/test_clip_engine.py:201) with 16 scenario yamls on disk +
   ranking fixture; the setup-before-peak invariant is enforced three ways —
   `test_setup_always_before_peak` (:180), the per-scenario

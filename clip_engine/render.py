@@ -364,10 +364,12 @@ def _source_duration_s(source_path: Path) -> float:
         return float("inf")  # unknown → caller allows through
 
 
-def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
-    """
-    Return x-coordinate of the center of the largest detected face.
-    Falls back to frame_width // 2 if OpenCV is unavailable or no face found.
+def _detect_face_box(keyframe_path: Path) -> tuple[int, int, int, int] | None:
+    """Largest detected face as ``(x, y, w, h)`` in SOURCE pixels, or ``None``
+    when OpenCV is unavailable, the frame is unreadable, or no face is found.
+
+    The full box (not just center-x) feeds both the crop centering and the
+    caption face-avoidance rule (Issue 427).
     """
     try:
         import cv2
@@ -375,27 +377,35 @@ def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
         img = cv2.imread(str(keyframe_path))
         if img is None:
             logger.info(
-                "_detect_face_center_x: corrupt frame — %s could not be decoded, using center",
+                "_detect_face_box: corrupt frame — %s could not be decoded",
                 keyframe_path.name,
             )
-            return frame_width // 2
+            return None
         cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
         )
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
         if len(faces) == 0:
-            logger.info(
-                "_detect_face_center_x: no face detected in %s — using frame center",
-                keyframe_path.name,
-            )
-            return frame_width // 2
+            logger.info("_detect_face_box: no face detected in %s", keyframe_path.name)
+            return None
         largest = max(faces, key=lambda f: int(f[2]) * int(f[3]))
-        x, w = int(largest[0]), int(largest[2])
-        return x + w // 2
+        return int(largest[0]), int(largest[1]), int(largest[2]), int(largest[3])
     except Exception as exc:
-        logger.warning("Face detection failed (%s) — using frame center", exc)
+        logger.warning("Face detection failed (%s)", exc)
+        return None
+
+
+def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
+    """
+    Return x-coordinate of the center of the largest detected face.
+    Falls back to frame_width // 2 if OpenCV is unavailable or no face found.
+    """
+    box = _detect_face_box(keyframe_path)
+    if box is None:
         return frame_width // 2
+    x, _, w, _ = box
+    return x + w // 2
 
 
 # Animated caption styles (Issue 133). Style identifiers are validated against
@@ -453,6 +463,9 @@ def render_clip_file(
     ``style_preset`` is a dict with optional keys:
       - ``subtitle``: one of "bold_pop" | "bold_pop_highlight" | "gradient_slide"
         | "minimal" | None
+      - ``caption_position``: "top" | "middle" | "bottom" | None (Issue 427) —
+        the creator's caption band. None → per-style default (karaoke at the
+        ~70% bottom band with face avoidance; minimal/gradient lower-third).
       - ``background``: "blur" | "black" | None  (None → default black letterbox)
       - ``captions_enabled``: bool (currently informational — the subtitle key
         is the load-bearing switch)
@@ -566,18 +579,58 @@ def render_clip_file(
                 source_path.name,
                 x_offset,
             )
-    else:
-        # Legacy path: find face center in a keyframe at the midpoint of the clip.
+    # Face geometry for caption avoidance (Issue 427). The per-frame reframe
+    # path does not thread its FaceObs boxes yet — that lands with Issue 422.
+    face_box: tuple[int, int, int, int] | None = None  # source px
+    if not _settings.ACTIVE_SPEAKER_REFRAME_ENABLED:
+        # Legacy path: find the face box in a keyframe at the midpoint of the clip.
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             kf_path = Path(tmp.name)
         try:
             mid_s = start_s + duration / 2
             _extract_keyframe(source_path, mid_s, kf_path, timeout_s=render_timeout_s)
-            face_x = _detect_face_center_x(kf_path, frame_w)
+            face_box = _detect_face_box(kf_path)
         finally:
             kf_path.unlink(missing_ok=True)
+        face_x = face_box[0] + face_box[2] // 2 if face_box else frame_w // 2
         # Clamp crop x-offset.
         x_offset = max(0, min(face_x - crop_w // 2, frame_w - crop_w))
+
+    # ── Camera-region pre-crop (Issue 430, flag-gated) ───────────────────────
+    # Produced podcast layouts carry their own chrome (logo cards, name chips,
+    # social banners); the full-height crop slices through it. Detect the
+    # active camera via temporal variance and crop INTO it before the 9:16
+    # composition. Skipped when the per-frame reframe owns geometry — its
+    # sendcmd x-commands and persisted crop track are full-frame-coordinate
+    # contracts (the Issue-422 integration passes the region into
+    # compute_dynamic_crop instead, applying the offset once at emission).
+    region_x, region_y = 0, 0
+    region_w, region_h = frame_w, frame_h
+    if not _settings.ACTIVE_SPEAKER_REFRAME_ENABLED and _settings.CAMERA_REGION_DETECT_ENABLED:
+        from clip_engine import camera_region as _camera_region
+
+        detected = _camera_region.detect_camera_region(
+            source_path,
+            start_s,
+            end_s,
+            frame_w,
+            frame_h,
+            sample_frames=_settings.CAMERA_REGION_SAMPLE_FRAMES,
+            motion_thresh=_settings.CAMERA_REGION_MOTION_THRESH,
+            min_area_frac=_settings.CAMERA_REGION_MIN_AREA_FRAC,
+            min_height_frac=_settings.CAMERA_REGION_MIN_HEIGHT_FRAC,
+            full_frame_frac=_settings.CAMERA_REGION_FULL_FRAME_FRAC,
+            pad_frac=_settings.CAMERA_REGION_PAD_FRAC,
+            face_box=face_box,
+            timeout_s=render_timeout_s,
+        )
+        if detected is not None:
+            region_x, region_y, region_w, region_h = detected
+            # All downstream geometry switches to region space.
+            crop_w = min(int(region_h * out_w / out_h), region_w)
+            face_x_rel = face_box[0] + face_box[2] // 2 - region_x if face_box else region_w // 2
+            x_offset = max(0, min(face_x_rel - crop_w // 2, region_w - crop_w))
+    has_camera_region = (region_x, region_y, region_w, region_h) != (0, 0, frame_w, frame_h)
 
     # Build vf chain: [sendcmd→]crop → scale, with optional style additions.
     # `-ss` before `-i` is fast (seeks to the nearest keyframe first); `-accurate_seek`
@@ -599,7 +652,12 @@ def render_clip_file(
             f"scale={out_w}:{out_h}",
         ]
     else:
-        vf_parts = [f"crop={crop_w}:{frame_h}:{x_offset}:0", f"scale={out_w}:{out_h}"]
+        # A detected camera region prepends its own crop (Issue 430); without
+        # one, region_h == frame_h and the chain is byte-identical to before.
+        vf_parts = []
+        if has_camera_region:
+            vf_parts.append(f"crop={region_w}:{region_h}:{region_x}:{region_y}")
+        vf_parts.extend([f"crop={crop_w}:{region_h}:{x_offset}:0", f"scale={out_w}:{out_h}"])
 
     # Auto-zoom punch-in (Issue 184): applied to the framed video BEFORE subtitles
     # so the captions stay steady while the content zooms. Off unless the creator
@@ -617,6 +675,16 @@ def render_clip_file(
             # NamedTemporaryFile per render call), so the suffix keeps concurrent
             # re-renders from stomping each other.
             ass_path = out_path.with_suffix(f".{subtitle_key}.ass")
+            # Face bottom in OUTPUT-canvas pixels (Issue 427): the (region) crop
+            # keeps region height and scales region_h → out_h, so the vertical
+            # factor applies after subtracting the region's y origin. None when
+            # no face was detected (or the per-frame reframe owns geometry —
+            # Issue 422 threads its boxes later).
+            face_bottom_px = (
+                round((face_box[1] + face_box[3] - region_y) * out_h / region_h)
+                if face_box
+                else None
+            )
             captions.build_ass_subtitles(
                 segments=transcript_segments,
                 style=subtitle_key,
@@ -625,6 +693,14 @@ def render_clip_file(
                 out_path=ass_path,
                 play_res_x=out_w,
                 play_res_y=out_h,
+                caption_position=style_preset.get("caption_position"),
+                face_bottom_px=face_bottom_px,
+                words_per_group=_settings.CAPTION_WORDS_PER_GROUP,
+                group_max_gap_s=_settings.CAPTION_GROUP_MAX_GAP_S,
+                baseline_frac=_settings.CAPTION_BASELINE_FRAC,
+                min_bottom_margin_px=_settings.CAPTION_MIN_BOTTOM_MARGIN_PX,
+                top_margin_px=_settings.CAPTION_TOP_MARGIN_PX,
+                face_avoid_pad_px=_settings.CAPTION_FACE_AVOID_PAD_PX,
             )
             if ass_path.exists():
                 # The subtitles= filter uses `:` as arg separator; the ass path lives
