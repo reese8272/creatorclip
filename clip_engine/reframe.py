@@ -1020,6 +1020,7 @@ def compute_dynamic_crop(
     used only to suppress speaker cuts inside the pulse.
     """
     from config import settings  # noqa: PLC0415 — avoid config import at module init
+    from verbose import now_ms, vlog  # noqa: PLC0415
 
     try:
         duration = end_s - start_s
@@ -1029,6 +1030,7 @@ def compute_dynamic_crop(
         timestamps = _sample_timestamps(start_s, end_s, sample_fps)
 
         # ── Detection pass: ONE capture, full observations ────────────────
+        _t_detect = now_ms()
         detector = _create_face_detector()
         obs_frames: list[tuple[float, list[_sm.FaceObs]]] = []
         hist_samples: list[tuple[float, object]] = []
@@ -1043,8 +1045,10 @@ def compute_dynamic_crop(
                     hist_samples.append((ts, small))
         finally:
             _close_face_detector(detector)
+        reframe_detect_ms = int(now_ms() - _t_detect)
 
         # ── Shots / turns / tracks / mapping ──────────────────────────────
+        _t_shots = now_ms()
         try:
             shot_changes = _shots.detect_shot_changes(
                 source_path, start_s, end_s, fallback_samples=hist_samples
@@ -1052,6 +1056,8 @@ def compute_dynamic_crop(
         except Exception as exc:
             logger.warning("shot detection failed: %s — treating clip as one shot", exc)
             shot_changes = []
+        reframe_shots_ms = int(now_ms() - _t_shots)
+        _t_plan = now_ms()
 
         segments_in = transcript_segments or []
         turns = _sm.extract_speaker_turns(segments_in, start_s, end_s)
@@ -1121,6 +1127,20 @@ def compute_dynamic_crop(
             sample_fps=sample_fps,
             speaker_count=speaker_count,
             mapping_confidence=mapping.confidence,
+        )
+        # Per-stage timing budget (Issue 422): detection is the dominant cost;
+        # the staging checklist in docs/DEPLOYMENT.md records these at
+        # 30/60/90 s clip lengths against the 240 s render timeout.
+        vlog(
+            "reframe_stages",
+            mode=mode,
+            reframe_detect_ms=reframe_detect_ms,
+            reframe_shots_ms=reframe_shots_ms,
+            reframe_plan_ms=int(now_ms() - _t_plan),
+            samples=len(smoothed),
+            cuts=len(cuts),
+            shots=len(shot_changes),
+            clip_duration_s=round(duration, 3),
         )
         logger.info(
             "Dynamic crop: mode=%s samples=%d cuts=%d shots=%d speakers=%d "

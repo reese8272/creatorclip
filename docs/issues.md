@@ -165,7 +165,7 @@ render; idempotency filter `suggested_title IS NULL`. On-demand endpoints unchan
 - [ ] SSE emits non-terminal `metadata_ready`; OpenAPI/router-surface snapshots updated
 
 ### Issue 418: Speaker diarization in transcription
-- [ ] **Status:** open · **Track:** B · **Size:** S · **Depends:** —
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-crop`, pending L26 merge) · **Track:** B · **Size:** S · **Depends:** —
 
 **What.** `diarize=settings.TRANSCRIPTION_DIARIZE_ENABLED` (new kill-switch, default true) on the
 Deepgram request — SDK 3.7.7 verified to have the field (no repeat of the `words=True` outage).
@@ -174,13 +174,14 @@ segments (keys omitted when absent). AssemblyAI parity via `speaker_labels=True`
 WhisperX degrades gracefully. No migration (schemaless JSONB).
 
 **Acceptance**
-- [ ] Diarized-fixture normalization tests (Deepgram + AssemblyAI); missing-speaker tolerance
-- [ ] Consumers-ignore regressions: captions + filler byte-identical on speaker-bearing transcripts
-- [ ] Real-SDK kwargs-validation test extended to `diarize`
-- [ ] Deepgram diarization surcharge checked; `COST_PER_MIN_DEEPGRAM` updated if needed
+- [x] Diarized-fixture normalization tests (Deepgram + AssemblyAI); missing-speaker tolerance
+- [x] Consumers-ignore regressions: captions + filler byte-identical on speaker-bearing transcripts
+- [x] Real-SDK kwargs-validation test extended to `diarize`
+- [x] Deepgram diarization surcharge checked: +$0.0020/min add-on (deepgram.com/pricing 2026-08-04)
+      → `COST_PER_MIN_DEEPGRAM` 0.0077→0.0097, `PRICE_BOOK_VERSION` bumped, DECISIONS entry
 
 ### Issue 419: Shot-change detection module
-- [ ] **Status:** open · **Track:** B · **Size:** S · **Depends:** —
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-crop`, pending L26 merge) · **Track:** B · **Size:** S · **Depends:** —
 
 **What.** New `clip_engine/shots.py`: `detect_shot_changes()` via one downscaled ffmpeg `scdet` pass
 over the clip window (`scale=320:-2,scdet=threshold=10`, parse `lavfi.scd.time` from stderr — zero
@@ -188,11 +189,12 @@ new Python deps; amends the 2026-06-23 PySceneDetect pencil-in); histogram-diff 
 existing 5fps samples; total failure → `[]` = one shot (safe).
 
 **Acceptance**
-- [ ] `_parse_scdet_output` unit-tested on captured stderr fixture; histogram fallback tested
-- [ ] Contract documented: tracks never span shot boundaries; EMA resets; never pan across a source cut
+- [x] `_parse_scdet_output` unit-tested on captured stderr fixture (REAL ffmpeg 8.1.2 capture,
+      `tests/fixtures/scdet_stderr.txt`); histogram fallback tested
+- [x] Contract documented: tracks never span shot boundaries; EMA resets; never pan across a source cut
 
 ### Issue 420: Face tracks + speaker→face mapping + cut/pan planner
-- [ ] **Status:** open · **Track:** B · **Size:** L · **Depends:** 418, 419
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-crop`, pending L26 merge) · **Track:** B · **Size:** L · **Depends:** 418, 419
 
 **What.** New `clip_engine/speaker_map.py` (pure, synthetic-testable without mediapipe): greedy
 nearest-neighbor face tracks per shot; speaker turns (gap-merge <0.4s, backchannel absorb <0.8s);
@@ -207,14 +209,17 @@ boundary ±300ms; always cut at source cuts; suppress inside punch-in pulse), se
 Cleaned/summary render paths explicitly keep static crops (follow-up filed).
 
 **Acceptance**
-- [ ] All synthetic unit tests green **without mediapipe installed** (`test_speaker_map.py`,
-      planner thresholds, ladder rungs, off-screen hold, segmented smoothing, sendcmd jumps)
-- [ ] Config: `REFRAME_CUT_ENABLED`, `REFRAME_MIN_SHOT_S=1.2`, `REFRAME_CUT_MIN_TURN_S=0.8`,
+- [x] All synthetic unit tests green **without mediapipe installed** (`test_speaker_map.py` 41,
+      `test_reframe_planner.py` 25 — planner thresholds, ladder rungs, off-screen hold,
+      segmented smoothing, sendcmd jumps)
+- [x] Config: `REFRAME_CUT_ENABLED`, `REFRAME_MIN_SHOT_S=1.2`, `REFRAME_CUT_MIN_TURN_S=0.8`,
       `REFRAME_CUT_MIN_DISTANCE_FRAC=0.25`, `SHOT_DETECT_SCDET_THRESHOLD=10.0` in `.env.example`
-- [ ] Flag-off behavior byte-identical to today
+- [x] Flag-off behavior byte-identical to today (render.py untouched this issue; pinned in 421's
+      flag-off test — vf chain identical + `None` return)
 
 ### Issue 421: Render integration + crop-track persistence + API
-- [ ] **Status:** open · **Track:** B · **Size:** M · **Depends:** 420
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-crop`; **merge step must re-parent 0055's
+  down_revision 0052→0054**) · **Track:** B · **Size:** M · **Depends:** 420
 
 **What.** Migration **0055**: nullable `clips.reframe_track_jsonb` (NOT in ClipEditDocument — CAS
 conflict; #396 layers on top later). Track recomputed every render, persisted in the done-marking
@@ -225,12 +230,18 @@ LEFT edge, exact sendcmd values), cuts:[{t,from_x,to_x,speaker?}], shots, speake
 `has_crop_track` on ClipOut. Re-render replaces or deletes the track — never stale.
 
 **Acceptance**
-- [ ] Track returned by `render_clip_file`, persisted, served; 404 for pre-pipeline clips
-- [ ] Geometry shared: endpoint x-values are the sendcmd values (one definition)
-- [ ] Flag-off renders byte-identical; multi-segment paths unchanged; migration up/down
+- [x] Track returned by `render_clip_file`, persisted, served; 404 for pre-pipeline clips
+- [x] Geometry shared: endpoint x-values are the sendcmd values (one definition; pinned by
+      `test_keyframe_x_are_the_exact_sendcmd_values`)
+- [x] Flag-off renders byte-identical; multi-segment paths unchanged (cleaned/summary keep
+      static crops); migration up/down smoke run against a throwaway local PG16 DB
+      (0052→0055→0052→0055, column jsonb NULLABLE verified)
 
 ### Issue 422: Worker image (mediapipe) + staging rollout + flag flip
-- [ ] **Status:** open · **Track:** B · **Size:** M · **Depends:** 421
+- [ ] **Status:** code-side PREPARED 2026-08-04 (`requirements-image.txt` + Dockerfile +
+  `reframe_stages` vlog timings + staging checklist in `docs/DEPLOYMENT.md`); **staging
+  verification OPEN** — no Docker locally, the four unlock criteria below need staging
+  evidence; flags stay off in prod · **Track:** B · **Size:** M · **Depends:** 421
 
 **What.** `requirements-image.txt` (`-r requirements.txt` + `mediapipe==0.10.21`), Dockerfile
 installs it; local dev untouched (lazy imports). Flag sequencing: neutral deploy →
