@@ -44,6 +44,9 @@ def _mock_clip(
     clip.render_uri = None
     clip.cleaned_render_uri = None
     clip.applied_title = applied_title
+    clip.suggested_title = None
+    clip.suggested_description = None
+    clip.suggested_hook = None
     clip.applied_description = applied_description
     clip.style_preset = None  # Issue 373: _clip_response derives `aspect` from it
     return clip

@@ -735,6 +735,18 @@ class Clip(Base):
     # no angle brackets) so the worker never has to truncate an applied value.
     applied_title: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     applied_description: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Pipeline-suggested publish metadata (Issue 417, migration 0054). Written
+    # ONCE by the batched generate_clip_metadata task (idempotency filter:
+    # suggested_title IS NULL — redelivery fills gaps only), pre-clamped to the
+    # YouTube limits. ``applied_*`` stays creator-typed only; publish falls back
+    # applied_* → suggested_* → (video.title | "#Shorts"). NULL = generation
+    # skipped/failed — clips stay fully usable.
+    suggested_title: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    suggested_description: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    suggested_hook: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    suggestions_generated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,

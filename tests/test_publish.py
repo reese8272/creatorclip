@@ -611,6 +611,9 @@ def _publishable_clip(**applied) -> MagicMock:
     clip.creator_id = uuid.uuid4()
     clip.video_id = uuid.uuid4()
     clip.applied_title = applied.get("applied_title")
+    clip.suggested_title = applied.get("suggested_title")
+    clip.suggested_description = applied.get("suggested_description")
+    clip.suggested_hook = None
     clip.applied_description = applied.get("applied_description")
     return clip
 

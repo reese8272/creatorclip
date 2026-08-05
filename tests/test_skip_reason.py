@@ -306,6 +306,9 @@ def test_list_clips_with_clips_has_no_skip_reason(client):
     clip.render_uri = None
     clip.cleaned_render_uri = None
     clip.applied_title = None
+    clip.suggested_title = None
+    clip.suggested_description = None
+    clip.suggested_hook = None
     clip.applied_description = None
     clip.style_preset = None  # Issue 373: _clip_response derives `aspect` from it
 

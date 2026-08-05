@@ -75,6 +75,13 @@ class ClipOut(BaseModel):
     # PATCH /clips/{id}; null = publish falls back to video.title / "#Shorts".
     applied_title: str | None = None
     applied_description: str | None = None
+    # Pipeline-suggested metadata (Issue 417, migration 0054) — written once by
+    # the batched generate_clip_metadata task, pre-clamped to YouTube limits.
+    # Null = generation skipped/failed; publish precedence is
+    # applied_* → suggested_* → (video.title | "#Shorts").
+    suggested_title: str | None = None
+    suggested_description: str | None = None
+    suggested_hook: str | None = None
     # Issue 373 — provenance: "creator" for a manually-selected source range
     # (never engine-scored; the UI shows honest "Your selection" framing
     # instead of a fit tier), "engine" otherwise.
@@ -248,6 +255,9 @@ def _clip_response(clip: Clip) -> dict:
         "cleaned_render_uri": clip.cleaned_render_uri,
         "applied_title": clip.applied_title,
         "applied_description": clip.applied_description,
+        "suggested_title": clip.suggested_title,
+        "suggested_description": clip.suggested_description,
+        "suggested_hook": clip.suggested_hook,
         "origin": sj.get("origin", "engine"),
         "aspect": (clip.style_preset or {}).get("aspect") or "9:16",
         "shortlisted": is_shortlisted(clip.rank),

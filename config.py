@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     # this is the deepest reasoning call in the pipeline (locked in DECISIONS
     # 2026-08-04, L26 decision 2).
     ANTHROPIC_MODEL_VIDEO_CONTEXT: str = "claude-sonnet-4-6"
+    # Issue 417 — batched auto-metadata: ONE structured-output call per video
+    # writing suggested title/description/hook for every ranked clip
+    # (DNA-grounded per-clip reasoning → Sonnet tier).
+    ANTHROPIC_MODEL_CLIP_METADATA: str = "claude-sonnet-4-6"
     # web_search_20260209 is the GA version with dynamic filtering: Claude
     # writes code to pre-filter search results before they reach the context
     # window, reducing tokens read and improving accuracy. Same tool API
@@ -373,6 +377,11 @@ class Settings(BaseSettings):
     # Max LLM-proposed clip moments kept per video (validation drops the rest by
     # confidence). Bounds the hybrid merge pool (Issue 416): ≤8 signal + ≤4 LLM.
     LLM_CANDIDATES_MAX: int = 4
+    # Issue 417 — auto-generate suggested title/description/hook for every
+    # ranked clip right after clip generation (one batched call, parallel with
+    # render). False disables the sibling task entirely; on-demand suggestion
+    # endpoints are unaffected.
+    AUTO_CLIP_METADATA: bool = True
     # ── Shortlist mode (Issue 377) ──────────────────────────────────────────────
     # How many of the ranked candidates the Review surface argues a case for by
     # default (WhyThisClip promoted to primary content). PRESENTATION-ONLY: every

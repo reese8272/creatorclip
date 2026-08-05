@@ -675,6 +675,156 @@ async def _video_context_async(video_id: str, creator_id: str | None = None) -> 
 
 
 @celery.task(
+    bind=True, max_retries=2, default_retry_delay=60, name="worker.tasks.generate_clip_metadata"
+)
+def generate_clip_metadata(self: Task, video_id: str) -> str:
+    """Batched suggested title/description/hook for a video's clips (Issue 417).
+
+    Sibling task enqueued after ``persist_ranked_clips`` commits, parallel with
+    render. Plain task (no RefundOnFailureTask): terminal failure leaves the
+    ``suggested_*`` columns NULL, publish falls back, on-demand endpoints still
+    work — never a refund. Idempotent: only clips with ``suggested_title IS
+    NULL`` are filled, so a redelivery fills gaps without re-writing rows.
+    """
+    creator_id = run_async(_creator_id_for_video(video_id))
+    log_event(
+        "generate_clip_metadata_started",
+        creator_id=creator_id,
+        task_id=self.request.id,
+        video_id=video_id,
+    )
+    try:
+        run_async(_clip_metadata_async(video_id, creator_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    log_event(
+        "generate_clip_metadata_done",
+        creator_id=creator_id,
+        task_id=self.request.id,
+        video_id=video_id,
+    )
+    return video_id
+
+
+async def _clip_metadata_async(video_id: str, creator_id: str | None = None) -> None:
+    """Async impl of the batched metadata pass.
+
+    Session discipline (Issue 82b): the read session closes BEFORE the LLM
+    round-trip; the write reacquires a fresh session and re-filters on
+    ``suggested_title IS NULL`` so a concurrent fill is never overwritten.
+    """
+    from sqlalchemy import select
+
+    from billing.ledger import record_llm_usage
+    from config import settings
+    from dna.profile import get_active
+    from knowledge.clip_metadata import generate_clip_metadata_batch
+    from knowledge.util import extract_transcript_window
+    from models import Creator as _Creator
+    from models import Transcript, VideoContext
+    from worker.progress import aemit
+
+    if not settings.AUTO_CLIP_METADATA:
+        return
+
+    video_uuid = uuid.UUID(video_id)
+    creator_id = await _tenant_id_or_raise(video_id, creator_id)
+
+    # Spend guard (Issue 290): skip, don't fail — job_id=None avoids the
+    # guard's terminal SSE error on a stream the render path still owns.
+    if await _spend_guard_blocked(None, "clip_metadata", creator_id):
+        return
+
+    clip_payloads: list[dict] = []
+    channel_title = "Your Channel"
+    dna_brief: str | None = None
+    context_summary: str | None = None
+    async with db.tenant_session(creator_id) as session:
+        # Fill-only idempotency filter: redelivery touches NULL rows only.
+        clips = list(
+            (
+                await session.execute(
+                    select(Clip)
+                    .where(Clip.video_id == video_uuid, Clip.suggested_title.is_(None))
+                    .order_by(Clip.rank)
+                )
+            ).scalars()
+        )
+        if not clips:
+            logger.info("clip_metadata: no clips need filling for video %s — skipping", video_id)
+            return
+
+        transcript = await session.get(Transcript, video_uuid)
+        segments_jsonb = transcript.segments_jsonb if transcript else None
+
+        creator_row = await session.get(_Creator, uuid.UUID(creator_id))
+        channel_title = (creator_row.channel_title if creator_row else None) or "Your Channel"
+
+        dna_profile = await get_active(session, uuid.UUID(creator_id))
+        dna_brief = dna_profile.brief_text if dna_profile else None
+
+        vc_row = await session.get(VideoContext, video_uuid)
+        context_summary = (vc_row.context_jsonb or {}).get("summary") if vc_row else None
+
+        for clip in clips:
+            window_start = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+            clip_payloads.append(
+                {
+                    "clip_id": str(clip.id),
+                    "rank": clip.rank,
+                    # Each clip grounded in its OWN transcript window (Issue 414).
+                    "window_text": extract_transcript_window(
+                        segments_jsonb, window_start, clip.end_s
+                    ),
+                }
+            )
+
+    # ONE LLM call for the whole batch, with NO DB session held (Issue 82b).
+    results, usage = await generate_clip_metadata_batch(
+        channel_title, dna_brief, context_summary, clip_payloads
+    )
+
+    # Bill AFTER the round-trip; best-effort, opens its own session.
+    await record_llm_usage(
+        uuid.UUID(creator_id),
+        usage,
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+        cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
+    )
+
+    filled = 0
+    if results:
+        now_utc = datetime.now(UTC)
+        async with db.tenant_session(creator_id) as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(Clip).where(
+                            Clip.video_id == video_uuid, Clip.suggested_title.is_(None)
+                        )
+                    )
+                ).scalars()
+            )
+            for clip in rows:
+                meta = results.get(str(clip.id))
+                if not meta:
+                    continue
+                clip.suggested_title = meta["title"]
+                clip.suggested_description = meta["description"]
+                clip.suggested_hook = meta["hook"]
+                clip.suggestions_generated_at = now_utc
+                filled += 1
+            await session.commit()
+
+    # Non-terminal SSE step — frontend consumers tolerate unknown labels
+    # (cross-track contract, DECISIONS 2026-08-04).
+    await aemit(
+        video_id, "step", label="metadata_ready", stage="clip_metadata", clip_count=filled
+    )
+
+
+@celery.task(
     base=RefundOnFailureTask,
     bind=True,
     max_retries=3,
@@ -980,17 +1130,24 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
         creator_id = clip.creator_id
         render_uri = clip.render_uri
         video = await session.get(Video, clip.video_id)
-        # Applied metadata (migration 0047) wins; NULL falls back to the video
+        # Publish metadata precedence (Issue 417): applied_* (creator-typed,
+        # migration 0047) wins; then suggested_* (pipeline-generated, migration
+        # 0054 — pre-clamped by knowledge/clip_metadata.py); then the video
         # title / "#Shorts". Applied values are pre-validated at PATCH
-        # /clips/{id} (≤100 chars / ≤5000 UTF-8 bytes, no angle brackets) so
-        # only the fallback path needs the defensive bracket strip + cap at
-        # YouTube's official 100-char videos.insert limit.
+        # /clips/{id} and suggested values are pre-clamped at generation
+        # (≤100 chars / ≤5000 UTF-8 bytes, no angle brackets), so only the
+        # final fallback needs the defensive bracket strip + cap at YouTube's
+        # official 100-char videos.insert limit.
         if clip.applied_title:
             publish_title = clip.applied_title
+        elif clip.suggested_title:
+            publish_title = clip.suggested_title
         else:
             fallback = (video.title if video and video.title else "New Short").strip()
             publish_title = fallback.replace("<", "").replace(">", "").strip()[:100] or "New Short"
-        publish_description = clip.applied_description or "#Shorts"
+        publish_description = (
+            clip.applied_description or clip.suggested_description or "#Shorts"
+        )
 
         if existing is None:
             pub = ClipPublication(
@@ -3372,6 +3529,20 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                     auto_render_clip_ids.append(str(clip.id))
                 if seeded:
                     await session.commit()
+
+        # Batched auto-metadata (Issue 417): sibling task enqueued AFTER the
+        # persist commit (the session block above closed = committed), parallel
+        # with render. Best-effort — an enqueue failure never fails clip
+        # generation; the fill-only redelivery + on-demand endpoints cover it.
+        if settings.AUTO_CLIP_METADATA and clips:
+            try:
+                generate_clip_metadata.delay(video_id)
+            except Exception as enqueue_exc:  # noqa: BLE001 — best-effort enqueue
+                logger.warning(
+                    "clip_metadata enqueue failed video=%s err=%s",
+                    video_id,
+                    type(enqueue_exc).__name__,
+                )
 
         # Terminal event — the upload-to-clips pipeline is now done.
         # Sets TTL on the stream so a creator who comes back later can still see it.
