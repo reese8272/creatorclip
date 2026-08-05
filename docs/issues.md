@@ -84,7 +84,7 @@ transcript `speaker` field, SSE stage-label tolerance) are in the DECISIONS entr
 ---
 
 ### Issue 414: Transcript-window helper + clip-titles window bug fix
-- [ ] **Status:** open · **Track:** A · **Size:** S · **Depends:** —
+- [x] **Status:** DONE 2026-08-04 · **Track:** A · **Size:** S · **Depends:** —
 
 **What.** New `knowledge/util.py::extract_transcript_window(segments_jsonb, start_s, end_s,
 max_chars=1200)` (midpoint-assignment, the `scoring.py` rule), then fix `routers/clips.py:1775`:
@@ -92,13 +92,13 @@ title-suggestions currently ground in the WHOLE video transcript truncated to 15
 (`knowledge/clip_titles.py:49`), not the clip's own window — a real fidelity bug for any late clip.
 
 **Acceptance**
-- [ ] `extract_transcript_window` unit-tested (missing transcript, empty window, cap behavior)
-- [ ] `/clips/{id}/title-suggestions` grounds in the clip's `[setup_start_s ?? start_s, end_s]` window;
+- [x] `extract_transcript_window` unit-tested (missing transcript, empty window, cap behavior)
+- [x] `/clips/{id}/title-suggestions` grounds in the clip's `[setup_start_s ?? start_s, end_s]` window;
       test asserts the LLM payload contains window text (not minute-0 text) for a late clip
-- [ ] Existing clip-titles tests stay green
+- [x] Existing clip-titles tests stay green
 
 ### Issue 415: Whole-video context pass (VideoContext table + task + chain)
-- [ ] **Status:** open · **Track:** A · **Size:** M · **Depends:** —
+- [x] **Status:** DONE 2026-08-04 · **Track:** A · **Size:** M · **Depends:** —
 
 **What.** New chain member: `ingest | transcribe | analyze_video_context | build_signals`. The task
 reads the FULL transcript (rendered as ~30s paragraphs with `[512s]` markers — one call, no chunking;
@@ -110,17 +110,17 @@ pattern verbatim). Structured output forced; prompt-cache blocks per Issue-315 d
 LLM/parse failure logs, emits `context_skipped`, returns — clips generate signal-only as today.
 
 **Acceptance**
-- [ ] Chain shape updated; `VIDEO_CONTEXT_ENABLED=false` short-circuits to today's pipeline exactly
-- [ ] Row persisted with schema-valid `context_jsonb`; ≤ `LLM_CANDIDATES_MAX=4` validated moments
+- [x] Chain shape updated; `VIDEO_CONTEXT_ENABLED=false` short-circuits to today's pipeline exactly
+- [x] Row persisted with schema-valid `context_jsonb`; ≤ `LLM_CANDIDATES_MAX=4` validated moments
       (bounds-clamped, principle ∈ the 12, invalid dropped)
-- [ ] Mocked LLM 5xx/parse failure → chain completes, clips still generate
-- [ ] Redelivery is a no-op (PK check-then-insert; no double spend); spend-guard skip emits `context_skipped`
-- [ ] Usage billed via ledger after the round-trip (scoring.py pattern); cache marker floor-gated
+- [x] Mocked LLM 5xx/parse failure → chain completes, clips still generate
+- [x] Redelivery is a no-op (PK check-then-insert; no double spend); spend-guard skip emits `context_skipped`
+- [x] Usage billed via ledger after the round-trip (scoring.py pattern); cache marker floor-gated
       (byte-identity test per `test_brief_caching.py` style)
-- [ ] RLS policy present; migration up/down smoke; new config keys in `.env.example`
+- [x] RLS policy present; migration up/down smoke; new config keys in `.env.example`
 
 ### Issue 416: Hybrid candidate merge — LLM moments ∪ signal peaks (the engine change)
-- [ ] **Status:** open · **Track:** A · **Size:** L · **Depends:** 415
+- [x] **Status:** DONE 2026-08-04 · **Track:** A · **Size:** L · **Depends:** 415
 
 **What.** `extract_candidates` stays byte-untouched (eval harness green by construction). New pure
 layer `clip_engine/merge.py`: `llm_moments_to_candidates()` (sentence-snap via existing
@@ -134,16 +134,16 @@ gains missing #12 "Clean Context Boundary"; `max_tokens` 1200→1800; cold-start
 `max(_signal_score, 0.8·llm_confidence)` for llm-origin. Provenance in `signals_jsonb["origin"]`.
 
 **Acceptance**
-- [ ] All existing eval scenarios pass unmodified; `extract_candidates` diff empty
-- [ ] Flat-energy fixture story → persisted `origin:"llm"` clip through score→rank→persist (mocked LLM)
-- [ ] Overlapping LLM candidate (IoU>0.5) suppressed; trim caps rows at 8
-- [ ] Cold-start rule + 12-citable-principles pinned by tests
-- [ ] 3 new `kind: merge` eval scenarios (flat-energy admitted / overlap dedupe / invalid dropped);
+- [x] All existing eval scenarios pass unmodified; `extract_candidates` diff empty
+- [x] Flat-energy fixture story → persisted `origin:"llm"` clip through score→rank→persist (mocked LLM)
+- [x] Overlapping LLM candidate (IoU>0.5) suppressed; trim caps rows at 8
+- [x] Cold-start rule + 12-citable-principles pinned by tests
+- [x] 3 new `kind: merge` eval scenarios (flat-energy admitted / overlap dedupe / invalid dropped);
       `SCENARIO_FLOOR` 15 → **18**
-- [ ] Absent context row ⇒ byte-identical behavior to today
+- [x] Absent context row ⇒ byte-identical behavior to today
 
 ### Issue 417: Batched auto-metadata — suggested title/description/hook for every clip
-- [ ] **Status:** open · **Track:** A · **Size:** M · **Depends:** 414, 415
+- [x] **Status:** DONE 2026-08-04 · **Track:** A · **Size:** M · **Depends:** 414, 415
 
 **What.** New `knowledge/clip_metadata.py::generate_clip_metadata_batch()` — ONE structured-output
 Sonnet call for all ranked clips (static honesty rubric + cached DNA block + uncached video-context
@@ -156,13 +156,13 @@ render; idempotency filter `suggested_title IS NULL`. On-demand endpoints unchan
 `ClipOut` gains the three `suggested_*` fields.
 
 **Acceptance**
-- [ ] Post-pipeline, every ranked clip has non-NULL suggested_* (mocked-LLM test through
+- [x] Post-pipeline, every ranked clip has non-NULL suggested_* (mocked-LLM test through
       `_generate_clips_async`); exactly ONE LLM call per video
-- [ ] Each clip's payload contains only its own window text; clamps pinned by tests
-- [ ] Publish fallback order pinned (worker test); redelivery fills only NULL rows
-- [ ] LLM-down ⇒ render completes, columns NULL, clips usable; billed + spend-guard-gated
-- [ ] No-virality structural scan green on new prompt strings; `AUTO_CLIP_METADATA=false` disables
-- [ ] SSE emits non-terminal `metadata_ready`; OpenAPI/router-surface snapshots updated
+- [x] Each clip's payload contains only its own window text; clamps pinned by tests
+- [x] Publish fallback order pinned (worker test); redelivery fills only NULL rows
+- [x] LLM-down ⇒ render completes, columns NULL, clips usable; billed + spend-guard-gated
+- [x] No-virality structural scan green on new prompt strings; `AUTO_CLIP_METADATA=false` disables
+- [x] SSE emits non-terminal `metadata_ready`; OpenAPI/router-surface snapshots updated
 
 ### Issue 418: Speaker diarization in transcription
 - [ ] **Status:** open · **Track:** B · **Size:** S · **Depends:** —

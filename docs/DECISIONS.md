@@ -5,6 +5,35 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-04 — L26 Track A build (414–417): three small build-time deviations
+
+**(1) Migration 0053 uses the 0045-hardened GUC, not a byte-verbatim 0044 copy.** The locked plan
+said "copy the 0044 RLS pattern verbatim"; the structure (GRANT + ENABLE/FORCE RLS +
+tenant_isolation subquery via `videos.creator_id`, plain `op.execute` SQL) is copied exactly, but
+the GUC expression is `NULLIF(current_setting('app.creator_id', true), '')::uuid`. **Why:** 0045
+rewrote every existing policy to this form because the bare cast raises SQLSTATE 22P02 on a reused
+pooled connection; 0052 established that new tables are born hardened. Re-introducing the bare cast
+would recreate the exact bug 0045 fixed. Evidence: `alembic/versions/0045_rls_nullif_guc.py`
+docstring; 0052's `clip_edit_documents` policy.
+
+**(2) The scorer's cold-start rule also applies on the LLM-score fallback branch.** The plan pinned
+`max(_signal_score, 0.8·llm_confidence)` for llm-origin candidates on the no-DNA path; the same rule
+now also covers the "Claude omitted this index" fallback inside the DNA path (one shared
+`_cold_start_annotate` helper, DRY). Signal-origin candidates keep the pre-416 wording/behavior
+byte-for-byte on both branches (pinned by tests). **Why:** without it, an llm-origin candidate the
+scorer skipped would fall back to a pure energy score of ~0 — the exact failure mode the rule
+exists to prevent.
+
+**(3) `ClipOut.origin` now surfaces "signal"/"llm" for engine clips.** Issue 373 defined the field
+as "creator" | "engine" and reads it from `signals_jsonb["origin"]`; Issue 416 stores the richer
+provenance ("signal"/"llm") in that same key, so engine clips now report their real origin instead
+of the constant "engine". "creator" semantics are untouched (manual selections never pass through
+`persist_ranked_clips`), and every consumer — frontend included — only tests `origin === 'creator'`,
+so nothing breaks; Track C can consume the richer value. The "engine" literal remains only as the
+default for legacy rows with no stored origin. **Date:** 2026-08-04
+
+---
+
 ## 2026-08-04 — Issue 413: app typeface is now Lexend (replaces Geist Sans + Inter)
 
 **What changed.** All non-mono text — `--font-ui`, `--font-display`, and the legacy `--font-sans` —
