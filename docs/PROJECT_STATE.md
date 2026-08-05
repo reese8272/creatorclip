@@ -4,6 +4,30 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-04 — L26 BUILD COMPLETE: all three tracks merged on `lane/l26` (414–421 + 423–426 DONE; 422 code-prepared, staging OPEN)
+
+Serial merge A → B → C per the binding cross-track contract. Conflicts were additive-only
+(models.py + docs/SOT.md keep-both); migration 0055 re-parented onto 0054 at the merge (single
+alembic head verified: 0052→0053→0054→0055); `.env.example` PRICE_BOOK_VERSION aligned to the
+config default 2026-08-04. CropTrack wire contract verified field-for-field between
+`clip_engine/reframe.py`'s serializer and `frontend/src/types.ts` — no divergence.
+
+**Final merged gates (2026-08-04):**
+- Backend unit lane: **2766 passed / 71 skipped / 167 deselected / 0 failed**; ruff clean;
+  mypy clean (142 files). The Track-A-reported pre-existing `test_response_models` failure did
+  NOT reproduce here — it is environment-dependent (vacuous-pass under fastapi 0.137.1 lazy
+  router include; see `docs/OFF_COURSE_BUGS.md`, still open).
+- Eval harness: **22/22** `eval_scenario`, `SCENARIO_FLOOR=18`.
+- Frontend (node 22): vitest **624/624**, `tsc -b` clean, eslint **0 errors** (1 pre-existing
+  logged warning). E2e passed 83/0/11 on the C branch; frontend files untouched by the merge.
+
+**Open tail:** Issue 422's four staging unlock criteria (mediapipe image on staging, real
+2-speaker visual verification, timing budget, tmp cleanup) — flags stay off in prod; CI visual
+baseline regen for Review/Editor/long-form (dispatch with `--update-snapshots=all`); Track C
+deviations recorded in `docs/DECISIONS.md` (2026-08-04 Track C entry).
+
+---
+
 ## 2026-08-04 — L26 Track A COMPLETE: Issues 414–417 all DONE (branch `lane/l26-intel`)
 
 The intelligence pipeline shipped in build order 414 → 415 → 416 → 417, one commit per issue:

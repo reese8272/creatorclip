@@ -256,7 +256,7 @@ evidence**; per-stage vlog timings (budget est. +12–24s per 60s clip vs 240s t
 - [ ] DECISIONS flag-flip entry lands with the evidence; prod flip only after sign-off
 
 ### Issue 423: Stage foundation — contracts + StagePlaceholder + useClipRender
-- [ ] **Status:** open · **Track:** C · **Size:** S · **Depends:** —
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`) · **Track:** C · **Size:** S · **Depends:** —
 
 **What.** Step 0: `types.ts` gains optional `suggested_*` on ReviewClip + `CropTrack` types;
 `e2e/fixtures/mock-api.ts` gains the crop-track route (one tracked clip + `c1` 404) and suggested
@@ -265,11 +265,11 @@ fields (inert until consumed). Step 1: extract `StagePlaceholder.tsx` (unified r
 consume them **pixel-identically**.
 
 **Acceptance**
-- [ ] All render/failure/expired states reachable from both pages; zero visual-baseline diff
-- [ ] `npm test` + tsc + eslint + structural gates green; no baseline regen needed
+- [x] All render/failure/expired states reachable from both pages; zero visual-baseline diff
+- [x] `npm test` + tsc + eslint + structural gates green; no baseline regen needed
 
 ### Issue 424: ShortStage + Review flip + metadata compaction
-- [ ] **Status:** open · **Track:** C · **Size:** L · **Depends:** 423
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`; CI baseline regen pending) · **Track:** C · **Size:** L · **Depends:** 423
 
 **What.** `components/stage/ShortStage.tsx` (stage owns the 9:16 frame: player/placeholder, meta row,
 cleaned-preview tab swap, `overlay` + `below` slots; ONE `level="primary"` per page). Sizing
@@ -281,13 +281,13 @@ suggested_*` precedence, Apply chip → existing PATCH, "More suggestions" Discl
 YourCall drops its AppliedTitleField embed, gains quiet "Next clip".
 
 **Acceptance**
-- [ ] Review media box ≥1.8× today's area at 1440×900 (Playwright boundingBox assertion)
-- [ ] Exactly one primary card; title+hook ≤2 collapsed rows; #412 empty-canvas regression guard
-- [ ] Trim save/apply flows identical (existing tests); axe + disclaimer + no-virality green
+- [x] Review media box ≥1.8× today's area at 1440×900 (Playwright boundingBox assertion — measured 1.89×)
+- [x] Exactly one primary card; title+hook ≤2 collapsed rows; #412 empty-canvas regression guard
+- [x] Trim save/apply flows identical (existing tests); axe + disclaimer + no-virality green
 - [ ] Review baselines regenerated via CI dispatch (`--update-snapshots=all`, ubuntu only)
 
 ### Issue 425: Editor flip + toolbar merge + deletions
-- [ ] **Status:** open · **Track:** C · **Size:** M · **Depends:** 424
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`; CI baseline regen pending) · **Track:** C · **Size:** M · **Depends:** 424
 
 **What.** ShortFormEditor composes ShortStage (cut/document logic untouched); cleaned preview becomes
 the in-stage tab swap; `Editor.tsx` h1 + mode tablist merge into one toolbar strip;
@@ -295,13 +295,13 @@ CaptionStylePanel collapsed by default; delete `ClipPlayer.tsx`, `WhyThisClip.ts
 constants (tests migrate).
 
 **Acceptance**
-- [ ] One transport player per page; undo/redo/apply-cuts/CAS flows untouched
+- [x] One transport player per page; undo/redo/apply-cuts/CAS flows untouched
       (`editor-persistence.spec.ts` unchanged); J/K/L + capture-bus keys unaffected
-- [ ] Stage card fits its grid row (tool-shell boundingBox guard)
+- [x] Stage card fits its grid row (tool-shell boundingBox guard)
 - [ ] Editor + long-form baselines regenerated via CI dispatch
 
 ### Issue 426: Crop-track overlay preview
-- [ ] **Status:** open · **Track:** C · **Size:** M · **Depends:** 421 (endpoint), 424
+- [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`; CI baseline regen pending) · **Track:** C · **Size:** M · **Depends:** 421 (endpoint), 424
 
 **What.** `hooks/useCropTrack.ts` (key `['crop-track', id, render_uri]`, 404→null, staleTime
 Infinity) + `components/stage/CropTrackOverlay.tsx`: pointer-events-none ~112px mini-map (source
@@ -312,9 +312,9 @@ before 421 merges. Follow-up (filed, not scheduled): source-framing view over
 `GET /videos/{id}/stream` — the #396 host.
 
 **Acceptance**
-- [ ] Lerp + cut-snap + clamp math unit-tested against fixture keyframes
-- [ ] 404 → nothing rendered, no error; fallback label honest; overlay never intercepts pointers
-- [ ] Zero setState in the animation path; e2e fixture shows map on tracked clip, nothing on `c1`
+- [x] Lerp + cut-snap + clamp math unit-tested against fixture keyframes
+- [x] 404 → nothing rendered, no error; fallback label honest; overlay never intercepts pointers
+- [x] Zero setState in the animation path; e2e fixture shows map on tracked clip, nothing on `c1`
 - [ ] Baselines regenerated via CI dispatch
 
 ---
