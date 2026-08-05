@@ -431,13 +431,13 @@ class Settings(BaseSettings):
     # A silence longer than this splits a word group early.
     CAPTION_GROUP_MAX_GAP_S: float = 0.6
 
-    # ── Camera-region detection (Issue 430) ─────────────────────────────────────
+    # ── Camera-region detection (Issue 430; composed with the reframe in 433) ───
     # Detect the active camera in produced source layouts (temporal variance —
     # static chrome vs moving camera) and crop into it before the 9:16
-    # composition. Off by default: repo convention for never-rendered paths
-    # (cf. ACTIVE_SPEAKER_REFRAME_ENABLED) — flip after the staging
-    # frame-extraction check on a produced-layout source. Fail-open: any
-    # detection uncertainty keeps today's full-height crop.
+    # composition. Composes with ACTIVE_SPEAKER_REFRAME_ENABLED since Issue 433
+    # (the reframe runs in region space). Off by default — flip after the
+    # staging frame-extraction check on a produced-layout source. Fail-open:
+    # any detection uncertainty keeps today's full-height crop.
     CAMERA_REGION_DETECT_ENABLED: bool = False
     # Frames sampled (one ffmpeg call) across the clip window for the variance stack.
     CAMERA_REGION_SAMPLE_FRAMES: int = 10

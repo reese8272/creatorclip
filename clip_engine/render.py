@@ -532,81 +532,31 @@ def render_clip_file(
         and 0.0 <= (peak_s - start_s) <= duration
     )
 
-    if _settings.ACTIVE_SPEAKER_REFRAME_ENABLED:
-        # Speaker-aware dynamic crop (Issue 189 + Issue 420/421).
-        # Principle 4 (Pattern interrupt) + Principle 11 (Audience-fit).
-        # Import the module (not the function) so `clip_engine.reframe.compute_dynamic_crop`
-        # is the canonical patch target in tests (patching a `from … import` binding
-        # would only patch the local reference, not the source).
-        import clip_engine.reframe as _reframe_mod  # noqa: PLC0415
-
-        reframe_result = _reframe_mod.compute_dynamic_crop(
-            source_path=source_path,
-            start_s=start_s,
-            end_s=end_s,
-            frame_width=frame_w,
-            frame_height=frame_h,
-            crop_w=crop_w,
-            sample_fps=_settings.REFRAME_SAMPLE_FPS,
-            transcript_segments=transcript_segments,
-            punch_in_peak_s=peak_s if punch_in_active else None,
-        )
-        smoothed_track = reframe_result.track_points
-        sendcmd_script = reframe_result.sendcmd_text
-        reframe_track = reframe_result.track_json
-        if smoothed_track:
-            # Use the first smoothed center as the static fallback; sendcmd
-            # will override x dynamically if there are multiple points.
-            x_offset = max(0, min(smoothed_track[0].center_x - crop_w // 2, frame_w - crop_w))
-        else:
-            x_offset = (frame_w - crop_w) // 2  # center fallback
-
-        if sendcmd_script:
-            # Write the sendcmd script to a sibling temp file.
-            sendcmd_path = out_path.with_suffix(".sendcmd")
-            sendcmd_path.parent.mkdir(parents=True, exist_ok=True)
-            sendcmd_path.write_text(sendcmd_script)
-            logger.info(
-                "Per-frame reframe enabled for %s: mode=%s, sendcmd written to %s",
-                source_path.name,
-                reframe_result.mode,
-                sendcmd_path,
-            )
-        else:
-            # Single-sample or empty track: fall through to static crop.
-            logger.info(
-                "Per-frame reframe: static/single-sample track for %s — using static x_offset=%d",
-                source_path.name,
-                x_offset,
-            )
-    # Face geometry for caption avoidance (Issue 427). The per-frame reframe
-    # path does not thread its FaceObs boxes yet — that lands with Issue 422.
+    # ── Face geometry (unconditional, Issue 433) ─────────────────────────────
+    # One midpoint keyframe + Haar box feeds BOTH caption face-avoidance
+    # (Issue 427 — previously dead under the reframe flag) and the camera
+    # region's face sanity gate.
     face_box: tuple[int, int, int, int] | None = None  # source px
-    if not _settings.ACTIVE_SPEAKER_REFRAME_ENABLED:
-        # Legacy path: find the face box in a keyframe at the midpoint of the clip.
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            kf_path = Path(tmp.name)
-        try:
-            mid_s = start_s + duration / 2
-            _extract_keyframe(source_path, mid_s, kf_path, timeout_s=render_timeout_s)
-            face_box = _detect_face_box(kf_path)
-        finally:
-            kf_path.unlink(missing_ok=True)
-        face_x = face_box[0] + face_box[2] // 2 if face_box else frame_w // 2
-        # Clamp crop x-offset.
-        x_offset = max(0, min(face_x - crop_w // 2, frame_w - crop_w))
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        kf_path = Path(tmp.name)
+    try:
+        mid_s = start_s + duration / 2
+        _extract_keyframe(source_path, mid_s, kf_path, timeout_s=render_timeout_s)
+        face_box = _detect_face_box(kf_path)
+    finally:
+        kf_path.unlink(missing_ok=True)
 
-    # ── Camera-region pre-crop (Issue 430, flag-gated) ───────────────────────
+    # ── Camera-region pre-crop (Issue 430, composed with the reframe in 433) ─
     # Produced podcast layouts carry their own chrome (logo cards, name chips,
     # social banners); the full-height crop slices through it. Detect the
     # active camera via temporal variance and crop INTO it before the 9:16
-    # composition. Skipped when the per-frame reframe owns geometry — its
-    # sendcmd x-commands and persisted crop track are full-frame-coordinate
-    # contracts (the Issue-422 integration passes the region into
-    # compute_dynamic_crop instead, applying the offset once at emission).
+    # composition. The reframe (below) then runs entirely in REGION space:
+    # sampled frames are sliced to the region, so sendcmd x-commands and the
+    # persisted crop track are region-relative by construction — the region
+    # pre-crop filter translates the stream, and no offset arithmetic exists.
     region_x, region_y = 0, 0
     region_w, region_h = frame_w, frame_h
-    if not _settings.ACTIVE_SPEAKER_REFRAME_ENABLED and _settings.CAMERA_REGION_DETECT_ENABLED:
+    if _settings.CAMERA_REGION_DETECT_ENABLED:
         from clip_engine import camera_region as _camera_region
 
         detected = _camera_region.detect_camera_region(
@@ -628,9 +578,62 @@ def render_clip_file(
             region_x, region_y, region_w, region_h = detected
             # All downstream geometry switches to region space.
             crop_w = min(int(region_h * out_w / out_h), region_w)
-            face_x_rel = face_box[0] + face_box[2] // 2 - region_x if face_box else region_w // 2
-            x_offset = max(0, min(face_x_rel - crop_w // 2, region_w - crop_w))
     has_camera_region = (region_x, region_y, region_w, region_h) != (0, 0, frame_w, frame_h)
+
+    if _settings.ACTIVE_SPEAKER_REFRAME_ENABLED:
+        # Speaker-aware dynamic crop (Issue 189 + Issue 420/421), region-space
+        # since Issue 433: the region dims are passed AS the frame dims and
+        # sampled frames are sliced inside compute_dynamic_crop.
+        # Import the module (not the function) so `clip_engine.reframe.compute_dynamic_crop`
+        # is the canonical patch target in tests (patching a `from … import` binding
+        # would only patch the local reference, not the source).
+        import clip_engine.reframe as _reframe_mod  # noqa: PLC0415
+
+        reframe_result = _reframe_mod.compute_dynamic_crop(
+            source_path=source_path,
+            start_s=start_s,
+            end_s=end_s,
+            frame_width=region_w,
+            frame_height=region_h,
+            crop_w=crop_w,
+            sample_fps=_settings.REFRAME_SAMPLE_FPS,
+            transcript_segments=transcript_segments,
+            punch_in_peak_s=peak_s if punch_in_active else None,
+            region=(region_x, region_y, region_w, region_h) if has_camera_region else None,
+        )
+        smoothed_track = reframe_result.track_points
+        sendcmd_script = reframe_result.sendcmd_text
+        reframe_track = reframe_result.track_json
+        if smoothed_track:
+            # Use the first smoothed center as the static fallback; sendcmd
+            # will override x dynamically if there are multiple points.
+            x_offset = max(0, min(smoothed_track[0].center_x - crop_w // 2, region_w - crop_w))
+        else:
+            x_offset = (region_w - crop_w) // 2  # center fallback
+
+        if sendcmd_script:
+            # Write the sendcmd script to a sibling temp file.
+            sendcmd_path = out_path.with_suffix(".sendcmd")
+            sendcmd_path.parent.mkdir(parents=True, exist_ok=True)
+            sendcmd_path.write_text(sendcmd_script)
+            logger.info(
+                "Per-frame reframe enabled for %s: mode=%s, sendcmd written to %s",
+                source_path.name,
+                reframe_result.mode,
+                sendcmd_path,
+            )
+        else:
+            # Single-sample or empty track: fall through to static crop.
+            logger.info(
+                "Per-frame reframe: static/single-sample track for %s — using static x_offset=%d",
+                source_path.name,
+                x_offset,
+            )
+    else:
+        # Legacy path: static crop centered on the Haar face box (region-space
+        # when a region is active; identical to the pre-433 math otherwise).
+        face_x_rel = face_box[0] + face_box[2] // 2 - region_x if face_box else region_w // 2
+        x_offset = max(0, min(face_x_rel - crop_w // 2, region_w - crop_w))
 
     # Build vf chain: [sendcmd→]crop → scale, with optional style additions.
     # `-ss` before `-i` is fast (seeks to the nearest keyframe first); `-accurate_seek`
@@ -645,15 +648,19 @@ def render_clip_file(
     # The initial crop x is set to x_offset; sendcmd overrides it at each
     # sample timestamp. Outside the first sample window ffmpeg holds the last
     # set value, so there is no "uncovered" period.
+    # A detected camera region prepends its own (unlabeled, unaddressed) crop;
+    # without one, region_h == frame_h and the chain is byte-identical to
+    # before. In sendcmd chains the 9:16 crop carries the `@spk` instance
+    # label — sendcmd commands target `crop@spk x`, because a bare `crop`
+    # target addresses EVERY crop instance in the graph (empirically verified
+    # 2026-08-05), including the region pre-crop and the punch-in crop.
+    # Static chains keep the unlabeled `crop=` spelling (byte-identical).
     if sendcmd_path is not None:
-        vf_parts = [
-            f"sendcmd=f={sendcmd_path}",
-            f"crop={crop_w}:{frame_h}:{x_offset}:0",
-            f"scale={out_w}:{out_h}",
-        ]
+        vf_parts = [f"sendcmd=f={sendcmd_path}"]
+        if has_camera_region:
+            vf_parts.append(f"crop={region_w}:{region_h}:{region_x}:{region_y}")
+        vf_parts.extend([f"crop@spk={crop_w}:{region_h}:{x_offset}:0", f"scale={out_w}:{out_h}"])
     else:
-        # A detected camera region prepends its own crop (Issue 430); without
-        # one, region_h == frame_h and the chain is byte-identical to before.
         vf_parts = []
         if has_camera_region:
             vf_parts.append(f"crop={region_w}:{region_h}:{region_x}:{region_y}")
@@ -677,9 +684,9 @@ def render_clip_file(
             ass_path = out_path.with_suffix(f".{subtitle_key}.ass")
             # Face bottom in OUTPUT-canvas pixels (Issue 427): the (region) crop
             # keeps region height and scales region_h → out_h, so the vertical
-            # factor applies after subtracting the region's y origin. None when
-            # no face was detected (or the per-frame reframe owns geometry —
-            # Issue 422 threads its boxes later).
+            # factor applies after subtracting the region's y origin. The Haar
+            # box is unconditional since Issue 433, so avoidance is live on the
+            # reframe path too. None when no face was detected.
             face_bottom_px = (
                 round((face_box[1] + face_box[3] - region_y) * out_h / region_h)
                 if face_box

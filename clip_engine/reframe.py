@@ -660,6 +660,13 @@ def build_sendcmd_script(
     Format per ffmpeg sendcmd docs:
         ``<timestamp_s> [enter] <filter> <param> <value>;``
 
+    The target is the INSTANCE-LABELED crop ``crop@spk`` (Issue 433): a bare
+    ``crop`` target addresses EVERY crop instance in the filtergraph
+    (empirically verified 2026-08-05) — with the camera-region pre-crop and/or
+    the punch-in zoom present, unlabeled commands would corrupt those filters'
+    geometry. render.py labels the 9:16 speaker crop ``crop@spk=`` whenever a
+    sendcmd script is in the chain.
+
     The ``enter`` directive fires once when the frame's PTS reaches the
     timestamp — suitable for our once-per-sample update rate.
 
@@ -678,7 +685,7 @@ def build_sendcmd_script(
         clip_t = round(point.timestamp_s - start_s, _SENDCMD_TIME_DECIMALS)
         clip_t = max(0.0, clip_t)
         x = clamp_crop_x(point.center_x, crop_w, frame_w)
-        lines.append(f"{clip_t:.{_SENDCMD_TIME_DECIMALS}f} [enter] crop x {x};")
+        lines.append(f"{clip_t:.{_SENDCMD_TIME_DECIMALS}f} [enter] crop@spk x {x};")
     return "\n".join(lines)
 
 
@@ -924,6 +931,7 @@ def _build_track_json(
     sample_fps: float,
     speaker_count: int,
     mapping_confidence: float,
+    region: tuple[int, int, int, int] | None = None,
 ) -> dict:
     """Serialize the computed track to the UNIFIED crop-track wire contract.
 
@@ -932,6 +940,13 @@ def _build_track_json(
     conversion from center via :func:`clamp_crop_x`). All ``t`` are
     clip-relative. Interpolation contract for consumers: lerp between
     keyframes; SNAP at cuts.
+
+    Region composition (Issue 433): when a camera region is active,
+    ``frame_w``/``frame_h`` ARE the region dims — ``source`` is always the
+    pan-space rect the crop moves within, so consumer math is unchanged. The
+    additive ``region`` key (absolute source rect, provenance only) is emitted
+    ONLY when a region was detected — omitted, never null, keeping the pinned
+    wire-contract fixtures exact.
     """
     keyframes = [
         {
@@ -957,7 +972,7 @@ def _build_track_json(
         cut_entries.append(entry)
 
     fallback = mode == "static" or all(p.is_fallback for p in smoothed)
-    return {
+    track = {
         "version": TRACK_JSON_VERSION,
         "mode": mode,
         "source": {"width": frame_w, "height": frame_h},
@@ -973,6 +988,10 @@ def _build_track_json(
         },
         "meta": {"sample_fps": sample_fps, "fallback": fallback},
     }
+    if region is not None:
+        rx, ry, rw, rh = region
+        track["region"] = {"x": rx, "y": ry, "width": rw, "height": rh}
+    return track
 
 
 # ---------------------------------------------------------------------------
@@ -991,6 +1010,7 @@ def compute_dynamic_crop(
     sample_fps: float = _DEFAULT_SAMPLE_FPS,
     transcript_segments: list[dict] | None = None,
     punch_in_peak_s: float | None = None,
+    region: tuple[int, int, int, int] | None = None,
 ) -> ReframeResult:
     """Compute the full dynamic crop: detection → shots → mapping → plan →
     segmented smoothing → sendcmd + wire-contract track JSON.
@@ -1005,6 +1025,16 @@ def compute_dynamic_crop(
     list (speaker fields optional — Issue 418). ``punch_in_peak_s`` is the
     SOURCE-relative punch-in peak time when the zoom pulse will be applied,
     used only to suppress speaker cuts inside the pulse.
+
+    ``region`` (Issue 433): the detected camera rect ``(x, y, w, h)`` in
+    ABSOLUTE source pixels. Contract: when a region is passed, the caller
+    passes the REGION dims as ``frame_width``/``frame_height`` and a
+    region-derived ``crop_w``; this function slices every sampled frame to the
+    region before detection, so all downstream coordinates (tracks, clamps,
+    sendcmd x, track keyframes) are region-relative BY CONSTRUCTION — the
+    region pre-crop filter in the vf chain translates the stream, and no
+    offset arithmetic exists anywhere. ``region`` itself is recorded in the
+    track JSON for provenance only.
     """
     from config import settings  # noqa: PLC0415 — avoid config import at module init
     from verbose import now_ms, vlog  # noqa: PLC0415
@@ -1026,6 +1056,13 @@ def compute_dynamic_crop(
                 if frame is None:
                     obs_frames.append((ts, []))
                     continue
+                if region is not None:
+                    # Slice to the camera region BEFORE detection (Issue 433):
+                    # every coordinate downstream becomes region-relative.
+                    # (frame is an ndarray at runtime; the iterator's `object`
+                    # annotation keeps numpy out of the module's type surface.)
+                    _rx, _ry, _rw, _rh = region
+                    frame = frame[_ry : _ry + _rh, _rx : _rx + _rw]  # type: ignore[index]
                 obs_frames.append((ts, _detect_face_obs(frame, detector, ts)))
                 small = _downscale_for_hist(frame)
                 if small is not None:
@@ -1115,6 +1152,7 @@ def compute_dynamic_crop(
             sample_fps=sample_fps,
             speaker_count=speaker_count,
             mapping_confidence=mapping.confidence,
+            region=region,
         )
         # Per-stage timing budget (Issue 422): detection is the dominant cost;
         # the staging checklist in docs/DEPLOYMENT.md records these at
@@ -1174,6 +1212,7 @@ def compute_dynamic_crop(
                 sample_fps=sample_fps,
                 speaker_count=0,
                 mapping_confidence=0.0,
+                region=region,
             ),
             mode="static",
         )

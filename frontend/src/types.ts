@@ -388,6 +388,10 @@ export interface CropTrack {
   shots: { t: number }[]
   speakers: { count: number; mapping_confidence: number }
   meta: { sample_fps: number; fallback: boolean }
+  // Issue 433 — present only when a camera region was detected: the absolute
+  // source rect that `source` (the pan space) was cut from. Provenance only —
+  // all keyframe x values are relative to `source`, never to this rect.
+  region?: { x: number; y: number; width: number; height: number }
 }
 
 // Issue 216 — honest personalization-status surface.

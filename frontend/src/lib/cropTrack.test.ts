@@ -75,4 +75,10 @@ describe('isCropTrack', () => {
     expect(isCropTrack(null)).toBe(false)
     expect(isCropTrack({ ...TRACK, keyframes: [] })).toBe(false)
   })
+
+  it('tolerates the additive region field (Issue 433)', () => {
+    expect(
+      isCropTrack({ ...TRACK, region: { x: 200, y: 100, width: 1400, height: 900 } }),
+    ).toBe(true)
+  })
 })

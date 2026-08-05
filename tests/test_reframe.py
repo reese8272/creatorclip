@@ -228,14 +228,14 @@ class TestBuildSendcmdScript:
         # Face at x=1 with crop_w=607 → x_offset must be 0, not negative.
         track = [CropCenterPoint(0.0, 1)]
         script = build_sendcmd_script(track, crop_w=607, frame_w=1920, start_s=0.0)
-        assert " crop x 0;" in script
+        assert " crop@spk x 0;" in script  # instance-labeled target (Issue 433)
 
     def test_format_has_enter_directive(self) -> None:
         track = [CropCenterPoint(0.0, 960), CropCenterPoint(0.2, 980)]
         script = build_sendcmd_script(track, crop_w=607, frame_w=1920, start_s=0.0)
         for line in script.splitlines():
             assert "[enter]" in line
-            assert "crop x" in line
+            assert "crop@spk x" in line
             assert line.strip().endswith(";")
 
     def test_negative_clip_relative_timestamps_clamped_to_zero(self) -> None:
@@ -418,7 +418,7 @@ class TestComputeReframeCrop:
     def test_script_contains_sendcmd_lines(self, tmp_path: Path) -> None:
         _, script = self._run(tmp_path, duration=1.0, sample_fps=5.0)
         assert "[enter]" in script
-        assert "crop x" in script
+        assert "crop@spk x" in script
 
     def test_single_sample_returns_empty_script(self, tmp_path: Path) -> None:
         # duration=0.19s at 5fps → only 1 sample (0 * 0.2 = 0.0s is the only ts < 0.19)
@@ -457,7 +457,7 @@ class TestComputeReframeCrop:
         # Face at far right edge — should be clamped.
         track, script = self._run(tmp_path, detected_centers=[1919], duration=2.0)
         for line in script.splitlines():
-            # Line format: "0.200 [enter] crop x 1313;"
+            # Line format: "0.200 [enter] crop@spk x 1313;"
             parts = line.strip().rstrip(";").split()
             x_val = int(parts[-1])
             assert 0 <= x_val <= 1920 - 607

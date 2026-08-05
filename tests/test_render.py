@@ -495,36 +495,47 @@ def test_no_punch_in_when_peak_outside_window(tmp_path):
 # ── Camera-region pre-crop (Issue 430) ───────────────────────────────────────
 
 
-def _render_vf_with_region(tmp_path, *, region, flag=True, reframe=False) -> str:
-    """Render with the camera-region flag toggled and detection patched."""
+def _render_vf_with_region(tmp_path, *, region, flag=True, reframe=False) -> tuple[str, dict]:
+    """Render with the camera-region flag toggled and detection patched.
+
+    Returns ``(vf, compute_kwargs)`` — ``compute_kwargs`` captures the call to
+    ``compute_dynamic_crop`` under the reframe flag (empty dict otherwise).
+    """
     from config import settings as _settings
 
+    compute_kwargs: dict = {}
     with (
         patch.object(_settings, "CAMERA_REGION_DETECT_ENABLED", flag),
         patch.object(_settings, "ACTIVE_SPEAKER_REFRAME_ENABLED", reframe),
-        patch("clip_engine.camera_region.detect_camera_region", return_value=region) as det,
+        patch("clip_engine.camera_region.detect_camera_region", return_value=region),
     ):
         if reframe:
-            from clip_engine.reframe import ReframeResult
+            from clip_engine.reframe import CropCenterPoint, ReframeResult
 
-            with patch(
-                "clip_engine.reframe.compute_dynamic_crop",
-                return_value=ReframeResult(
-                    track_points=[], sendcmd_text="", mode="static", track_json=None
-                ),
-            ):
+            def _fake_compute(**kwargs):
+                compute_kwargs.update(kwargs)
+                # Multi-point track → sendcmd chain (the composed path).
+                return ReframeResult(
+                    track_points=[
+                        CropCenterPoint(10.0, 400),
+                        CropCenterPoint(10.2, 420),
+                    ],
+                    sendcmd_text="0.000 [enter] crop@spk x 147;\n0.200 [enter] crop@spk x 167;",
+                    mode="face_pan",
+                    track_json={"version": 1},
+                )
+
+            with patch("clip_engine.reframe.compute_dynamic_crop", side_effect=_fake_compute):
                 vf = _render_vf(tmp_path)
         else:
             vf = _render_vf(tmp_path)
-    if reframe:
-        assert det.call_count == 0  # per-frame reframe owns geometry — no detection
-    return vf
+    return vf, compute_kwargs
 
 
 def test_camera_region_prepends_pre_crop_and_rescopes_geometry(tmp_path):
     # Region 1400×900 at (200, 100): pre-crop first, then the 9:16 crop uses
     # region height (900) and region-space x, then the scale.
-    vf = _render_vf_with_region(tmp_path, region=(200, 100, 1400, 900))
+    vf, _ = _render_vf_with_region(tmp_path, region=(200, 100, 1400, 900))
     parts = vf.split(",")
     assert parts[0] == "crop=1400:900:200:100"
     crop_w = int(900 * 1080 / 1920)  # 506
@@ -534,14 +545,125 @@ def test_camera_region_prepends_pre_crop_and_rescopes_geometry(tmp_path):
 
 
 def test_camera_region_none_is_byte_identical(tmp_path):
-    with_flag = _render_vf_with_region(tmp_path, region=None)
+    with_flag, _ = _render_vf_with_region(tmp_path, region=None)
     baseline = _render_vf(tmp_path)
     assert with_flag == baseline
 
 
-def test_camera_region_skipped_under_reframe_flag(tmp_path):
-    vf = _render_vf_with_region(tmp_path, region=(200, 100, 1400, 900), reframe=True)
-    assert "crop=1400:900" not in vf
+def test_camera_region_composes_with_reframe(tmp_path):
+    """Issue 433: region + reframe compose — pre-crop first, then the LABELED
+    9:16 crop driven by sendcmd, and the reframe runs in REGION space."""
+    vf, kwargs = _render_vf_with_region(tmp_path, region=(200, 100, 1400, 900), reframe=True)
+    parts = vf.split(",")
+    crop_w = int(900 * 1080 / 1920)  # 506
+    assert parts[0].startswith("sendcmd=f=")
+    assert parts[1] == "crop=1400:900:200:100"  # unlabeled, unaddressed pre-crop
+    x0 = max(0, min(400 - crop_w // 2, 1400 - crop_w))  # first track point, region clamp
+    assert parts[2] == f"crop@spk={crop_w}:900:{x0}:0"
+    assert parts[3] == "scale=1080:1920"
+    # The reframe received REGION dims as its frame dims + the region rect.
+    assert kwargs["frame_width"] == 1400
+    assert kwargs["frame_height"] == 900
+    assert kwargs["crop_w"] == crop_w
+    assert kwargs["region"] == (200, 100, 1400, 900)
+
+
+def test_reframe_without_region_calls_compute_with_full_frame(tmp_path):
+    """Flag-ON, region None: compute gets full-frame dims and region=None —
+    the vf chain is today's sendcmd chain with only the @spk label added."""
+    vf, kwargs = _render_vf_with_region(tmp_path, region=None, reframe=True)
+    parts = vf.split(",")
+    assert parts[0].startswith("sendcmd=f=")
+    assert parts[1].startswith("crop@spk=607:1080:")
+    assert parts[2] == "scale=1080:1920"
+    assert kwargs["frame_width"] == 1920
+    assert kwargs["frame_height"] == 1080
+    assert kwargs["region"] is None
+
+
+def test_reframe_region_punch_in_stays_after_scale(tmp_path):
+    """zoom_on_peak + region + reframe: the punch-in chunk appends AFTER the
+    scale and carries no @spk label (sendcmd can no longer address it)."""
+    from clip_engine.reframe import CropCenterPoint, ReframeResult
+    from config import settings as _settings
+
+    with (
+        patch.object(_settings, "CAMERA_REGION_DETECT_ENABLED", True),
+        patch.object(_settings, "ACTIVE_SPEAKER_REFRAME_ENABLED", True),
+        patch(
+            "clip_engine.camera_region.detect_camera_region",
+            return_value=(200, 100, 1400, 900),
+        ),
+        patch(
+            "clip_engine.reframe.compute_dynamic_crop",
+            return_value=ReframeResult(
+                track_points=[CropCenterPoint(10.0, 400), CropCenterPoint(10.2, 420)],
+                sendcmd_text="0.000 [enter] crop@spk x 147;",
+                mode="face_pan",
+                track_json={"version": 1},
+            ),
+        ),
+    ):
+        vf = _render_vf(tmp_path, style_preset={"zoom_on_peak": True}, peak_s=40.0)
+    scale_idx = vf.index("scale=1080:1920")
+    punch_idx = vf.index("crop=w=iw/")
+    assert punch_idx > scale_idx
+    assert "@spk" not in vf[punch_idx:]
+
+
+def test_reframe_flag_on_passes_face_bottom_to_captions(tmp_path):
+    """Issue 433: the Haar pass is unconditional — caption face avoidance is
+    live under the reframe flag (previously dead), and region-aware."""
+    import numpy as np
+
+    from clip_engine.reframe import CropCenterPoint, ReframeResult
+    from config import settings as _settings
+
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        return MagicMock(returncode=0, stdout="1920,1080\n", stderr=_LOUDNORM_JSON)
+
+    def _fake_captions(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    with (
+        patch("subprocess.run", side_effect=_fake_run),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+        patch.object(_settings, "ACTIVE_SPEAKER_REFRAME_ENABLED", True),
+        patch.object(_settings, "CAMERA_REGION_DETECT_ENABLED", True),
+        patch(
+            "clip_engine.camera_region.detect_camera_region",
+            return_value=(200, 100, 1400, 900),
+        ),
+        patch(
+            "clip_engine.reframe.compute_dynamic_crop",
+            return_value=ReframeResult(
+                track_points=[CropCenterPoint(10.0, 400)],
+                sendcmd_text="",
+                mode="static",
+                track_json={"version": 1},
+            ),
+        ),
+        patch("clip_engine.render.captions.build_ass_subtitles", side_effect=_fake_captions),
+    ):
+        # Face box at y=300, h=200 → bottom 500 source px; region y=100 h=900.
+        mock_cc.return_value.detectMultiScale.return_value = [(800, 300, 200, 200)]
+        render_clip_file(
+            src,
+            start_s=10.0,
+            end_s=70.0,
+            out_path=out,
+            style_preset={"subtitle": "bold_pop"},
+            transcript_segments=[{"start": 10, "end": 20, "text": "hi"}],
+        )
+    assert captured["face_bottom_px"] == round((300 + 200 - 100) * 1920 / 900)
 
 
 # ── opt-in noise reduction (Issue 185) ────────────────────────────────────────
@@ -737,7 +859,7 @@ def test_reframe_flag_enabled_includes_sendcmd_in_vf(tmp_path):
     returns a multi-point script, the vf string must start with sendcmd."""
     vf = _render_vf_with_reframe_flag(tmp_path, flag_enabled=True)
     assert vf.startswith("sendcmd=")
-    assert "crop=" in vf
+    assert "crop@spk=" in vf  # instance-labeled 9:16 crop (Issue 433)
 
 
 # ── Issue 329: new edge-suite tests ───────────────────────────────────────────

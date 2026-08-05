@@ -5,6 +5,39 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-05 (night) — Issue 433: region-aware reframe (chrome removal composed with speaker cuts)
+
+Five rulings:
+
+**(1) sendcmd targets are ALWAYS instance-labeled (`crop@spk`).** Empirically verified on this
+machine (two labeled crops + sendcmd, output-hash divergence): a bare `crop` target addresses
+EVERY crop instance in the filtergraph. That made the naive composition impossible AND exposed a
+latent pre-433 bug — with reframe + `zoom_on_peak`, bare `crop x` commands also hit the
+punch-in's crop filter, overriding its centering expression. `build_sendcmd_script` now emits
+`crop@spk x` unconditionally; render.py labels the 9:16 crop `crop@spk=` only in sendcmd chains
+(static chains stay byte-identical; the region pre-crop stays unlabeled and unaddressable).
+
+**(2) Region composition = pre-crop-in-stream + region-space analysis; NO offset arithmetic.**
+`compute_dynamic_crop(..., region=)` receives the REGION dims as its frame dims and slices every
+sampled frame to the region before detection — speaker_map is fully coordinate-relative, so
+tracks, clamps, sendcmd x, and track keyframes are region-relative by construction; the region
+pre-crop filter translates the stream. One-geometry contract preserved without translation.
+
+**(3) Crop-track wire contract stays version 1.** `source` is defined as the PAN-SPACE rect
+(the region when detected) — frontend math (`maxCropX = source.width - crop.width`) is unchanged
+by construction. Additive `region: {x,y,width,height}` key (absolute source rect, provenance
+only), OMITTED (never null) when full-frame — the pinned API fixture equality stays exact.
+
+**(4) The Haar midpoint face pass is unconditional.** Previously flag-OFF only, which left
+caption face-avoidance DEAD under the reframe flag and camera_region's face sanity gate unarmed.
+One extra ~100 ms keyframe call per render.
+
+**(5) `CAMERA_REGION_DETECT_ENABLED` and `ACTIVE_SPEAKER_REFRAME_ENABLED` now compose** — the
+430 "superseded" note is resolved; the region flag flips after the staging frame check on a
+produced-layout source (fail-open unchanged).
+
+---
+
 ## 2026-08-05 (evening) — ACTIVE_SPEAKER_REFRAME_ENABLED flipped ON in prod (Issue 422 / 189 reversal entry)
 
 **Decision:** the speaker-aware reframe is LIVE in production (`ACTIVE_SPEAKER_REFRAME_ENABLED=true`

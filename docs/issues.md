@@ -1997,7 +1997,7 @@ crop treats the whole 16:9 frame as camera when much of it is chrome.
 
 ### Issue 433: Region-aware reframe — compose camera-region crop with speaker cuts
 
-- [ ] **Status:** open · **Size:** M · filed 2026-08-05 · **Depends:** 422 (flag on), 430 (detector)
+- [x] **Status:** BUILT 2026-08-05 (night) — live verification on the next produced-layout upload pending · **Size:** M · **Depends:** 422 (flag on), 430 (detector)
 
 The Issue-430 camera-region pre-crop and the Issue-422 speaker reframe are mutually exclusive
 today: `render_clip_file` skips chrome detection when `ACTIVE_SPEAKER_REFRAME_ENABLED` is on,
@@ -2015,9 +2015,9 @@ source's own SUBSCRIBE banner / top-band fragments) stays in every frame.
   pre-offset keyframes — pick one and version the wire contract.
 
 **Acceptance**
-- [ ] Produced-layout source renders with speaker cuts AND no third-party chrome
-- [ ] Plain sources byte-identical when no region is detected
-- [ ] Crop-track overlay still aligns in the frontend
+- [ ] Produced-layout source renders with speaker cuts AND no third-party chrome (live check on the next upload with CAMERA_REGION_DETECT_ENABLED=true)
+- [x] Plain sources byte-identical when no region is detected (pinned: static chains keep the unlabeled crop spelling; region-None reframe chain differs only by the @spk label; `test_camera_region_none_is_byte_identical`)
+- [x] Crop-track overlay still aligns in the frontend (`source` = pan-space rect by contract; additive `region` field; isCropTrack tolerance pinned)
 
 ### Issue 432: On-demand renders collapse under concurrency — dedicated render queue
 

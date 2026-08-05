@@ -302,15 +302,34 @@ def _dialogue_segments() -> list[dict]:
 
 
 class TestComputeDynamicCrop:
-    def _run(self, tmp_path, *, cuts_enabled=True, transcript=None, obs=_two_face_obs, shots=None):
+    def _run(
+        self,
+        tmp_path,
+        *,
+        cuts_enabled=True,
+        transcript=None,
+        obs=_two_face_obs,
+        shots=None,
+        region=None,
+        frame_width=1920,
+        frame_height=1080,
+        crop_w=607,
+        seen_shapes=None,
+    ):
         import config as _config_mod
 
         fake = tmp_path / "v.mp4"
         fake.touch()
         fake_frame = np.zeros((1080, 1920, 3), dtype="uint8")
+
+        def _obs_capture(frame, detector, ts):
+            if seen_shapes is not None:
+                seen_shapes.append(frame.shape)
+            return obs(frame, detector, ts)
+
         with (
             patch("clip_engine.reframe._iter_sampled_frames", _frames_iter(fake_frame)),
-            patch("clip_engine.reframe._detect_face_obs", side_effect=obs),
+            patch("clip_engine.reframe._detect_face_obs", side_effect=_obs_capture),
             patch("clip_engine.reframe._shots.detect_shot_changes", return_value=shots or []),
             patch("clip_engine.reframe._downscale_for_hist", return_value=None),
             patch.object(_config_mod.settings, "REFRAME_CUT_ENABLED", cuts_enabled),
@@ -319,11 +338,12 @@ class TestComputeDynamicCrop:
                 source_path=fake,
                 start_s=10.0,
                 end_s=20.0,
-                frame_width=1920,
-                frame_height=1080,
-                crop_w=607,
+                frame_width=frame_width,
+                frame_height=frame_height,
+                crop_w=crop_w,
                 sample_fps=5.0,
                 transcript_segments=transcript,
+                region=region,
             )
 
     def test_speaker_cut_mode_end_to_end(self, tmp_path) -> None:
@@ -398,6 +418,62 @@ class TestComputeDynamicCrop:
         for cut in result.track_json["cuts"]:
             assert cut["t"] in kf_by_t
             assert cut["to_x"] == kf_by_t[cut["t"]]
+
+    # ── Region composition (Issue 433) ───────────────────────────────────────
+
+    def test_region_slices_frames_before_detection(self, tmp_path) -> None:
+        """The detector must see REGION-shaped frames — every downstream
+        coordinate becomes region-relative by construction."""
+        shapes: list = []
+        region = (200, 100, 1400, 900)
+        crop_w = int(900 * 1080 / 1920)  # 506
+        self._run(
+            tmp_path,
+            region=region,
+            frame_width=1400,
+            frame_height=900,
+            crop_w=crop_w,
+            seen_shapes=shapes,
+        )
+        assert shapes and all(s == (900, 1400, 3) for s in shapes)
+
+    def test_region_recorded_in_track_json(self, tmp_path) -> None:
+        region = (200, 100, 1400, 900)
+        crop_w = int(900 * 1080 / 1920)
+        result = self._run(
+            tmp_path, region=region, frame_width=1400, frame_height=900, crop_w=crop_w
+        )
+        tj = result.track_json
+        # `source` IS the pan-space (region) rect — frontend math unchanged.
+        assert tj["source"] == {"width": 1400, "height": 900}
+        assert tj["region"] == {"x": 200, "y": 100, "width": 1400, "height": 900}
+        assert all(0 <= kf["x"] <= 1400 - crop_w for kf in tj["keyframes"])
+
+    def test_no_region_omits_the_key(self, tmp_path) -> None:
+        result = self._run(tmp_path)
+        assert "region" not in result.track_json
+
+    def test_exception_fallback_carries_region_and_region_center(self, tmp_path) -> None:
+        """Total detection failure with a region active: the static fallback
+        centers in REGION space and the track still records the region."""
+        region = (200, 100, 1400, 900)
+        crop_w = int(900 * 1080 / 1920)
+
+        def _boom(frame, detector, ts):
+            raise RuntimeError("detector exploded")
+
+        result = self._run(
+            tmp_path,
+            obs=_boom,
+            region=region,
+            frame_width=1400,
+            frame_height=900,
+            crop_w=crop_w,
+        )
+        assert result.mode == "static"
+        assert result.track_points[0].center_x == 1400 // 2
+        assert result.track_json["region"] == {"x": 200, "y": 100, "width": 1400, "height": 900}
+        assert result.track_json["source"] == {"width": 1400, "height": 900}
 
     def test_total_failure_returns_static_result(self, tmp_path) -> None:
         fake = tmp_path / "v.mp4"
