@@ -36,7 +36,9 @@ function designTokensText(): Plugin {
 // cookie-authed endpoints the SPA calls so `credentials: 'include'` works
 // same-origin against the Vite dev server.
 const API_TARGET = process.env.VITE_API_TARGET || 'http://localhost:8000'
-const API_PREFIXES = ['/auth', '/creators', '/billing', '/tasks', '/api']
+// /videos + /clips were missing until Issue 395 — uploads from the Vite dev
+// server could never reach the API (the e2e mock always intercepted them).
+const API_PREFIXES = ['/auth', '/creators', '/billing', '/tasks', '/api', '/videos', '/clips']
 
 export default defineConfig({
   base: '/app/',

@@ -344,6 +344,12 @@ def _build_csp() -> str:
         else "https://*.r2.cloudflarestorage.com"
     )
     parts.append(f"media-src 'self' {r2_origin}")
+    # Direct-to-R2 multipart uploads (Issue 395): the SPA PUTs part bytes to the
+    # account-scoped R2 origin via fetch, which browsers gate on connect-src.
+    # Without this directive connect-src falls back to default-src 'self' and
+    # every part PUT is blocked. Deliberate deviation from the keep-R2-out-of-CSP
+    # stance (DECISIONS 2026-08-05); img-src deliberately stays 'self'.
+    parts.append(f"connect-src 'self' {r2_origin}")
     extra = settings.CSP_EXTRA_SOURCES.strip()
     if extra:
         parts.append(extra)

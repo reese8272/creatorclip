@@ -8,7 +8,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +22,20 @@ from models import Creator, IngestStatus, OnboardingState, Transcript, Video, Vi
 from routers._enqueue import stamp_stream_owner
 from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
-from worker.storage import aread_bytes, presigned_download_url, upload_file
+from worker.storage import (
+    MultipartUploadNotFound,
+    StorageError,
+    aabort_multipart_upload,
+    acomplete_multipart_upload,
+    acreate_multipart_upload,
+    adelete_file,
+    ahead_object,
+    alist_upload_parts,
+    aread_bytes,
+    presign_upload_part,
+    presigned_download_url,
+    upload_file,
+)
 from worker.tasks import start_pipeline
 from youtube.data_api import classify_video_kind, get_videos_metadata
 from youtube.ingest import probe_duration_s
@@ -112,6 +125,70 @@ class QueuedOut(BaseModel):
     queued: bool
 
 
+class UploadConfigOut(BaseModel):
+    """Transport selector for the SPA uploader (Issue 395): ``multipart`` =
+    presigned direct-to-R2; ``proxy`` = legacy streamed POST (local-disk dev)."""
+
+    mode: Literal["multipart", "proxy"]
+    part_size_bytes: int  # 0 in proxy mode (no chunking)
+    max_file_bytes: int
+
+
+class UploadCreateIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(gt=0)
+    content_type: str | None = None
+    youtube_video_id: str | None = None
+    # Client-read (HTMLVideoElement metadata) — advisory for the balance
+    # pre-check only, never persisted; the worker re-probes at ingest.
+    duration_s: float | None = Field(default=None, gt=0)
+
+
+class UploadCreateOut(BaseModel):
+    upload_id: str
+    key: str
+    part_size_bytes: int
+
+
+class UploadPartPresignIn(BaseModel):
+    key: str
+
+
+class UploadPartPresignOut(BaseModel):
+    url: str
+    expires_in: int
+
+
+class UploadPartOut(BaseModel):
+    part_number: int
+    size: int
+    etag: str
+
+
+class UploadPartsOut(BaseModel):
+    parts: list[UploadPartOut]
+
+
+class UploadCompletePart(BaseModel):
+    part_number: int = Field(ge=1, le=10_000)
+    etag: str = Field(min_length=1, max_length=256)
+
+
+class UploadCompleteIn(BaseModel):
+    key: str
+    parts: list[UploadCompletePart] = Field(min_length=1, max_length=10_000)
+    youtube_video_id: str | None = None
+    duration_s: float | None = Field(default=None, gt=0)  # advisory only — never persisted
+
+
+class UploadAbortIn(BaseModel):
+    key: str
+
+
+class UploadAbortedOut(BaseModel):
+    aborted: bool
+
+
 # YouTube video IDs are exactly 11 chars of [A-Za-z0-9_-]. Validate before the value
 # is interpolated into a storage key, so `../` or `/` can't reshape the object path. (Issue 73)
 _YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -120,6 +197,36 @@ _YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 def _validate_youtube_id(youtube_video_id: str) -> None:
     if not _YT_ID_RE.match(youtube_video_id):
         raise HTTPException(status_code=422, detail="Invalid youtube_video_id")
+
+
+# Whitelisted source-container suffixes for browser uploads (Issue 395). A bounded
+# set keeps the storage-key shape fully validatable in _validate_upload_key.
+_UPLOAD_SUFFIXES = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
+# One fixed part size per upload trivially satisfies R2's all-parts-equal-except-last
+# rule and gives 10,000 x 25 MiB ≈ 244 GB of headroom, far above UPLOAD_MAX_FILE_GB.
+_UPLOAD_PART_SIZE_BYTES = 25 * 1024 * 1024
+_UPLOAD_PRESIGN_EXPIRES_S = 900
+
+
+def _require_multipart_mode() -> None:
+    if settings.STORAGE_BACKEND != "r2":
+        raise HTTPException(
+            status_code=409, detail="Direct upload not available on this deployment"
+        )
+
+
+def _validate_upload_key(key: str, creator_id: uuid.UUID) -> None:
+    """403 unless key is ``source/{this creator}/{yt-id | uuid4-hex}{whitelisted suffix}``.
+
+    Signature issuance is the only write path to the bucket, so a foreign or
+    malformed key is refused outright (403) rather than 404-masked: it is a
+    request to sign someone else's namespace, not a lookup miss. The token
+    alternatives are exactly the two shapes the create endpoint mints. (Issue 395)
+    """
+    token = r"(?:[A-Za-z0-9_-]{11}|[0-9a-f]{32})"
+    suffixes = "|".join(re.escape(s) for s in _UPLOAD_SUFFIXES)
+    if not re.fullmatch(rf"source/{re.escape(str(creator_id))}/{token}(?:{suffixes})", key):
+        raise HTTPException(status_code=403, detail="Upload key does not belong to this creator")
 
 
 @router.get("", response_model=VideoListOut)
@@ -518,6 +625,275 @@ async def upload_video(
         "status": video.ingest_status.value,
         "stream_url": stream_url,
     }
+
+
+# ── Presigned direct-to-R2 multipart upload (Issue 395) ───────────────────────
+#
+# The browser uploads parts straight to R2; these endpoints only mint presigned
+# URLs and register completion. Sessions are stateless server-side: the key is
+# validated against the authenticated creator's namespace on every call, R2
+# binds uploadId to key, the Video row is created only at /complete, and R2
+# auto-aborts abandoned multipart uploads after 7 days.
+
+
+@router.get("/uploads/config", response_model=UploadConfigOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def get_upload_config(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+) -> dict:
+    """Which upload transport this deployment supports (Issue 395)."""
+    if settings.STORAGE_BACKEND == "r2":
+        return {
+            "mode": "multipart",
+            "part_size_bytes": _UPLOAD_PART_SIZE_BYTES,
+            "max_file_bytes": settings.UPLOAD_MAX_FILE_GB * 1024**3,
+        }
+    return {
+        "mode": "proxy",
+        "part_size_bytes": 0,
+        "max_file_bytes": settings.UPLOAD_MAX_MB * 1024 * 1024,
+    }
+
+
+@router.post("/uploads", status_code=201, response_model=UploadCreateOut)
+@limiter.limit("60/hour", key_func=creator_key)
+async def create_upload(
+    request: Request,
+    body: UploadCreateIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Start a presigned multipart upload: mint the storage key + R2 UploadId.
+
+    The declared size is the presign-time abuse gate (the real quota gate is the
+    minutes balance, enforced authoritatively at ingest); the actual object size
+    is re-verified with a HEAD at /complete. The advisory dedupe here fails fast
+    before gigabytes move — the authoritative dedupe is /complete's insert.
+    """
+    _require_multipart_mode()
+    if body.youtube_video_id is not None:
+        _validate_youtube_id(body.youtube_video_id)
+    suffix = Path(body.filename).suffix.lower()
+    if suffix not in _UPLOAD_SUFFIXES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported file type — use one of: {', '.join(_UPLOAD_SUFFIXES)}",
+        )
+    if body.size_bytes > settings.UPLOAD_MAX_FILE_GB * 1024**3:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds {settings.UPLOAD_MAX_FILE_GB} GB limit",
+        )
+    await check_positive_balance(creator.id, session)
+    if body.duration_s is not None:
+        await check_balance_for_minutes(creator.id, video_minutes(body.duration_s), session)
+    if body.youtube_video_id is not None:
+        existing = await session.execute(
+            select(Video).where(
+                Video.creator_id == creator.id,
+                Video.youtube_video_id == body.youtube_video_id,
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Video already registered")
+
+    storage_token = body.youtube_video_id or uuid.uuid4().hex
+    key = f"source/{creator.id}/{storage_token}{suffix}"
+    # Issue 82b idiom: release the pooled connection before the storage round-trip.
+    await session.commit()
+    try:
+        upload_id = await acreate_multipart_upload(key, body.content_type)
+    except StorageError:
+        logger.warning("create_multipart_upload failed for key=%s", key, exc_info=True)
+        raise HTTPException(status_code=502, detail="Storage error — try again") from None
+
+    from observability import log_event
+
+    log_event(
+        "upload_multipart_created",
+        creator_id=str(creator.id),
+        key=key,
+        declared_bytes=body.size_bytes,
+        declared_duration_s=body.duration_s,
+    )
+    return {"upload_id": upload_id, "key": key, "part_size_bytes": _UPLOAD_PART_SIZE_BYTES}
+
+
+@router.post(
+    "/uploads/{upload_id}/parts/{part_number}/presign", response_model=UploadPartPresignOut
+)
+@limiter.limit("1200/minute", key_func=creator_key)
+async def presign_upload_part_url(
+    request: Request,
+    upload_id: str,
+    part_number: int,
+    body: UploadPartPresignIn,
+    creator: Creator = Depends(get_current_creator),
+) -> dict:
+    """Presigned PUT URL for one part. Signing is local-only (no storage call),
+    hence the generous limit — a gigabit uploader on a 20 GB file signs ~350/min.
+    No extra headers are signed: the browser sends the raw part body only.
+    """
+    _require_multipart_mode()
+    _validate_upload_key(body.key, creator.id)
+    if not 1 <= part_number <= 10_000:
+        raise HTTPException(status_code=422, detail="part_number must be between 1 and 10000")
+    url = presign_upload_part(body.key, upload_id, part_number, expires_s=_UPLOAD_PRESIGN_EXPIRES_S)
+    return {"url": url, "expires_in": _UPLOAD_PRESIGN_EXPIRES_S}
+
+
+@router.get("/uploads/{upload_id}/parts", response_model=UploadPartsOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def list_uploaded_parts(
+    request: Request,
+    upload_id: str,
+    key: str,
+    creator: Creator = Depends(get_current_creator),
+) -> dict:
+    """Parts already uploaded — the client's resume primitive after a reload."""
+    _require_multipart_mode()
+    _validate_upload_key(key, creator.id)
+    try:
+        parts = await alist_upload_parts(key, upload_id)
+    except MultipartUploadNotFound:
+        raise HTTPException(status_code=404, detail="Upload not found or expired") from None
+    except StorageError:
+        raise HTTPException(status_code=502, detail="Storage error — try again") from None
+    return {"parts": parts}
+
+
+@router.post("/uploads/{upload_id}/complete", response_model=VideoLinkedOut)
+@limiter.limit("60/hour", key_func=creator_key)
+async def complete_upload(
+    request: Request,
+    upload_id: str,
+    body: UploadCompleteIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Assemble the parts, register the Video row, start the ingest pipeline.
+
+    Ordering is deliberate: dedupe/balance rejections come BEFORE the
+    CompleteMultipartUpload call, so a 409/402 leaves the multipart session
+    intact — after a top-up the client re-calls complete without re-uploading
+    anything. Retry-safe: a NoSuchUpload whose object already has a row for
+    this creator re-returns that row (a double-complete is a lost response,
+    publications-confirm style). The IntegrityError race 409s WITHOUT deleting
+    the object: an associated upload's key is deterministic (token = the
+    YouTube id), so the winning row may point at this exact object.
+    """
+    _require_multipart_mode()
+    _validate_upload_key(body.key, creator.id)
+    if body.youtube_video_id is not None:
+        _validate_youtube_id(body.youtube_video_id)
+        existing = await session.execute(
+            select(Video).where(
+                Video.creator_id == creator.id,
+                Video.youtube_video_id == body.youtube_video_id,
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Video already registered")
+    await check_positive_balance(creator.id, session)
+    if body.duration_s is not None:
+        await check_balance_for_minutes(creator.id, video_minutes(body.duration_s), session)
+
+    source_uri = f"s3://{settings.R2_BUCKET}/{body.key}"
+    # Issue 82b idiom: release the pooled connection before the storage round-trips.
+    await session.commit()
+    try:
+        await acomplete_multipart_upload(body.key, upload_id, [p.model_dump() for p in body.parts])
+    except MultipartUploadNotFound:
+        existing = await session.execute(
+            select(Video).where(
+                Video.creator_id == creator.id,
+                Video.source_uri == source_uri,
+            )
+        )
+        video = existing.scalar_one_or_none()
+        if video is not None:
+            return {
+                "video_id": str(video.id),
+                "status": video.ingest_status.value,
+                "stream_url": None,
+            }
+        raise HTTPException(status_code=404, detail="Upload not found or expired") from None
+    except StorageError:
+        logger.warning("complete_multipart_upload failed for key=%s", body.key, exc_info=True)
+        raise HTTPException(status_code=502, detail="Storage error — try again") from None
+
+    head = await ahead_object(body.key)
+    if head is None:
+        raise HTTPException(status_code=502, detail="Storage error — try again")
+    if head["size"] > settings.UPLOAD_MAX_FILE_GB * 1024**3:
+        await adelete_file(source_uri)
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds {settings.UPLOAD_MAX_FILE_GB} GB limit",
+        )
+
+    # Kind is provisional (advisory client duration); duration_s stays None so the
+    # worker's authoritative probe fills both at ingest (worker/tasks.py).
+    kind = classify_video_kind(body.duration_s) if body.duration_s is not None else VideoKind.long
+    video = Video(
+        creator_id=creator.id,
+        youtube_video_id=body.youtube_video_id,
+        kind=kind,
+        duration_s=None,
+        source_uri=source_uri,
+        origin=VideoOrigin.upload,
+        ingest_status=IngestStatus.pending,
+    )
+    session.add(video)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Video already registered") from None
+    await session.refresh(video)
+
+    stream_url = await stamp_stream_owner(str(video.id), str(creator.id), log_label="upload")
+    await asyncio.to_thread(start_pipeline, str(video.id))
+
+    from observability import log_event
+
+    log_event(
+        "video_uploaded",
+        creator_id=str(creator.id),
+        video_id=str(video.id),
+        youtube_video_id=body.youtube_video_id,
+        kind=kind.value,
+        duration_s=body.duration_s,
+        bytes_received=head["size"],
+        transport="multipart",
+    )
+    return {
+        "video_id": str(video.id),
+        "status": video.ingest_status.value,
+        "stream_url": stream_url,
+    }
+
+
+@router.post("/uploads/{upload_id}/abort", response_model=UploadAbortedOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def abort_upload(
+    request: Request,
+    upload_id: str,
+    body: UploadAbortIn,
+    creator: Creator = Depends(get_current_creator),
+) -> dict:
+    """Cancel an in-flight multipart upload. Idempotent — an already-gone
+    uploadId still reports aborted (R2 auto-aborts abandoned ones at 7 days)."""
+    _require_multipart_mode()
+    _validate_upload_key(body.key, creator.id)
+    try:
+        await aabort_multipart_upload(body.key, upload_id)
+    except MultipartUploadNotFound:
+        pass
+    except StorageError:
+        raise HTTPException(status_code=502, detail="Storage error — try again") from None
+    return {"aborted": True}
 
 
 @router.post("/{video_id}/queue", status_code=202, response_model=QueuedOut)

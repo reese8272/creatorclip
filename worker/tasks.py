@@ -2023,7 +2023,13 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                 if peaks_uri:
                     video.peaks_uri = peaks_uri
                 if duration_s and not video.duration_s:
+                    # Direct-to-R2 uploads (Issue 395) register with duration_s=None
+                    # and a provisional kind — the local probe is the authority for
+                    # both, so reclassify alongside the duration write.
+                    from youtube.data_api import classify_video_kind
+
                     video.duration_s = duration_s
+                    video.kind = classify_video_kind(duration_s)
                 if duration_s:
                     from billing.ledger import deduct_for_video
 

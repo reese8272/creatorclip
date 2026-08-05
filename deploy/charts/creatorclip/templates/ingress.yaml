@@ -6,7 +6,7 @@ metadata:
   labels:
     {{- include "creatorclip.labels" . | nindent 4 }}
   annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "512m"       # match UPLOAD_MAX_MB
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"       # match UPLOAD_MAX_MB — bounds only the legacy proxy path; direct-to-R2 uploads (Issue 395) bypass the ingress
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"     # long render/ingest calls
     nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
 spec:

@@ -4,6 +4,36 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-05 — Issue 395 BUILT: presigned direct-to-R2 multipart upload (BETA BLOCKER; live acceptance deploy-gated)
+
+Triggered live: the user's L26 stress test hit every predicted failure of the proxy upload —
+40+-min single-stream crawl through the cloudflared tunnel, a Cloudflare-edge 403 the app never
+even saw, and a mid-upload session expiry (60-min JWT). Full architecture + evidence in
+`docs/DECISIONS.md` (2026-08-05); issue checklist updated in `docs/issues.md` § 395.
+
+- **Backend:** 6 new `/videos/uploads/*` endpoints (config/create/sign-part/list/complete/abort),
+  stateless sessions (no migration), key-shape isolation (403), quota-before-complete ordering,
+  HEAD-verified 20 GB ceiling (`UPLOAD_MAX_FILE_GB`), multipart helpers confined to
+  `worker/storage.py`; worker fills kind alongside the authoritative duration probe; CSP gains
+  `connect-src 'self' + R2 origin`. Legacy proxy endpoint retained for dev + OBS `/clips/ingest`.
+- **Frontend:** headless Uppy 5 (`lib/uploader.ts` singleton + `hooks/useUploader.ts` +
+  `public/uppy-sw.js`), UploadVideoForm rebuilt (drag-drop, multi-file queue, honest R2-acked
+  progress, session-expiry pause → re-login → resume), prop contract preserved (Dashboard +
+  InlineUploadFlow untouched). Vite dev proxy gained `/videos`+`/clips` (pre-existing gap).
+- **Infra:** `scripts/r2_set_cors.py` (one-time per env; ExposeHeaders ETag is load-bearing),
+  cloudflared pinned to HTTP/2 (`TUNNEL_TRANSPORT_PROTOCOL`), K8s ingress annotation re-commented.
+- **Gates:** backend unit lane **2795/0** (new 27-test multipart suite + rate-limit qualnames +
+  CSP test); frontend on node 22: vitest **637/637**, `tsc -b` clean, eslint 0 errors (the
+  node-26 jsdom gotcha bit once more first — re-logged with an .nvmrc/engines fix suggestion in
+  `docs/OFF_COURSE_BUGS.md` 2026-08-05).
+- **Open tail (deploy-gated):** deploy → run `scripts/r2_set_cors.py https://autoclip.studio` on
+  the VM → live drills: >2 GB upload end-to-end, mid-upload network kill, reload-resume,
+  browser-restart ghost resume, session-expiry drill, 25 GB-declared 413, no lingering incomplete
+  uploads, cloudflared http2 stability. User action items: Cloudflare Security→Events lookup for
+  the 13:1x 403 (zone is Pro — 100 MB proxy cap unchanged, moot for the new path).
+
+---
+
 ## 2026-08-04 — L26 BUILD COMPLETE: all three tracks merged on `lane/l26` (414–421 + 423–426 DONE; 422 code-prepared, staging OPEN)
 
 Serial merge A → B → C per the binding cross-track contract. Conflicts were additive-only

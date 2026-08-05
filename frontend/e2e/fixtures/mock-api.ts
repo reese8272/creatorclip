@@ -470,6 +470,9 @@ const PEAKS_V1 = (() => {
 const GET_TABLE: Record<string, unknown> = {
   '/billing/balance': BALANCE,
   '/videos': VIDEOS,
+  // Issue 395: proxy mode keeps e2e uploads on the same-origin legacy endpoint —
+  // no presign/part traffic to the (unmocked) R2 origin ever fires.
+  '/videos/uploads/config': { mode: 'proxy', part_size_bytes: 0, max_file_bytes: 524288000 },
   '/creators/me/insights': INSIGHTS,
   '/creators/me/insights/saved': SAVED_INSIGHTS,
   '/creators/me/upload-intel': UPLOAD_INTEL,

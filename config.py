@@ -578,7 +578,14 @@ class Settings(BaseSettings):
     # deterministic value.
     STATIC_VERSION: str = "dev"
 
+    # Proxy-path cap only (dev /videos/upload fallback + OBS /clips/ingest). The
+    # browser-direct multipart path (Issue 395) is gated by the minutes quota
+    # plus UPLOAD_MAX_FILE_GB, not this.
     UPLOAD_MAX_MB: int = 500
+    # Per-file abuse ceiling for direct-to-R2 multipart uploads: declared size is
+    # rejected at presign-time, actual size verified (HEAD) at completion. The
+    # real gate is the creator's minutes balance.
+    UPLOAD_MAX_FILE_GB: int = 20
     LOCAL_MEDIA_DIR: str = "./media"
 
     # ── Security headers (Issue 229) ───────────────────────────────────────────

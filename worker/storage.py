@@ -21,6 +21,7 @@ from typing import Any
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from config import settings
 
@@ -250,3 +251,150 @@ async def alocal_path(uri: str) -> AsyncGenerator[Path, None]:
             tmp_path.unlink(missing_ok=True)
     else:
         yield Path(uri)
+
+
+# ── Presigned multipart upload (Issue 395) ────────────────────────────────────
+#
+# Browser-direct uploads: the API mints presigned part URLs and the browser PUTs
+# straight to R2, so these helpers exist only for the r2 backend. Callers gate on
+# STORAGE_BACKEND before reaching them; the RuntimeError is a programming-error
+# backstop, not a user-facing path. boto3/botocore error types stay confined to
+# this module — callers see MultipartUploadNotFound / StorageError instead.
+
+
+class MultipartUploadNotFound(Exception):
+    """The uploadId no longer exists (completed, aborted, or auto-expired)."""
+
+
+class StorageError(Exception):
+    """A storage-backend call failed for a reason other than a missing upload."""
+
+
+def _require_r2(op: str) -> None:
+    if settings.STORAGE_BACKEND != "r2":
+        raise RuntimeError(f"{op} requires STORAGE_BACKEND=r2")
+
+
+def _translate_client_error(exc: ClientError) -> Exception:
+    code = exc.response.get("Error", {}).get("Code", "")
+    if code == "NoSuchUpload":
+        return MultipartUploadNotFound()
+    return StorageError(code or "unknown")
+
+
+def create_multipart_upload(key: str, content_type: str | None = None) -> str:
+    """Start a multipart upload for key, returning the R2 UploadId."""
+    _require_r2("create_multipart_upload")
+    kwargs: dict[str, Any] = {"Bucket": settings.R2_BUCKET, "Key": key}
+    if content_type:
+        kwargs["ContentType"] = content_type
+    try:
+        return _r2().create_multipart_upload(**kwargs)["UploadId"]
+    except ClientError as exc:
+        raise _translate_client_error(exc) from exc
+
+
+def presign_upload_part(key: str, upload_id: str, part_number: int, *, expires_s: int = 900) -> str:
+    """Presigned PUT URL for one part. Signing is local-only (no network call),
+    so this is safe to invoke directly from an async request handler — same
+    property as `presigned_download_url`. No extra headers are signed: the
+    browser sends the raw part body and nothing else.
+    """
+    _require_r2("presign_upload_part")
+    return _r2().generate_presigned_url(
+        "upload_part",
+        Params={
+            "Bucket": settings.R2_BUCKET,
+            "Key": key,
+            "UploadId": upload_id,
+            "PartNumber": part_number,
+        },
+        ExpiresIn=expires_s,
+    )
+
+
+def list_upload_parts(key: str, upload_id: str) -> list[dict[str, Any]]:
+    """All parts uploaded so far — the client's resume primitive. Paginates
+    ListParts (R2 caps a page at 1000 parts; uploads may hold up to 10,000).
+    """
+    _require_r2("list_upload_parts")
+    parts: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {
+        "Bucket": settings.R2_BUCKET,
+        "Key": key,
+        "UploadId": upload_id,
+    }
+    while True:
+        try:
+            resp = _r2().list_parts(**kwargs)
+        except ClientError as exc:
+            raise _translate_client_error(exc) from exc
+        for part in resp.get("Parts", []):
+            parts.append(
+                {"part_number": part["PartNumber"], "size": part["Size"], "etag": part["ETag"]}
+            )
+        if not resp.get("IsTruncated"):
+            return parts
+        kwargs["PartNumberMarker"] = resp["NextPartNumberMarker"]
+
+
+def complete_multipart_upload(key: str, upload_id: str, parts: list[dict[str, Any]]) -> str:
+    """Assemble the parts into the final object; returns the canonical URI.
+
+    Parts are sorted by part_number here — S3 rejects out-of-order manifests and
+    the client's retry order is not guaranteed to be ascending.
+    """
+    _require_r2("complete_multipart_upload")
+    manifest = {
+        "Parts": [
+            {"PartNumber": p["part_number"], "ETag": p["etag"]}
+            for p in sorted(parts, key=lambda p: p["part_number"])
+        ]
+    }
+    try:
+        _r2().complete_multipart_upload(
+            Bucket=settings.R2_BUCKET, Key=key, UploadId=upload_id, MultipartUpload=manifest
+        )
+    except ClientError as exc:
+        raise _translate_client_error(exc) from exc
+    return f"s3://{settings.R2_BUCKET}/{key}"
+
+
+def abort_multipart_upload(key: str, upload_id: str) -> None:
+    _require_r2("abort_multipart_upload")
+    try:
+        _r2().abort_multipart_upload(Bucket=settings.R2_BUCKET, Key=key, UploadId=upload_id)
+    except ClientError as exc:
+        raise _translate_client_error(exc) from exc
+
+
+def head_object(key: str) -> dict[str, Any] | None:
+    """Size + etag of an object, or None when it does not exist."""
+    _require_r2("head_object")
+    try:
+        resp = _r2().head_object(Bucket=settings.R2_BUCKET, Key=key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise _translate_client_error(exc) from exc
+    return {"size": resp["ContentLength"], "etag": resp["ETag"]}
+
+
+async def acreate_multipart_upload(key: str, content_type: str | None = None) -> str:
+    return await asyncio.to_thread(create_multipart_upload, key, content_type)
+
+
+async def alist_upload_parts(key: str, upload_id: str) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(list_upload_parts, key, upload_id)
+
+
+async def acomplete_multipart_upload(key: str, upload_id: str, parts: list[dict[str, Any]]) -> str:
+    return await asyncio.to_thread(complete_multipart_upload, key, upload_id, parts)
+
+
+async def aabort_multipart_upload(key: str, upload_id: str) -> None:
+    await asyncio.to_thread(abort_multipart_upload, key, upload_id)
+
+
+async def ahead_object(key: str) -> dict[str, Any] | None:
+    return await asyncio.to_thread(head_object, key)

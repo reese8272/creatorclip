@@ -124,6 +124,25 @@ def test_render_clip_has_20_per_hour_limit():
     )
 
 
+def test_multipart_upload_endpoints_have_expected_limits():
+    """Issue 395: the presigned-multipart endpoints are not swept by the LLM/render
+    AST invariant (videos router is out of its scope), so pin each limit here."""
+    import routers.videos  # noqa: F401
+
+    expected = [
+        ("routers.videos.get_upload_config", "120", "minute"),
+        ("routers.videos.create_upload", "60", "hour"),
+        ("routers.videos.presign_upload_part_url", "1200", "minute"),
+        ("routers.videos.list_uploaded_parts", "120", "minute"),
+        ("routers.videos.complete_upload", "60", "hour"),
+        ("routers.videos.abort_upload", "120", "minute"),
+    ]
+    for qualname, count, period in expected:
+        assert _has_limit(qualname, count, period), (
+            f"Expected {count}/{period} on {qualname}, got: {_limits_for(qualname)}"
+        )
+
+
 def test_list_videos_has_120_per_minute_limit():
     import routers.videos  # noqa: F401
 

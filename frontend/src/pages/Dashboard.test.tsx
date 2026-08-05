@@ -161,9 +161,9 @@ describe('Dashboard', () => {
     vi.stubGlobal('fetch', mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], { vd: [] }))
     renderDashboard()
     const toggle = await screen.findByRole('button', { name: '+ Upload a video' })
-    expect(screen.queryByLabelText('Video file to upload')).toBeNull()
+    expect(screen.queryByLabelText('Video files to upload')).toBeNull()
     fireEvent.click(toggle)
-    expect(screen.getByLabelText('Video file to upload')).toBeInTheDocument()
+    expect(screen.getByLabelText('Video files to upload')).toBeInTheDocument()
   })
 
   it('sidebar shows the review queue with the rendered-clip count + Open review link (Issue 305)', async () => {

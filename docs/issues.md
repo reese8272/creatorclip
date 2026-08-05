@@ -1100,7 +1100,7 @@ timing-aware caption animation is becoming baseline
 ---
 
 ### Issue 395: Resumable direct-to-R2 multipart upload — retire the 500 MB cap
-- [ ] **Status:** open · **Batch:** C · **Size:** L · **Agent:** `python-senior-engineer` · **BETA BLOCKER**
+- [ ] **Status:** BUILT 2026-08-05 (all code + tests green; DECISIONS 2026-08-05) — remaining: deploy, run `scripts/r2_set_cors.py https://autoclip.studio` on the VM, then the live Phase-4 acceptance drills (>2 GB upload, resume, session-expiry, CORS/ETag check) · **Batch:** C · **Size:** L · **Agent:** `python-senior-engineer` · **BETA BLOCKER**
 
 **What we're doing.** Moving uploads to presigned S3-multipart direct to R2 — browser uploads parts
 in parallel, the app server only signs and completes — with cross-session resume, a drag-and-drop
@@ -1156,15 +1156,16 @@ Reference implementations of the presigned-multipart flow:
 **R2 is S3-compatible**, so `@uppy/aws-s3` applies directly with no protocol work.
 
 **Acceptance**
-- [ ] Presigned multipart direct to R2; app server signs parts and completes the upload only
-- [ ] Resumable across page reload and dropped connection (parts already uploaded are not re-sent)
-- [ ] `UPLOAD_MAX_MB` raised to a real ceiling or replaced by the minutes/quota check
-- [ ] Drag-and-drop zone, multi-file queue, per-file progress reflecting true end-to-end state
-- [ ] Signature issuance authenticated and per-creator isolated; no unsigned write path to the bucket
-- [ ] Abandoned multipart uploads cleaned up (lifecycle rule or sweep task)
-- [ ] Local-disk dev path preserved
-- [ ] `.env.example`, `docs/SOT.md` storage section, and `docs/COMPLIANCE.md` updated
-- [ ] Load-tested with a >2 GB file end to end
+- [x] Presigned multipart direct to R2; app server signs parts and completes the upload only (`/videos/uploads/*` endpoints + `worker/storage.py` multipart helpers)
+- [x] Resumable across page reload and dropped connection (parts already uploaded are not re-sent) — Uppy `@uppy/aws-s3` per-part retry + golden-retriever + `listParts`; **live drill still owed** (see status line)
+- [x] `UPLOAD_MAX_MB` raised to a real ceiling or replaced by the minutes/quota check — quota is the gate + `UPLOAD_MAX_FILE_GB=20` abuse ceiling; `UPLOAD_MAX_MB` re-scoped to proxy paths
+- [x] Drag-and-drop zone, multi-file queue, per-file progress reflecting true end-to-end state (R2-acked bytes)
+- [x] Signature issuance authenticated and per-creator isolated; no unsigned write path to the bucket (`_validate_upload_key` 403s foreign/malformed keys; tested)
+- [x] Abandoned multipart uploads cleaned up — R2's built-in 7-day auto-abort of incomplete multipart uploads (DECISIONS 2026-08-05; no sweeper needed)
+- [x] Local-disk dev path preserved — `GET /videos/uploads/config` → proxy mode → legacy `/videos/upload` via the same Uppy queue UI
+- [x] `.env.example`, `docs/SOT.md` storage section, and `docs/COMPLIANCE.md` updated
+- [ ] Load-tested with a >2 GB file end to end — **deploy-gated**: requires prod deploy + one-time `scripts/r2_set_cors.py` run; drill list in DECISIONS 2026-08-05
+- [x] *(added during build)* Session-expiry mid-upload pauses the queue and resumes after re-login without re-sending parts — driven by the 2026-08-05 prod incident (60-min JWT died inside a 40-min upload)
 
 ---
 

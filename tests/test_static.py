@@ -1691,6 +1691,18 @@ def test_csp_contains_frame_ancestors_none(client):
     )
 
 
+def test_csp_connect_src_allows_r2_origin(client):
+    """Issue 395: the SPA PUTs multipart parts straight to R2 via fetch, which
+    browsers gate on connect-src. Without the R2 origin every part PUT is
+    blocked client-side (DECISIONS 2026-08-05)."""
+    resp = client.get("/health")
+    csp = resp.headers.get("content-security-policy", "")
+    assert "connect-src 'self'" in csp, "CSP must declare connect-src (Issue 395)."
+    assert "connect-src 'self' https://" in csp and ".r2.cloudflarestorage.com" in csp, (
+        "connect-src must allow the account-scoped R2 origin for direct part PUTs (Issue 395)."
+    )
+
+
 # ── Issue 252: Privacy Policy GDPR Art. 13-14 / CCPA rewrite ─────────────────
 
 

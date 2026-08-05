@@ -53,7 +53,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `DEEPGRAM_API_KEY` / `ASSEMBLYAI_API_KEY` | Conditional | Required if hosted transcription backend selected |
 | `WHISPER_MODEL` | No | Default `large-v3` |
 | `STORAGE_BACKEND` | No | `local` (dev) only; **must be `r2` in production** — the config validator fails fast otherwise (app/worker have no shared media volume, so local-disk uploads are unreadable by the worker). See DECISIONS 2026-06-26. |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | Conditional | **Required in production** (and whenever `STORAGE_BACKEND=r2`). Synced from GitHub secrets on deploy. |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | Conditional | **Required in production** (and whenever `STORAGE_BACKEND=r2`). Synced from GitHub secrets on deploy. The bucket needs the browser-upload CORS policy — set once per environment with `scripts/r2_set_cors.py <app-origin>` (Issue 395). |
+| `UPLOAD_MAX_FILE_GB` | No | `20` — per-file abuse ceiling for direct-to-R2 multipart uploads (declared at presign, HEAD-verified at complete); the real gate is the minutes quota. `UPLOAD_MAX_MB` now bounds only the proxy paths (dev fallback + OBS `/clips/ingest`). Issue 395. |
 | `SOURCE_MEDIA_RETENTION_HOURS` | No | Default `72`; source video purge timer |
 | `CLIPS_PER_VIDEO_DEFAULT` | No | Default `8` |
 | `MIN_VIDEOS_FOR_DNA` | No | Default `10` |
@@ -188,7 +189,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── chat.py                 # /api/chat/* — Pro chatbot: gated+quota'd message → SSE stream, list/get/regenerate (Issue 152)
 │   ├── auth.py                 # OAuth login/callback, session
 │   ├── creators.py             # Creator profile, DNA, onboarding state
-│   ├── videos.py               # Link/upload video, ingestion status
+│   ├── videos.py               # Link/upload video, ingestion status; /videos/uploads/* presigned-multipart endpoints (Issue 395)
 │   ├── clips.py                # List candidate clips, get clip, render status; POST /clips/{id}/title-suggestions, /caption-hooks, /explanation (Issues 322/323/325); GET /clips/{id}/crop-track — persisted reframe track, 404 no_crop_track (Issue 421). ClipOut carries origin + suggested_title/description/hook + has_crop_track (L26)
 │   ├── review.py               # Feedback: upvote/downvote/skip/trim/format
 │   ├── upload_intel.py         # GET timing recommendation
@@ -250,7 +251,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │       ├── components/chip/    # poses.ts (CHIP_POSES registry + ChipPose) · ChipStates.tsx (8 loading/thinking animations — Issue 304); sprites in public/chip/
 │       ├── components/ui/      # shadcn-style primitives: button / card / badge / modal · buttonVariants.ts (cva variants in their own module so a router <Link> can wear the button skin without nesting <button> in <a> — Issue 355)
 │       ├── components/profile/ # DnaCard · Brief · IdentitySection · IntakeModeSection · ApiKeysSection
-│       ├── components/dashboard/ # AnalyticsPanel (panel|sidebar variants) · UploadVideoForm (inline file upload, Issue 317; onUploaded callback, Issue 369) · VideoTable (Video·Status·Clips·Actions) · videoStatus.ts (shared STATUS_VARIANT/SOURCE_NEEDED_HELP) · EmptyHero · DashboardBanners · StageStepper (Issue 85c; videos-first reorg + SummaryCards removed, Issue 305)
+│       ├── components/dashboard/ # AnalyticsPanel (panel|sidebar variants) · UploadVideoForm (drag-drop multi-file queue over the app-wide Uppy uploader — lib/uploader.ts singleton + hooks/useUploader.ts + public/uppy-sw.js, Issue 395; onUploaded callback, Issue 369) · VideoTable (Video·Status·Clips·Actions) · videoStatus.ts (shared STATUS_VARIANT/SOURCE_NEEDED_HELP) · EmptyHero · DashboardBanners · StageStepper (Issue 85c; videos-first reorg + SummaryCards removed, Issue 305)
 │       ├── components/landing/  # Standalone /review + /editor landings (Issue 369): VideoPickerLanding (+test — picker + explicit generate CTA) · InlineUploadFlow (+test — upload→SSE progress→generate in place)
 │       ├── components/onboarding/ # StepCard · StreamConsole · OnboardingIdentity (Issue 85d)
 │       ├── components/insights/ # InsightsPanel (optional `id` → hash anchor + scroll-mt, Issue 355) · ChannelSnapshot/DnaSnapshot · PerformerPanel · UploadWindows · ImprovementBrief · SavedInsights (Issue 85e) · ProofOfLift (Issue 374) · OriginalityGuard (375) · ChannelFingerprint (379) — the last three are anchored panels (#proof-of-lift / #originality-guard / #channel-fingerprint), deliberately NOT routes
@@ -593,6 +594,9 @@ clip_publications                     -- YouTube publish attempts + scheduled pu
 
 ```
 creator links/uploads a video
+  (upload = browser → R2 direct: presigned multipart via /videos/uploads/*
+   endpoints — the API only signs parts and registers completion; Issue 395.
+   Local-disk dev + OBS /clips/ingest keep the legacy streamed proxy POST.)
              │
              ▼
       ┌─────────────┐

@@ -101,6 +101,12 @@ services:
     image: cloudflare/cloudflared:latest  # beta: pin to a dated release for production
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      # HTTP/2 outperforms the QUIC default for tunnel throughput (Cloudflare-
+      # confirmed, cloudflared#895). Upload bytes bypass the tunnel entirely
+      # since Issue 395 (browser→R2 presigned multipart); this carries the API,
+      # SSE, and the legacy proxy paths.
+      TUNNEL_TRANSPORT_PROTOCOL: http2
     depends_on:
       - app
 

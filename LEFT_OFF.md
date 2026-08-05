@@ -1,8 +1,8 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-05 · **Branch:** `main` @ `6c3cf4f` · working tree clean · in sync with `origin/main`; `staging` synced
-**Prod:** `https://autoclip.studio` — **L26 IS LIVE**: deploy run 30971145148 green, `/health` 200, **prod DB at head `0055`** (verified on the VM), LLM E2E Nightly green post-deploy (run 30979325939).
-**Local branches:** only `main` — all `lane/l26-*` branches and agent worktrees removed after merge.
+**Last updated:** 2026-08-05 · **Branch:** `main` @ `403b2bd` + **UNCOMMITTED Issue-395 build** (deliberate — push to main auto-deploys prod; owner decides when)
+**Prod:** `https://autoclip.studio` — L26 live (DB `0055`); still running the OLD proxy upload until this ships.
+**Git note:** `stash@{0}` = the owner's own "wip LEFT_OFF before research-branch checkout" — popping it onto this rewritten file WILL conflict; resolve by hand or drop if obsolete.
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -10,133 +10,97 @@
 
 ## CURRENT FOCUS
 
-**Lane L26 — A→B Auto-Clipping MVP (Issues 414–426) — SHIPPED TO PROD 2026-08-05** (merge `9eb5217`
-+ deploy-unblock fix `6c3cf4f`). What's live: whole-video LLM context pass feeding hybrid
-LLM ∪ signal clip candidates; every clip auto-packaged with suggested title/description/hook;
-diarized transcripts; the short-first unified ShortStage UI (Review media 1.89×); crop-track
-API + overlay. What's built but NOT live: the dynamic speaker-following crop —
-`ACTIVE_SPEAKER_REFRAME_ENABLED=false` until the staging checklist closes.
+**Issue 395 — presigned direct-to-R2 multipart upload (BETA BLOCKER) — BUILT 2026-08-05, all local
+gates green, NOT yet committed/deployed.** Trigger: the owner's live stress test hit every predicted
+proxy-upload failure (40-min tunnel crawl, Cloudflare-edge 403 the app never logged, mid-upload
+session expiry). Full architecture: `docs/DECISIONS.md` 2026-08-05 (10 numbered rulings).
+What's new: 6 `/videos/uploads/*` endpoints (stateless sessions, key-shape isolation,
+quota-before-complete), `worker/storage.py` multipart helpers, CSP `connect-src` + R2 origin,
+headless Uppy 5 frontend (drag-drop queue, honest progress, session-expiry pause→resume,
+`public/uppy-sw.js`), `scripts/r2_set_cors.py`, cloudflared → HTTP/2, `UPLOAD_MAX_FILE_GB=20`
+(minutes quota is the real gate; `UPLOAD_MAX_MB` now proxy-paths-only).
 
 ## → NEXT ACTIONS (in order)
 
-1. **User stress-test of the live A→B flow** (user said they'd do this before more feedback):
-   upload a real long-form video → SSE stages `video_context` → clips → `metadata_ready` → every
-   clip should arrive titled/described/hooked, Review short front-and-center. Eyeball: `origin: llm`
-   clips on story-heavy flat-energy videos; titles grounded in the right window. Feedback → issues
-   in the L26 lane.
-2. **Dynamic crop staging verification (Issue 422)** — `docs/DEPLOYMENT.md` § "Speaker-Aware
-   Reframe — Staging Rollout Checklist". **Step 0 BLOCKS everything**: `mediapipe==0.10.21` pins
-   `numpy<2` vs the app's `numpy==2.1.3` → the image only installs it via
-   `docker build --build-arg INSTALL_REFRAME=true` (default false; this failed the first
-   docker-publish and was hotfixed in `6c3cf4f`). Evaluate in order: newest mediapipe (≥0.10.31 —
-   check numpy pin lifted AND Tasks `FaceDetector` still ships), patched wheel
-   (cansik/mediapipe-numpy2 style), dedicated numpy<2 worker image (last resort). Then the four
-   Issue-189 unlock criteria with evidence → flag flip staging→prod → DECISIONS reversal entry.
-3. **Optional cosmetic**: refresh non-asserted Review/Editor smoke screenshots —
-   `gh workflow run ci.yml -f update_snapshots=true --ref main` → download `visual-baselines-<sha>`
-   → commit. The 6 asserted baselines were untouched by L26 and pass.
-4. **Cost watch:** +≈$0.11–0.16 LLM/video; Deepgram now $0.0097/min (diarization add-on,
-   `PRICE_BOOK_VERSION` 2026-08-04). Kill-switches (each restores prior behavior, test-pinned):
-   `VIDEO_CONTEXT_ENABLED=false` · `AUTO_CLIP_METADATA=false` · `TRANSCRIPTION_DIARIZE_ENABLED=false`.
-5. **Then resume L25 Batch C** (393 next; 394/396 re-scoped to the ShortStage seams per DECISIONS) ·
-   operator punch-list unchanged (`docs/GO_LIVE.md`): #29 OAuth verification · #26/#28 friend beta ·
-   #282 uptime monitor · #255 key escrow.
+1. **Commit + push the Issue-395 build** (owner's call — push deploys prod via docker-publish→deploy).
+   Everything modified/untracked in the tree belongs to it EXCEPT `stash@{0}` (see git note).
+2. **Deploy-day sequence:** deploy green → `ssh creatorclip-vm`, from `/opt/autoclip` run the app
+   container's copy or locally `python3.12 scripts/r2_set_cors.py https://autoclip.studio` (needs
+   R2_* env; echoes the policy back; ~30 s propagation) → verify cloudflared logs report http2.
+3. **Live Phase-4 acceptance drills** (checklist in `docs/issues.md` § 395 + DECISIONS entry):
+   >2 GB upload end-to-end → pipeline done; mid-upload network kill (only failed parts retry);
+   reload-resume (part count only grows); browser-restart ghost re-select; >60-min upload crossing
+   session expiry → pause → re-login (new tab) → Retry resumes; declared-25 GB → 413; abort leaves
+   no lingering incomplete uploads (R2 dashboard); browser console: part PUT preflight OK and ETag
+   readable (CORS ExposeHeaders proof — the classic failure of this pattern).
+4. **Owner lookups still open from the incident:** Cloudflare dashboard → Security → Events,
+   ~13:15–13:30 UTC 2026-08-05, method POST — names the rule behind the 403 (zone is Pro; the 100 MB
+   proxy body cap is unchanged by Pro and moot for the new path).
+5. **Then resume the prior tail:** Issue 422 staging checklist (mediapipe×numpy step 0) · L25
+   Batch C (393 next) · operator punch-list (`docs/GO_LIVE.md`): #29 OAuth verification ·
+   #26/#28 friend beta · #282 uptime monitor · #255 key escrow.
 
 ### Local gate incantations
 
 ```bash
-export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH && hash -r   # `nvm use 22` LIES in this shell — node 26 breaks jsdom (35 phantom vitest failures)
+export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH && hash -r   # node 26 breaks jsdom (35 phantom vitest failures) — bit AGAIN this session; .nvmrc fix suggested in OFF_COURSE_BUGS
 redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
 # backend:  .venv/bin/python -m pytest -m "not integration" -p no:langsmith -q
 # frontend: run from frontend/ (root npx = cached-Playwright ERR_INTERNAL_ASSERTION)
+# Layer 0:  .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py
 ```
 
 ---
 
-## WHAT WORKS NOW (verified on the shipped state — do not re-investigate)
+## WHAT WORKS NOW (verified on this tree — do not re-investigate)
 
 | Gate | Value |
 |---|---|
-| Backend unit lane | **2766 passed / 71 skipped / 0 failed** (merged tree) |
-| Eval harness | **22/22**, `SCENARIO_FLOOR=18`, `extract_candidates` byte-untouched (tripwire test) |
-| Alembic | single head **0055** (0053 video_context · 0054 suggested metadata · 0055 crop track); **prod DB migrated + verified** |
-| Frontend vitest (node 22) | **624 passed / 86 files** (six structural gates included) |
-| `tsc -b` · lint · build | clean · 0 errors (1 pre-existing warning `useStageStream.ts`) · clean |
-| Playwright e2e (local) | **83 / 0 / 11** incl. editor-persistence CAS, a11y, geometry, new ≥1.8× media-box assertion |
-| Deploy chain | docker-publish ✅ (post-fix) → deploy ✅ → `/health` 200 → LLM E2E Nightly ✅ |
-| ruff | `check` clean; `format` clean (13-file format pass `3b0ee57` — CI gates on `--check`) |
+| Backend unit lane | **2795 passed / 71 skipped / 0 failed** (incl. new 27-test `tests/test_videos_multipart_upload.py`) |
+| Frontend vitest (node 22) | **637 passed / 88 files** (624 → 637; structural gates included) |
+| `tsc -b` · eslint | clean · 0 errors (1 pre-existing warning `useStageStream.ts:100`) |
+| Layer 0 | ALL GREEN — ruff 0 · mypy 0 · coverage **84.03** · module floors pass · bandit 0/0 · pip-audit 0 |
+| Alembic | unchanged — single head `0055` (Issue 395 is migration-free by design) |
+| Playwright e2e | NOT run locally this session — mock-api serves `/videos/uploads/config` → proxy mode so e2e never hits R2; CI covers it |
 
-Known pre-existing failure that is NOT ours: `tests/test_response_models.py::test_every_documented_json_route_declares_response_model`
-under an alternate pytest invocation — fails on pristine pre-L26 base too; off-course-logged.
-
----
-
-## THE ARC THAT LED HERE
-
-1. User declared the MVP bar: "best auto-clipping short creation on the planet" — three verified
-   gaps: LLM never read the video, crop was one frozen midpoint face, short was ~9% of Review.
-2. Plan session (2026-08-04): 3 explore + 3 design agents → approved 3-track plan; user chose
-   speaker-aware pan+cuts, auto-metadata for ALL clips, unified Review+Editor stage.
-3. Lane L26 filed (issues 414–426, 10 DECISIONS), built as three parallel worktree agents on lane
-   branches, merged serially (intel → crop w/ 0055 re-parent → stage), all local gates green.
-4. Merge to main: first docker-publish failed on the mediapipe×numpy conflict → gated behind
-   `INSTALL_REFRAME` build arg (`6c3cf4f`) → deploy green, prod DB 0055, L26 live.
+Key test-fallout notes: `InlineUploadFlow.test.tsx` FakeXHR harness replaced with a `useUploader`
+mock; `Dashboard.test.tsx` label updated ("Video files to upload"); legacy
+`test_videos_upload_streaming.py` untouched and green (proxy endpoint lives on for dev + OBS).
 
 ---
 
-## KEY COORDINATES & FACTS
+## KEY COORDINATES & FACTS (Issue-395 additions; prior table still true)
 
 | Thing | Value |
 |---|---|
-| Repo | `github.com/reese8272/creatorclip` |
-| Production | `https://autoclip.studio` — VM (`ssh creatorclip-vm`, standing permission) + docker-compose (`autoclip-*` containers) + Cloudflare tunnel |
-| Deploy chain | push to `main` → `docker-publish.yml` → `deploy.yml` (staging gate → prod). **A failed image build silently SKIPS deploy** — prod stays on the old image; check `gh run list` after every push |
-| Staging sync | after any merge to `main`: `git push origin main:staging` (`docs/BRANCHING.md`) |
-| Reframe image | `docker build --build-arg INSTALL_REFRAME=true` (default false); model asset baked at `MEDIAPIPE_FACE_MODEL_PATH=/usr/share/mediapipe-models/blaze_face_short_range.tflite` |
-| Alembic head | **`0055_clip_reframe_track`** — local AND prod |
-| Crop-track API | `GET /clips/{id}/crop-track` (404 `no_crop_track`); `x` = clamped LEFT edge in source px = exact sendcmd values; cuts are value jumps; computed track on `clips.reframe_track_jsonb`, NEVER the EditDocument (CAS conflict — #396 layers there later) |
-| Metadata semantics | pipeline writes `suggested_*` only; `applied_*` creator-typed; publish falls back `applied → suggested → (video.title \| "#Shorts")` |
-| New config keys | all in `.env.example` with working defaults — no VM `.env` edit was needed |
-| Node for local gates | `/home/reese/.nvm/versions/node/v22.17.1/bin` on PATH + `hash -r` (`nvm use` alone does not stick) |
-| Python | `.venv/bin/python` (system `python3` lacks pydantic; user-site has stale FastAPI) |
-| Layer 0 | `.venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py` — repo root |
-| Secrets | `.env` on the VM; rotation runbook `docs/RUNBOOKS.md`. **Names only — never values.** |
+| Upload transport pick | `GET /videos/uploads/config` → `multipart` (STORAGE_BACKEND=r2) / `proxy` (local dev) — ONE Uppy queue UI either way |
+| Isolation boundary | `_validate_upload_key` (routers/videos.py): key must be `source/{creator.id}/{yt-id\|uuid4hex}{.mp4\|.mov\|.mkv\|.webm\|.m4v}` else 403; R2 binds uploadId→key; no Video row until /complete |
+| Complete ordering | dedupe(409) + balance(402) BEFORE CompleteMultipartUpload (top-up never re-uploads); NoSuchUpload+existing row → idempotent re-return; IntegrityError → 409 WITHOUT object delete (deterministic keys — winner may own the object) |
+| Part size | fixed 25 MiB (`_UPLOAD_PART_SIZE_BYTES`) — satisfies R2's equal-parts rule; presign expiry 900 s; sign endpoint 1200/min |
+| Session expiry mid-upload | upload endpoints use `api(..., redirectOn401:false)` → pause + banner; part PUTs are presigned (no session needed); parts kept 7 days (R2 auto-abort) |
+| uppy-sw.js | classic-script copy of @uppy/golden-retriever's SW (shipped file has ESM marker) — keep in sync on Uppy upgrades |
+| Prod runtime numbers | JWT_EXPIRY_MINUTES=60 (unchanged — refresh endpoint deliberately out of scope); Cloudflare zone now **Pro** (upgraded 2026-08-05; 100 MB proxy cap unchanged) |
 
 ---
 
 ## CONSTRAINTS & GOTCHAS (carried forward — all still true)
 
-- **`analyze_video_context` can never raise** — LLM failure → `context_skipped` SSE step → clips
-  generate signal-only. If clips look signal-only, check for that event before suspecting the merge.
-- **`extract_candidates` must stay byte-identical** — the eval harness's green-by-construction
-  argument rests on it; the hybrid merge is a separate pure layer (`clip_engine/merge.py`).
-- **Speaker→track mapping is per-shot** (`(shot_idx, speaker)`) — tracks can't span camera cuts.
-- **Track C's sizing excludes the trim filmstrip on purpose** (below the fold in the scrollable
-  stage cell at 1440×900) — "fixing" it caps media at ~1.45× and fails the 1.8× gate.
-- Run frontend commands from `frontend/`; chain gates with `&&` never `;`; piped `| tail` eats
-  non-zero exits; `ruff format` reflows between Edits; backticks in `git commit -m` = command
-  substitution (heredoc); CI runs `ruff format --check`; visual baselines are ubuntu-CI-only;
-  Playwright `--workers=1` on this box after heavy runs; the harness shell CWD can drift (a `cd
-  frontend` sticks — `cd` back to repo root before git ops; bit this session).
-- Six structural gates in `frontend/src/test/` fail `npm test`; honesty copy pinned — don't "tidy".
-- Postgres GUC: always `NULLIF(current_setting('app.creator_id', true), '')::uuid`.
-- Integration/RLS tests need Docker (absent locally) — CI-verified only; say so plainly.
+- All prior L26 gotchas in the 2026-08-05-morning LEFT_OFF revision remain true (analyze_video_context
+  never raises; extract_candidates byte-identical; per-shot speaker tracks; trim-filmstrip sizing;
+  frontend cmds from `frontend/`; `&&` not `;`; ruff format reflows; GUC NULLIF; integration tests
+  need Docker/CI).
+- **Node 22 for ALL frontend gates** — now bitten twice; consider the .nvmrc/engines fix
+  (OFF_COURSE_BUGS 2026-08-05) before it bites a third time.
+- The e2e mock deliberately keeps uploads in proxy mode — if a spec ever needs multipart, it must
+  stub the R2 origin route itself.
 
 ---
 
 ## OPEN, LOGGED, NOT FIXED
 
-Canonical list is `docs/OFF_COURSE_BUGS.md`. Most likely to matter first:
-
-1. **Prod migrations run with NO pre-migration safety dump** (`BACKUP_R2_BUCKET` unset, Issue 256).
-   L26's 0053–0055 were expand-only and cleared the bar — set the bucket before the first
-   destructive migration.
-2. **`clips/` storage is not creator-scoped** → `DELETE /auth/me` purge matches nothing
-   (right-to-erasure gap).
-3. Roving tabindex on the timeline · Review-queue badge counts rendered clips · `App.tsx` `*`
-   route silently redirects typos · `ORIGINALITY_SIMILARITY_THRESHOLD=0.92` unvalidated · export
-   collector omits ~10 tables · e2e mock's known unmodeled GETs (`/api/notifications`,
-   `/clips/c1/download`) · `tests/test_response_models.py` peaks/stream route-model gap (pre-existing).
+Canonical list `docs/OFF_COURSE_BUGS.md` — unchanged from the morning revision, plus the re-logged
+node-26 gotcha. Top of mind: pre-migration safety dump unset (Issue 256) · `clips/` storage not
+creator-scoped (erasure gap) · `test_response_models` peaks/stream gap (pre-existing).
 
 ---
 
@@ -144,12 +108,8 @@ Canonical list is `docs/OFF_COURSE_BUGS.md`. Most likely to matter first:
 
 | Doc | Purpose |
 |---|---|
-| `docs/issues.md` | Work queue — **§ Lane L26: all closed except 422's staging boxes → then L25 Batch C (393)** |
-| `docs/PROJECT_STATE.md` | Progress log — top entries: L26 declaration + build close-outs |
-| `docs/DECISIONS.md` | 2026-08-04 entries: L26 10-decision block · Track A deviations · Deepgram surcharge · Track C deviations + merge notes |
-| `docs/DEPLOYMENT.md` | § Speaker-Aware Reframe — Staging Rollout Checklist (**NEXT ACTION 2**, step 0 = numpy conflict) |
-| `docs/SOT.md` | Stack, schema, structure — updated for VideoContext / crop track / stage components |
-| `docs/OFF_COURSE_BUGS.md` · `docs/GO_LIVE.md` | Logged defects · operator launch scorecard |
-| `docs/BRANCHING.md` · `docs/MIGRATIONS.md` · `docs/CLIPPING_PRINCIPLES.md` | Promotion model · migration templates · principles registry |
+| `docs/issues.md` § 395 | The issue + acceptance state (all boxes checked except the deploy-gated >2 GB drill) |
+| `docs/DECISIONS.md` 2026-08-05 | The 10 rulings + verification numbers + drill list |
+| `docs/PROJECT_STATE.md` top entry | This build's close-out summary |
+| `docs/SOT.md` / `docs/COMPLIANCE.md` / `.env.example` | Updated for the new write path + config |
 | `~/.claude/ISSUES_LOG.md` | Cross-project incident log |
-| Memory dir | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` (`project_l26_autoclip_mvp.md` is the lane memory) |
