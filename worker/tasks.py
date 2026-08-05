@@ -3294,6 +3294,13 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                 transcript.segments_jsonb.get("segments", []) if transcript else []
             )
 
+            # Issue 416 — whole-video context (Issue 415's chain member wrote it,
+            # or None when skipped/disabled → signal-only, today's behavior).
+            from models import VideoContext as _VideoContext
+
+            vc_row = await session.get(_VideoContext, video_uuid)
+            video_context = vc_row.context_jsonb if vc_row else None
+
             dna_profile = await get_active(session, video.creator_id)
             dna_brief = dna_profile.brief_text if dna_profile else None
 
@@ -3326,6 +3333,7 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                 max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
                 ledger_session_factory=partial(db.tenant_session, creator_id),
                 style_notes=style_notes,
+                video_context=video_context,
             )
 
         async with db.tenant_session(creator_id) as session:

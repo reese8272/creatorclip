@@ -344,6 +344,13 @@ async def generate_clips(
 
     timeline = signals.timeline_jsonb
 
+    # Issue 416 — whole-video context row (written by the Issue 415 chain
+    # member; None when skipped/disabled → signal-only, today's behavior).
+    from models import VideoContext
+
+    vc_row = await session.get(VideoContext, video_id)
+    video_context = vc_row.context_jsonb if vc_row else None
+
     # Issue 82b (pool starvation): release the request-scoped DB connection
     # BEFORE the per-candidate LLM scoring round-trip (30–120 s). The session
     # is closed here — get_session's context manager makes the later double
@@ -359,6 +366,7 @@ async def generate_clips(
         max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
         ledger_session_factory=db.AsyncSessionLocal,
         style_notes=style_notes,
+        video_context=video_context,
     )
     if not ranked:
         return {"clips": []}

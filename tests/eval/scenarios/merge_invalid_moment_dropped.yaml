@@ -1,0 +1,42 @@
+scenario: merge_invalid_moment_dropped
+kind: merge
+description: >
+  Validation gate: LLM moments flow through validate_context before the merge.
+  A moment citing a principle outside the 12-name registry is dropped (no
+  invented principles reach the engine), and a moment whose window clamps to a
+  sub-MIN_CLIP_S span at the video boundary is dropped (geometry invariant).
+  Only the one valid moment survives into the merged pool.
+
+input:
+  timeline:
+    version: 1
+    duration_s: 600.0
+    events: []
+  moments:
+    # Unknown principle — dropped by the registry check.
+    - start_s: 40.0
+      end_s: 100.0
+      reason: "Great moment."
+      principle: "Definitely Going Viral"
+      confidence: 0.99
+    # Clamps to [580, 600] = 20s < MIN_CLIP_S — dropped by geometry.
+    - start_s: 580.0
+      end_s: 640.0
+      reason: "Runs off the end of the video."
+      principle: "One idea per Short"
+      confidence: 0.9
+    # Valid — admitted.
+    - start_s: 200.0
+      end_s: 260.0
+      reason: "A self-contained explanation delivered flat."
+      principle: "Tension and release"
+      confidence: 0.6
+
+expected:
+  min_total: 1
+  max_total: 1
+  llm_candidates: 1
+  candidates:
+    - origin: llm
+      setup_start_s_min: 195.0
+      setup_start_s_max: 205.0
