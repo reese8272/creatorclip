@@ -24,7 +24,9 @@ import {
   withIndices,
 } from '@/lib/editorCuts'
 import { SaveStatus } from '@/components/editor/SaveStatus'
+import { StagePlaceholder } from '@/components/stage/StagePlaceholder'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
+import { useClipRender } from '@/hooks/useClipRender'
 import { useEditDocument } from '@/hooks/useEditDocument'
 import { useEditorShortcuts } from '@/hooks/useEditorShortcuts'
 import { useVideoPeaks } from '@/hooks/useVideoPeaks'
@@ -355,6 +357,7 @@ export function ShortFormEditor({
   const removedS = cuts.reduce((acc, c) => acc + (c.end_s - c.start_s), 0)
   const pct = clipDuration > 0 ? (100 * removedS) / clipDuration : 0
   const activeIdx = activeWordIndex(words, currentTime)
+  const renderState = useClipRender(clip)
 
   const mediaSrc = `/clips/${clip.id}/download?disposition=inline`
 
@@ -457,14 +460,10 @@ export function ShortFormEditor({
                 className={cn(EDITOR_PLAYER_W, 'shadow-accent-glow')}
               />
             ) : (
-              <div
-                className={cn(
-                  EDITOR_PLAYER_W,
-                  'flex aspect-[9/16] items-center justify-center rounded-xl border border-default bg-black text-xs text-subtle',
-                )}
-              >
-                Not yet rendered
-              </div>
+              // Unified render states (Issue 423): the Editor's stage exposes
+              // the same render/retry/expired ladder Review has, instead of a
+              // dead "Not yet rendered" label.
+              <StagePlaceholder clip={clip} render={renderState} widthClass={EDITOR_PLAYER_W} />
             )}
 
             {/* One compact row, not a stack: a ~110px meta column under the

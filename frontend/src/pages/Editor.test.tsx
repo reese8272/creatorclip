@@ -191,6 +191,47 @@ describe('Editor', () => {
     expect(screen.getByText('Clean filler + silence')).toBeInTheDocument()
   })
 
+  // ── Issue 423: unified stage render states ──
+  it('an unrendered clip shows the shared render trigger, not a dead label (Issue 423)', async () => {
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/videos/v1/clips'))
+        return {
+          status: 200, ok: true,
+          json: async () => ({
+            clips: [{ ...BASE_CLIP, render_uri: null, render_status: 'pending' }],
+            personalization: null,
+          }),
+        }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderEditor('/app/editor?video_id=v1&clip_id=c1')
+    // The full ladder is reachable from the Editor now — same accessible names
+    // as Review (StagePlaceholder + useClipRender are shared).
+    expect(await screen.findByText('Not rendered yet')).toBeInTheDocument()
+    expect(screen.getByText(/Render this clip/)).toBeInTheDocument()
+  })
+
+  it('a failed render offers the shared retry affordance (Issue 423)', async () => {
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/videos/v1/clips'))
+        return {
+          status: 200, ok: true,
+          json: async () => ({
+            clips: [{ ...BASE_CLIP, render_uri: null, render_status: 'failed' }],
+            personalization: null,
+          }),
+        }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderEditor('/app/editor?video_id=v1&clip_id=c1')
+    expect(await screen.findByText('Render failed')).toBeInTheDocument()
+    expect(screen.getByText(/Retry render/)).toBeInTheDocument()
+  })
+
   // ── Issue 307: mode toggle + long-form source mode ──
   it('shows the short|long mode toggle (Issue 307)', async () => {
     vi.stubGlobal('fetch', mockFetch())
