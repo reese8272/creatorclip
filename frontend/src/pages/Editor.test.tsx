@@ -191,6 +191,14 @@ describe('Editor', () => {
     expect(screen.getByText('Clean filler + silence')).toBeInTheDocument()
   })
 
+  // ── L26 Issue 424: one primary panel per page (docs/UI.md hierarchy rule) ──
+  it('renders exactly ONE primary panel — the viewer card', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const { container } = renderEditor('/app/editor?video_id=v1&clip_id=c1')
+    await screen.findByText(/Clip #1/i)
+    expect(container.querySelectorAll('[data-elevation="primary"]')).toHaveLength(1)
+  })
+
   // ── Issue 423: unified stage render states ──
   it('an unrendered clip shows the shared render trigger, not a dead label (Issue 423)', async () => {
     const base = mockFetch()
