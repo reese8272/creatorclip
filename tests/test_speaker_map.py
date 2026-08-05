@@ -361,6 +361,14 @@ class TestChooseReframeMode:
     def test_low_confidence_falls_to_face_pan(self) -> None:
         assert choose_reframe_mode(**{**self._RUNG_A, "mapping_confidence": 0.29}) == "face_pan"
 
+    def test_confidence_floor_is_tunable(self) -> None:
+        """Issue 422 drill: the floor is env-tunable — a 0.248 mapping on a
+        side-by-side layout (honest but co-occurrence-blind) earns cuts when
+        the operator lowers the floor; the default still degrades it."""
+        args = {**self._RUNG_A, "mapping_confidence": 0.248}
+        assert choose_reframe_mode(**args) == "face_pan"  # default floor 0.3
+        assert choose_reframe_mode(**args, min_mapping_confidence=0.2) == "speaker_cut"
+
     def test_no_tracks_falls_to_static(self) -> None:
         assert choose_reframe_mode(**{**self._RUNG_A, "n_tracks": 0, "n_speakers": 0}) == "static"
 

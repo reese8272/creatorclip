@@ -482,12 +482,20 @@ def choose_reframe_mode(
     cuts_enabled: bool,
     frame_w: int,
     crop_w: int,
+    min_mapping_confidence: float = MIN_MAPPING_CONFIDENCE,
 ) -> str:
     """The fallback ladder — the single source of truth for reframe depth.
 
     Rung A ``speaker_cut``: cuts enabled AND ≥2 tracks AND ≥2 speakers AND
         diarization coverage ≥ MIN_DIARIZATION_COVERAGE AND mapping
-        confidence ≥ MIN_MAPPING_CONFIDENCE.
+        confidence ≥ ``min_mapping_confidence`` (default the module floor;
+        the render pipeline passes ``settings.REFRAME_MIN_MAPPING_CONFIDENCE``
+        — the 2026-08-05 staging drill measured 0.248 on a real side-by-side
+        two-camera podcast where the mapping was visibly CORRECT: co-occurrence
+        and size votes carry no signal when both faces are always on screen,
+        so honest confidences run lower on exactly the layouts that most need
+        cuts. The floor is env-tunable so staging evidence can calibrate it
+        without a code change.)
     Rung B ``face_pan``: at least one face track (largest-face EMA pan —
         today's designed behavior, improved by per-shot smoothing resets).
     Rung C ``static``: no faces, or nothing to pan (crop as wide as the
@@ -503,7 +511,7 @@ def choose_reframe_mode(
         and n_tracks >= 2
         and n_speakers >= 2
         and coverage >= MIN_DIARIZATION_COVERAGE
-        and mapping_confidence >= MIN_MAPPING_CONFIDENCE
+        and mapping_confidence >= min_mapping_confidence
     ):
         return "speaker_cut"
     if n_tracks >= 1:

@@ -401,6 +401,14 @@ class Settings(BaseSettings):
     # Minimum framing move for a cut, as a fraction of source frame width —
     # below this a cut reads as a stutter (the EMA pan covers small moves).
     REFRAME_CUT_MIN_DISTANCE_FRAC: float = 0.25
+    # Speaker→face mapping confidence floor for the speaker_cut rung (Issue 422
+    # staging drill 2026-08-05): a real side-by-side two-camera podcast scored
+    # 0.248 with a visibly CORRECT mapping — co-occurrence and size votes carry
+    # no signal when both faces are always on screen, so honest confidences run
+    # lower on exactly the layouts that most need cuts (a mid-panel PAN sweeps
+    # across the seam and looks broken). Tunable so staging evidence calibrates
+    # the floor per fixture; below it the ladder degrades to face_pan as before.
+    REFRAME_MIN_MAPPING_CONFIDENCE: float = 0.3
 
     # ── Caption placement (Issue 427) ───────────────────────────────────────────
     # Karaoke captions were burned dead-center — on the speaker's face. The new

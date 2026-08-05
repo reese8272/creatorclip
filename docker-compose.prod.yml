@@ -65,7 +65,11 @@ services:
     # concurrency=1: one ffmpeg encode at a time — parallel renders starve each
     # other into the render timeout on a small box (Issue 432). Clicked renders
     # queue behind the auto-render batch instead of colliding with it.
-    command: celery -A worker.celery_app worker --loglevel=info --concurrency=1 -Q render -n render@%%h
+    # -n render@%h: compose does not treat % specially, so celery receives %h
+    # and expands it to the container hostname — matching the healthcheck ping
+    # target render@$HOSTNAME. (%%h would produce a literal-% node name and an
+    # unhealthy→autoheal restart loop.)
+    command: celery -A worker.celery_app worker --loglevel=info --concurrency=1 -Q render -n render@%h
     labels:
       - autoheal=true
     healthcheck:

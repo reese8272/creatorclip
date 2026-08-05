@@ -1061,6 +1061,7 @@ def compute_dynamic_crop(
             cuts_enabled=settings.REFRAME_CUT_ENABLED,
             frame_w=frame_width,
             crop_w=crop_w,
+            min_mapping_confidence=settings.REFRAME_MIN_MAPPING_CONFIDENCE,
         )
 
         # ── Plan + smooth per mode ────────────────────────────────────────
