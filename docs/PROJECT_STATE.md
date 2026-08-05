@@ -53,6 +53,17 @@ rollout closing Issue 189's four unlock criteria (418–422); **C** — short-fi
 ShortStage, Review+Editor flips (~2.0× media area on Review), compact metadata rows, crop-track
 overlay (423–426). L25 Batch C paused (#394/#396 re-scoped, #399 unaffected). Merge order A → B → C.
 
+**Track B status (2026-08-04, branch `lane/l26-crop`): 418–421 BUILT, 422 code-side prepared.**
+418 diarization (additive speaker fields, real-SDK diarize kwarg pin, consumers-ignore regressions,
+Deepgram +$0.0020/min diarize surcharge verified → `COST_PER_MIN_DEEPGRAM=0.0097`); 419 shots.py
+(scdet + captured-stderr fixture + histogram fallback); 420 speaker_map.py + planner + segmented
+smoothing + `compute_dynamic_crop` (all synthetic tests, no mediapipe locally; single-VideoCapture
+refactor landed); 421 migration 0055 (down_revision temporarily `0052` — re-parent onto 0054 at the
+L26 merge), track persisted in the done-marking transaction, `GET /clips/{id}/crop-track` +
+`has_crop_track`. 422: `requirements-image.txt` + Dockerfile + `reframe_stages` vlog timings +
+staging checklist in `docs/DEPLOYMENT.md` — **the four Issue-189 unlock criteria remain OPEN**
+(staging evidence required; flags stay off in prod). Unit lane on the branch: 2689 passed.
+
 ---
 
 ## 2026-08-04 — Issue 413: app typeface swapped to Lexend (user-driven)

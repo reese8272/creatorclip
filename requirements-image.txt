@@ -1,0 +1,13 @@
+# Container-image-only dependencies (Issue 422).
+#
+# mediapipe is a ~200 MB native package needed ONLY by the render worker's
+# speaker-aware reframe path (clip_engine/reframe.py — lazy import, gated by
+# ACTIVE_SPEAKER_REFRAME_ENABLED). It is deliberately NOT in requirements.txt:
+# local dev boxes and CI run the full unit suite without it (every reframe
+# test is synthetic), and installing it there would slow every venv build for
+# a package the code never imports outside the worker image.
+#
+# The Dockerfile installs THIS file, which chains the base requirements, so
+# the image = base deps + image-only deps with one pip invocation.
+-r requirements.txt
+mediapipe==0.10.21

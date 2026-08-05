@@ -63,6 +63,12 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `LLM_TIMEOUT_SECONDS` | No | Default `120` |
 | `ACTIVE_SPEAKER_REFRAME_ENABLED` | No | Default `False`. Gates the per-frame MediaPipe reframe path in render.py (Issue 189). Keep False until render-env smoke test passes. |
 | `REFRAME_SAMPLE_FPS` | No | Default `5.0`. Frames/second to sample for face detection in the per-frame reframe path. Ignored when `ACTIVE_SPEAKER_REFRAME_ENABLED=false`. |
+| `TRANSCRIPTION_DIARIZE_ENABLED` | No | Default `True`. Requests per-word speaker labels (Deepgram `diarize` / AssemblyAI `speaker_labels`); additive `speaker` fields feed the reframe ladder (Issue 418). Deepgram bills +$0.0020/min for it. |
+| `SHOT_DETECT_SCDET_THRESHOLD` | No | Default `10.0`. ffmpeg scdet scene-change threshold for shot detection (Issue 419). |
+| `REFRAME_CUT_ENABLED` | No | Default `True`. Speaker_cut ladder rung sub-flag; `false` caps the ladder at face_pan (staging pan-rung verification — Issue 422). Master gate is `ACTIVE_SPEAKER_REFRAME_ENABLED`. |
+| `REFRAME_MIN_SHOT_S` | No | Default `1.2`. Minimum seconds between consecutive crop cuts (Issue 420). |
+| `REFRAME_CUT_MIN_TURN_S` | No | Default `0.8`. Minimum speaker-turn length to earn a cut (Issue 420). |
+| `REFRAME_CUT_MIN_DISTANCE_FRAC` | No | Default `0.25`. Minimum framing move for a cut, as a fraction of frame width (Issue 420). |
 | `ENV` | No | `development` \| `production`; gates `/docs`, error verbosity |
 | `ALLOWED_ORIGINS` | Yes (prod) | Comma-separated origins; never `*` in production |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Yes (prod) | Token for the `cloudflared` service in `docker-compose.prod.yml`; routes `autoclip.studio` → `app:8000` with no open inbound ports |
@@ -129,7 +135,9 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── ranking.py              # DNA-weighted + preference-model rerank; merges LLM moments pre-scoring + post-ranking trim (Issue 416)
 │   ├── merge.py                # Hybrid candidate merge — LLM moments ∪ signal peaks under signal-priority NMS (Issue 416)
 │   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex; flag-gated per-frame reframe path (Issue 189, ACTIVE_SPEAKER_REFRAME_ENABLED)
-│   ├── reframe.py              # (NEW Issue 189) per-frame MediaPipe BlazeFace face tracking → EMA-smoothed crop-center timeline → ffmpeg sendcmd script; lazy import; gated by ACTIVE_SPEAKER_REFRAME_ENABLED (default False — render-env pending)
+│   ├── reframe.py              # (Issue 189, extended Issue 420/421) speaker-aware dynamic crop: single-VideoCapture detection pass (BlazeFace boxes + keypoints + mouth patches) → shots/turns/mapping → plan_crop_directives (J-cut, snap, punch-in suppression) → segmented-EMA sendcmd + unified wire-contract track JSON (compute_dynamic_crop); lazy imports; gated by ACTIVE_SPEAKER_REFRAME_ENABLED (default False — staging pending, Issue 422)
+│   ├── shots.py                # (NEW Issue 419) shot-change detection: ffmpeg scdet pass (lavfi.scd.time from stderr) + numpy histogram-diff fallback over the 5fps samples; total failure → [] = one shot
+│   ├── speaker_map.py          # (NEW Issue 420) PURE speaker→face mapping: per-shot greedy-NN face tracks, diarized turns (gap-merge/backchannel absorb), mouth-motion energy, weighted-vote mapping w/ margin-ratio confidence, fallback ladder speaker_cut→face_pan→static
 │   ├── captions.py             # Animated word-level ASS subtitles (Issue 133 — bold_pop / gradient_slide / minimal via pysubs2 + libass)
 │   ├── filler.py               # Filler-word + silence cut-list generator (Issue 134 — Tier1 unconditional + Tier2 pause-flanked + 800ms silence w/150ms tail)
 │   └── edits.py                # User-supplied cut-list validator (Issue 135 — bounds, overlap, 5s/85% caps, sub-frame floor) for text-based editor
@@ -430,7 +438,7 @@ clips
   poster_uri (NULLABLE, migration 0050 — poster still for the RENDERED
     deliverable at posters/{creator_id}/clip-{clip_id}.jpg: reframed,
     captions burned in, correct aspect. Issue 387),
-  applied_title, applied_description   -- creator-approved publish metadata
+  applied_title, applied_description,  -- creator-approved publish metadata
                                        -- (migration 0047; NULL = publish falls
                                        -- back to video.title / "#Shorts")
   suggested_title, suggested_description, suggested_hook,
@@ -439,6 +447,13 @@ clips
                                        -- video, pre-clamped; publish precedence
                                        -- applied_* -> suggested_* -> video.title|"#Shorts";
                                        -- fill-only on suggested_title IS NULL)
+  reframe_track_jsonb (NULLABLE, migration 0055 — Issue 421: the speaker-aware
+    crop track in the unified wire contract; keyframe x = the exact ffmpeg
+    sendcmd left-edge values. Recomputed + replaced (or nulled) in the same
+    done-marking transaction as render_uri on EVERY render — never stale.
+    Served at GET /clips/{id}/crop-track (404 no_crop_track);
+    ClipOut carries only has_crop_track. NOT in clip_edit_documents —
+    worker writes would bump CAS revisions)
 
 clip_edit_documents                  -- the creator's in-progress edit (Issue 391, migration 0052)
   -- READ BY THE RENDER PATH. POST /clips/{id}/cuts sends only `base_revision`;

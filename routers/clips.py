@@ -96,6 +96,10 @@ class ClipOut(BaseModel):
     # False; a creator-made selection was never engine-scored, Issue 373).
     # Never affects score/rank/persistence — see clip_engine.ranking.is_shortlisted.
     shortlisted: bool = False
+    # Issue 421 — a boolean, never the track itself (~15–20 KB per clip is too
+    # heavy for the list surface); the JSON comes from the authed
+    # /clips/{id}/crop-track endpoint. False = 404 there (code no_crop_track).
+    has_crop_track: bool = False
 
 
 class PersonalizationStatus(BaseModel):
@@ -262,6 +266,7 @@ def _clip_response(clip: Clip) -> dict:
         "aspect": (clip.style_preset or {}).get("aspect") or "9:16",
         "shortlisted": is_shortlisted(clip.rank),
         "has_poster": clip.poster_uri is not None,
+        "has_crop_track": clip.reframe_track_jsonb is not None,
     }
 
 
@@ -1693,6 +1698,38 @@ async def get_clip_poster(
         media_type="image/jpeg",
         headers={"Cache-Control": "private, max-age=86400, immutable"},
     )
+
+
+@clips_router.get("/{clip_id}/crop-track", response_model=None)
+@limiter.limit("120/minute", key_func=creator_key)
+async def get_clip_crop_track(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Serve the clip's speaker-aware crop track (Issue 421).
+
+    The UNIFIED wire contract persisted by the render worker
+    (``clips.reframe_track_jsonb`` — see clip_engine/reframe.py): keyframe
+    ``x`` values are the exact ffmpeg sendcmd left-edge values, ``t`` is
+    clip-relative; consumers lerp between keyframes and SNAP at cuts.
+
+    404 ``no_crop_track`` when the clip has no track — the reframe flag was
+    off at render time, or the clip predates the feature (honest absence:
+    the frontend overlay renders nothing). Per-creator isolation via
+    ``get_owned``: another creator's clip 404s identically.
+    """
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+    if clip.reframe_track_jsonb is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "no_crop_track",
+                "message": "No crop track exists for this clip.",
+            },
+        )
+    return clip.reframe_track_jsonb
 
 
 @clips_router.get("/{clip_id}/download", response_model=None)

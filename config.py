@@ -164,11 +164,13 @@ class Settings(BaseSettings):
     # base input rate (1h-TTL is 2×; callers using ttl:"1h" — e.g. clip_engine/scoring.py —
     # pass cache_write_multiplier=2.0 explicitly). Source: same pricing page. (cost ledger)
     COST_CACHE_WRITE_MULTIPLIER: float = 1.25
-    # Deepgram Nova-3 pre-recorded transcription cost per minute (pay-as-you-go).
-    # Prod transcribes with nova-3 (ingestion/transcribe.py) — the previous 0.0043
-    # figure was delisted nova-2 pricing and under-billed every minute (Issue 293).
-    # Source: deepgram.com/pricing (fetched 2026-07-02).
-    COST_PER_MIN_DEEPGRAM: float = 0.0077
+    # Deepgram Nova-3 pre-recorded transcription cost per minute (pay-as-you-go),
+    # INCLUDING the speaker-diarization add-on: $0.0077 base + $0.0020 diarize
+    # surcharge = $0.0097/min. Diarization defaults ON (Issue 418,
+    # TRANSCRIPTION_DIARIZE_ENABLED), so the all-in rate is the honest figure —
+    # the previous 0.0043 was delisted nova-2 pricing (Issue 293) and 0.0077
+    # omitted the surcharge. Source: deepgram.com/pricing (fetched 2026-08-04).
+    COST_PER_MIN_DEEPGRAM: float = 0.0097
     # Voyage AI voyage-3.5 embedding cost per million tokens.
     # Source: docs.voyageai.com/docs/pricing (fetched 2026-06-23).
     COST_PER_MTOK_VOYAGE: float = 0.06
@@ -188,7 +190,7 @@ class Settings(BaseSettings):
     # Version stamp for the price book. Update this string whenever any rate changes —
     # a version mismatch between a stored cost_estimate and this stamp signals a
     # rate-change event (FinOps Foundation cost-per-unit standard; finops.org/framework/phases/).
-    PRICE_BOOK_VERSION: str = "2026-07-02"
+    PRICE_BOOK_VERSION: str = "2026-08-04"
     # --- Pro chatbot (Issue 152) ---
     # Per-creator daily message cap — the load-bearing margin guard. Bounds
     # worst-case spend to ≈ CHAT_DAILY_MESSAGE_LIMIT × ~$0.04/heavy message per
@@ -231,6 +233,13 @@ class Settings(BaseSettings):
     # fail fast with a clear error rather than buffer a pathological file. A normal
     # 16 kHz mono WAV is ~115 MB/hour, so the default allows ~9h. (Issue 76)
     TRANSCRIPTION_MAX_MB: int = 1024
+    # Speaker diarization kill-switch (Issue 418). When True, hosted backends
+    # request per-word speaker labels (Deepgram `diarize`, AssemblyAI
+    # `speaker_labels`) and the normalizers add ADDITIVE `speaker` /
+    # `speaker_confidence` fields (keys omitted when absent — old transcripts
+    # and WhisperX carry no speaker fields and every consumer must tolerate
+    # that). Feeds the speaker-aware reframe ladder (clip_engine/speaker_map.py).
+    TRANSCRIPTION_DIARIZE_ENABLED: bool = True
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""
     WHISPER_MODEL: str = "large-v3"
@@ -362,6 +371,30 @@ class Settings(BaseSettings):
     # and points this at it. Empty = try the package's own .task bundle, else
     # fall back to frame-center. Ignored when ACTIVE_SPEAKER_REFRAME_ENABLED=false.
     MEDIAPIPE_FACE_MODEL_PATH: str = ""
+
+    # scdet scene-change threshold for shot detection (Issue 419). ffmpeg's
+    # documented 0–100 scale; 10 is the filter's own suggested starting point —
+    # low enough to catch every hard cut in talking-head/multicam footage,
+    # high enough to ignore in-shot motion. Tune UP if slides/graphics false-
+    # positive on staging footage.
+    SHOT_DETECT_SCDET_THRESHOLD: float = 10.0
+
+    # ── Speaker-cut planner (Issue 420) ───────────────────────────────────────
+    # Sub-flag for the speaker_cut ladder rung. When False (with the master
+    # ACTIVE_SPEAKER_REFRAME_ENABLED on) the ladder tops out at face_pan —
+    # the staging sequence verifies the pan rung with cuts off before enabling
+    # cuts (Issue 422 flag sequencing). Master flag off = neither runs.
+    REFRAME_CUT_ENABLED: bool = True
+    # Minimum spacing between consecutive crop cuts. 1.2s is the floor under
+    # which consecutive framing jumps read as flicker, not editing.
+    REFRAME_MIN_SHOT_S: float = 1.2
+    # A speaker turn must last at least this long to earn a cut — shorter
+    # interjections hold the current framing (backchannels are additionally
+    # absorbed in speaker_map.extract_speaker_turns).
+    REFRAME_CUT_MIN_TURN_S: float = 0.8
+    # Minimum framing move for a cut, as a fraction of source frame width —
+    # below this a cut reads as a stutter (the EMA pan covers small moves).
+    REFRAME_CUT_MIN_DISTANCE_FRAC: float = 0.25
 
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     # ── Whole-video context pass (Issue 415, L26 Track A) ───────────────────────

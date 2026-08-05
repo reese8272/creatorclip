@@ -10,6 +10,13 @@ All backends are normalized to the same internal schema:
        "words": [{"word": str, "start": float, "end": float}]}
     ]
   }
+
+Speaker diarization (Issue 418, TRANSCRIPTION_DIARIZE_ENABLED): ADDITIVE,
+OPTIONAL fields — words may carry integer ``speaker`` (+ ``speaker_confidence``
+on Deepgram), segments may carry ``speaker`` — and the keys are OMITTED when
+absent. Consumers MUST read them via ``.get()`` and never require them:
+old stored transcripts and WhisperX (deliberately excluded — pyannote is a
+heavy dep and "no speaker" is a defined reframe-ladder input) have none.
 """
 
 import functools
@@ -136,13 +143,26 @@ def _deepgram_prerecorded_options() -> Any:
     a valid request param and raised TypeError on every prod upload. Word-level
     timings need no request flag; Deepgram always returns them in
     `channels[].alternatives[].words` (and inside each utterance).
+
+    ``diarize`` (Issue 418): per-word speaker labels for the speaker-aware
+    reframe. Verified present on the pinned deepgram-sdk 3.7.7 field set (the
+    `words=True` outage precedent makes that check mandatory — see the real-SDK
+    kwargs test). The bare boolean is deprecated upstream in favour of
+    ``diarize_model`` but works on 3.7.7 and routes to the v1 diarizer; the
+    ``diarize_model`` upgrade is noted for the next SDK bump (DECISIONS
+    2026-08-04, decision 5).
     """
     try:
         from deepgram import PrerecordedOptions
     except ImportError as exc:
         raise ImportError("deepgram-sdk not installed. Run: pip install deepgram-sdk") from exc
 
-    return PrerecordedOptions(model="nova-3", smart_format=True, utterances=True)
+    return PrerecordedOptions(
+        model="nova-3",
+        smart_format=True,
+        utterances=True,
+        diarize=settings.TRANSCRIPTION_DIARIZE_ENABLED,
+    )
 
 
 def _transcribe_deepgram(audio_path: str) -> dict:
@@ -170,6 +190,26 @@ def _transcribe_deepgram(audio_path: str) -> dict:
     return _normalize_deepgram(raw)
 
 
+def _deepgram_word(w: dict) -> dict:
+    """Normalize one Deepgram word dict.
+
+    Speaker fields (Issue 418) are ADDITIVE and OMITTED when absent: an
+    un-diarized response (diarize kill-switch off, or a pre-418 stored
+    transcript) produces exactly the pre-418 word shape, so every downstream
+    consumer keeps using ``.get()`` and none may require the keys.
+    """
+    word = {
+        "word": w.get("punctuated_word", w.get("word", "")),
+        "start": w.get("start"),
+        "end": w.get("end"),
+    }
+    if w.get("speaker") is not None:
+        word["speaker"] = w["speaker"]
+    if w.get("speaker_confidence") is not None:
+        word["speaker_confidence"] = w["speaker_confidence"]
+    return word
+
+
 def _normalize_deepgram(raw: dict) -> dict:
     utterances = (raw.get("results") or {}).get("utterances") or []
     if utterances:
@@ -182,32 +222,26 @@ def _normalize_deepgram(raw: dict) -> dict:
             if u_start is None or u_end is None:
                 continue
             words = [
-                {
-                    "word": w.get("punctuated_word", w.get("word", "")),
-                    "start": w.get("start"),
-                    "end": w.get("end"),
-                }
+                _deepgram_word(w)
                 for w in u.get("words", [])
                 if w.get("start") is not None and w.get("end") is not None
             ]
-            segments.append(
-                {
-                    "start": u_start,
-                    "end": u_end,
-                    "text": u.get("transcript", ""),
-                    "words": words,
-                }
-            )
+            segment = {
+                "start": u_start,
+                "end": u_end,
+                "text": u.get("transcript", ""),
+                "words": words,
+            }
+            # Utterance-level speaker (Issue 418): additive, omitted when absent.
+            if u.get("speaker") is not None:
+                segment["speaker"] = u["speaker"]
+            segments.append(segment)
     else:
         channels = (raw.get("results") or {}).get("channels") or [{}]
         alts = channels[0].get("alternatives") or [{}]
         alt = alts[0]
         words = [
-            {
-                "word": w.get("punctuated_word", w.get("word", "")),
-                "start": w.get("start"),
-                "end": w.get("end"),
-            }
+            _deepgram_word(w)
             for w in alt.get("words") or []
             if w.get("start") is not None and w.get("end") is not None
         ]
@@ -247,7 +281,10 @@ def _transcribe_assemblyai(audio_path: str) -> dict:
                 aai.settings.api_key = settings.ASSEMBLYAI_API_KEY
                 aai.settings.http_timeout = float(settings.TRANSCRIPTION_HTTP_TIMEOUT_S)
                 _ASSEMBLYAI_READY = True
-    transcript = aai.Transcriber().transcribe(audio_path)
+    # speaker_labels (Issue 418): AssemblyAI's diarization parity with Deepgram's
+    # `diarize`. Same kill-switch; the normalizer maps letter labels → ints.
+    config = aai.TranscriptionConfig(speaker_labels=settings.TRANSCRIPTION_DIARIZE_ENABLED)
+    transcript = aai.Transcriber().transcribe(audio_path, config)
     # The SDK does NOT raise on a failed job — `.transcribe()` returns a transcript
     # with status == error and words=None, which would otherwise normalize to an
     # empty-segments "success": the creator is charged, gets a garbage transcript,
@@ -259,17 +296,36 @@ def _transcribe_assemblyai(audio_path: str) -> dict:
     return _normalize_assemblyai(transcript)
 
 
+def _assemblyai_speaker_int(label: Any) -> int | None:
+    """Map an AssemblyAI speaker label to the normalized integer id (Issue 418).
+
+    AssemblyAI labels speakers "A", "B", … while Deepgram (and the internal
+    schema) use 0-based ints. Unknown/absent labels → None (key omitted).
+    """
+    if isinstance(label, int):
+        return label
+    if isinstance(label, str) and len(label) == 1 and "A" <= label <= "Z":
+        return ord(label) - ord("A")
+    return None
+
+
 def _normalize_assemblyai(transcript: Any) -> dict:
     # Filter words with None start/end before dividing by 1000 — the AssemblyAI SDK
     # can return None timestamps for unaligned words (e.g. music-only passages or
     # utterances at the very end of the file where alignment fails). Without the guard,
     # ``None / 1000.0`` raises TypeError and kills the ingestion job. Deepgram applies
     # the same filter; this brings AssemblyAI to parity. (Issue 334)
-    words = [
-        {"word": w.text, "start": w.start / 1000.0, "end": w.end / 1000.0}
-        for w in (transcript.words or [])
-        if w.start is not None and w.end is not None
-    ]
+    words = []
+    for w in transcript.words or []:
+        if w.start is None or w.end is None:
+            continue
+        word = {"word": w.text, "start": w.start / 1000.0, "end": w.end / 1000.0}
+        # Additive speaker field (Issue 418) — omitted when diarization was off
+        # or the SDK returned no label, matching the Deepgram normalizer.
+        speaker = _assemblyai_speaker_int(getattr(w, "speaker", None))
+        if speaker is not None:
+            word["speaker"] = speaker
+        words.append(word)
     segments = (
         [
             {
