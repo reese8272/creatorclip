@@ -2015,7 +2015,7 @@ source's own SUBSCRIBE banner / top-band fragments) stays in every frame.
   pre-offset keyframes — pick one and version the wire contract.
 
 **Acceptance**
-- [ ] Produced-layout source renders with speaker cuts AND no third-party chrome (live check on the next upload with CAMERA_REGION_DETECT_ENABLED=true)
+- [x] Produced-layout source renders with speaker cuts AND no third-party chrome — LIVE-VERIFIED 2026-08-05 on `b8505eb7` ranks 1+2 re-renders (with the 0.45 height floor): region "cropping into (169,326,1576,551)", SUBSCRIBE banner/socials/letterbox gone from every frame, cuts intact (keyframes=3, cuts=2), mapping confidence IMPROVED 0.46→0.51 (detection now runs on region-sliced frames)
 - [x] Plain sources byte-identical when no region is detected (pinned: static chains keep the unlabeled crop spelling; region-None reframe chain differs only by the @spk label; `test_camera_region_none_is_byte_identical`)
 - [x] Crop-track overlay still aligns in the frontend (`source` = pan-space rect by contract; additive `region` field; isCropTrack tolerance pinned)
 
@@ -2148,7 +2148,7 @@ WITHIN a turn; face_pan see-sawed in 25–60 px steps. The only smoothing was EM
 - [x] Deadband oscillation/transient spike/detection loss never move the tripod; sustained move → exactly one monotonic glide (`TestPlanPanHolds`)
 - [x] Median outlier robustness pinned (speaker_map + planner tests)
 - [x] `test_render.py` and punch-in pins pass unmodified (consumer contract intact)
-- [ ] Live: re-render ranks 1 (speaker_cut) + 2 (face_pan) of `b8505eb7` — steady frame, no micro-wobble
+- [x] Live: re-rendered ranks 1 (speaker_cut) + 2 (face_pan) of `b8505eb7` 2026-08-05 — crop track collapsed 336→3 keyframes (cuts+1 exactly) and 172→47 (holds + glide ramps); by construction the only x-changes left in rank 1 are the two cuts. Frames verified: steady, tight, chrome-free
 
 ---
 

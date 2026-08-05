@@ -23,16 +23,15 @@ stash — popping it onto this file WILL conflict; resolve by hand or drop delib
 
 ## → NEXT ACTIONS (in order)
 
-1. **Watch the deploy chain** for the 434–436 commit (`gh run list` — a failed image build
-   silently SKIPS deploy), then health-check prod.
-2. **Live re-render verification (Issue 436 + floor):** reset `render_status='pending'` on
-   ranks 1 (`56746e18`, speaker_cut) and 2 (`154a517d`, face_pan) of `b8505eb7`, enqueue via
-   the celery-call drill, download, and check: steady frame between cuts (crop-track keyframe
-   count collapses from ~336 to cuts+1), no 25–60 px see-saw on rank 2, SUBSCRIBE banner GONE
-   (region log line should now read "cropping into …" instead of "too short (551px)").
-3. **UI live checks (need the creator or a session cookie):** Review page audio after one
-   click on the new speaker toggle · Dashboard rename of `b8505eb7` (currently blank title →
-   "Untitled") · 431 generate-more smoke (appended non-duplicates, no minute deduction).
+1. ~~Deploy + re-render drill~~ **DONE 2026-08-05 late night:** chain green (`5a8d0f1`),
+   ranks 1+2 of `b8505eb7` re-rendered on the new code and frame-verified — crop tracks
+   collapsed 336→3 / 172→47 keyframes, SUBSCRIBE banner/letterbox GONE (region
+   "cropping into (169,326,1576,551)"), cuts intact, mapping confidence 0.46→0.51.
+2. **UI live checks (need the creator in the browser):** Review page audio after one click
+   on the new speaker toggle · Dashboard rename of `b8505eb7` (blank title → real name) ·
+   431 generate-more smoke (appended non-duplicates, no minute deduction, metadata fills).
+3. **Optional:** re-render ranks 3–8 the same way so every rendered clip carries the tripod
+   framing + chrome removal (they still have the pre-436 renders).
 4. **Watch for:** Opus 5 cache HITS (`cache_read_input_tokens > 0`) · reframe floor behavior
    on other layouts (`REFRAME_MIN_MAPPING_CONFIDENCE=0.2`; ranks 2–3 honestly fell to
    face_pan at 0.11–0.12 on this picture-in-picture layout — expected).
