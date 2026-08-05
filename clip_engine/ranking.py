@@ -218,8 +218,17 @@ async def score_and_rank(
     ledger_session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] | None = None,
     style_notes: str | None = None,
     video_context: dict | None = None,
+    exclude_windows: list[dict] | None = None,
 ) -> list[dict]:
     """Extract candidates → merge LLM moments → score (ONE LLM call) → rank → trim.
+
+    ``exclude_windows`` (Issue 431 — append-mode regeneration): windows of
+    ALREADY-PERSISTED clips (``{"setup_start_s", "end_s"}`` dicts). After the
+    internal dedup, any candidate whose overlap coefficient vs an excluded
+    window reaches the containment threshold is dropped — regeneration never
+    re-proposes a story the creator already has (the stored VideoContext
+    moments repeat verbatim on re-runs, so this filter is what makes the
+    output NEW). Survivors are renumbered densely before the trim.
 
     Session-free. Split out of the old ``generate_and_rank_clips`` (Issue 82b): the
     LLM round-trip here can take 30–120 s, so no DB session may be held across it —
@@ -284,7 +293,18 @@ async def score_and_rank(
     # merged pool can exceed max_candidates; near-duplicate contained windows
     # are dropped first (freed slots refill from the pool below the cut), then
     # displacement happens HERE on scored merit, never pre-scoring.
-    return suppress_contained(rank_candidates(scored))[:max_candidates]
+    ranked = suppress_contained(rank_candidates(scored))
+    if exclude_windows:
+        ranked = [
+            c
+            for c in ranked
+            if not any(
+                window_containment(c, w) >= _CONTAINMENT_THRESHOLD for w in exclude_windows
+            )
+        ]
+        for i, c in enumerate(ranked):
+            c["rank"] = i + 1
+    return ranked[:max_candidates]
 
 
 async def persist_ranked_clips(
@@ -325,35 +345,13 @@ async def persist_ranked_clips(
     # the stronger guarantee here is "never delete+reinsert", which makes the
     # 46-style protection for done/running clips automatic.
 
-    clips: list[Clip] = []
-    for c in ranked:
-        clip = Clip(
-            video_id=video_id,
-            creator_id=creator_id,
-            setup_start_s=c["setup_start_s"],
-            start_s=c["start_s"],
-            end_s=c["end_s"],
-            peak_s=c["peak_s"],
-            score=c.get("score"),
-            # dna_match is the raw DNA-only fit from Claude, NOT the composite score —
-            # seeding it with the composite would make it collinear with its own
-            # label-generating signal in the preference feature vector. (Issue 103 #5)
-            dna_match=c.get("dna_match"),
-            signals_jsonb={
-                "features": c.get("features", {}),
-                "principle": c.get("principle", ""),
-                "reasoning": c.get("reasoning", ""),
-                # Issue 416 — provenance: "llm" for context-pass-proposed
-                # candidates, "signal" for audio-energy peaks. Free-form JSONB,
-                # no migration needed.
-                "origin": c.get("origin", "signal"),
-            },
-            format=ClipFormat.short,
-            render_status=RenderStatus.pending,
-            rank=c["rank"],
-        )
-        session.add(clip)
-        clips.append(clip)
+    # dna_match stays the raw DNA-only fit from Claude, NOT the composite score —
+    # seeding it with the composite would make it collinear with its own
+    # label-generating signal in the preference feature vector. (Issue 103 #5)
+    # signals_jsonb.origin (Issue 416): "llm" for context-pass candidates,
+    # "signal" for audio-energy peaks.
+    clips: list[Clip] = [_new_clip_row(video_id, creator_id, c, c["rank"]) for c in ranked]
+    session.add_all(clips)
 
     try:
         await session.commit()
@@ -378,4 +376,84 @@ async def persist_ranked_clips(
     await session.commit()
 
     logger.info("Generated %d ranked clips for video %s", len(clips), video_id)
+    return clips
+
+
+def _new_clip_row(video_id: uuid.UUID, creator_id: uuid.UUID, c: dict, rank: int) -> Clip:
+    """One engine-generated Clip row from a scored candidate dict (shared by
+    the initial persist and the Issue-431 append path)."""
+    return Clip(
+        video_id=video_id,
+        creator_id=creator_id,
+        setup_start_s=c["setup_start_s"],
+        start_s=c["start_s"],
+        end_s=c["end_s"],
+        peak_s=c["peak_s"],
+        score=c.get("score"),
+        dna_match=c.get("dna_match"),
+        signals_jsonb={
+            "features": c.get("features", {}),
+            "principle": c.get("principle", ""),
+            "reasoning": c.get("reasoning", ""),
+            "origin": c.get("origin", "signal"),
+        },
+        format=ClipFormat.short,
+        render_status=RenderStatus.pending,
+        rank=rank,
+    )
+
+
+async def append_ranked_clips(
+    session: AsyncSession,
+    video_id: uuid.UUID,
+    creator_id: uuid.UUID,
+    ranked: list[dict],
+) -> list[Clip]:
+    """APPEND newly-scored clips after the video's existing set (Issue 431).
+
+    The counterpart of ``persist_ranked_clips`` for "Generate more clips":
+    - NO existing-clips no-op (existing clips are the precondition, not a race
+      loser) — the caller enforces the regeneration caps.
+    - Ranks continue from the video's max engine rank (creator-made clips
+      carry ``rank=None`` and are ignored), so ``uq_clips_video_rank`` holds.
+    - ``rerank_with_preference`` is deliberately SKIPPED: it renumbers ranks
+      from 1 across whatever list it is given, which would collide with the
+      existing set — appended clips keep their scored order (DECISIONS
+      2026-08-05). On a ``uq_clips_video_rank`` race (concurrent append), the
+      offset is re-derived once and the insert retried; a second collision
+      re-raises.
+    Returns only the NEWLY appended Clip rows, in rank order.
+    """
+    if not ranked:
+        return []
+
+    from sqlalchemy import func
+
+    async def _max_engine_rank() -> int:
+        result = await session.execute(
+            select(func.max(Clip.rank)).where(
+                Clip.video_id == video_id, Clip.creator_id == creator_id
+            )
+        )
+        return result.scalar() or 0
+
+    for attempt in range(2):
+        base = await _max_engine_rank()
+        clips = [
+            _new_clip_row(video_id, creator_id, c, base + i + 1) for i, c in enumerate(ranked)
+        ]
+        session.add_all(clips)
+        try:
+            await session.commit()
+            break
+        except IntegrityError as exc:
+            await session.rollback()
+            if "uq_clips_video_rank" not in str(exc.orig) or attempt == 1:
+                raise
+            logger.info(
+                "Concurrent append detected for video %s — re-deriving the rank offset", video_id
+            )
+    for clip in clips:
+        await session.refresh(clip)
+    logger.info("Appended %d clips for video %s (ranks from %d)", len(clips), video_id, base + 1)
     return clips

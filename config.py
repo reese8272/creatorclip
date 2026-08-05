@@ -462,6 +462,17 @@ class Settings(BaseSettings):
     # Signal-candidate pool cap passed to extract_candidates (its signature
     # default stays 8 — byte-identical constraint; the call site passes this).
     CLIP_SIGNAL_POOL_MAX: int = 12
+    # ── "Generate more clips" (Issue 431) ───────────────────────────────────────
+    # Max clips APPENDED per generate-more call. Regeneration reuses the stored
+    # VideoContext (moments repeat and are containment-filtered vs existing
+    # clips), so new material comes from the signal pool below the previous
+    # cut — half a batch keeps expectations honest.
+    CLIP_REGEN_BATCH_MAX: int = 6
+    # Hard per-video ceiling on engine-generated clips (initial + appended):
+    # one initial batch (12) + two regenerations (6 each). Past it the endpoint
+    # 409s with an honest message — an unbounded loop re-scores the same
+    # signals for diminishing novelty while still spending LLM tokens.
+    CLIP_REGEN_TOTAL_CAP: int = 24
     # ── Whole-video context pass (Issue 415, L26 Track A) ───────────────────────
     # Kill switch for the analyze_video_context chain member. False restores
     # today's signal-only pipeline exactly: the task short-circuits before any

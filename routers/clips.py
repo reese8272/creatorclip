@@ -399,6 +399,124 @@ async def generate_clips(
         return {"clips": [_clip_response(c) for c in clips]}
 
 
+@router.post(
+    "/{video_id}/clips/generate-more",
+    response_model=ClipListOut,
+    # Same guard stack as generate (Issue 431): kill switch + spend breaker.
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
+)
+@limiter.limit("10/hour", key_func=creator_key)
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
+async def generate_more_clips(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """APPEND new clips to an already-generated video (Issue 431).
+
+    Re-runs scoring over the persisted signals/transcript/context (no
+    re-ingest, no minute charge — one LLM call) and appends up to
+    ``CLIP_REGEN_BATCH_MAX`` clips whose windows are NOT contained in any
+    existing clip. Feedback the creator gave meanwhile sharpens the preference
+    signal on the next pass; appended clips rank after the existing set, are
+    never shortlisted or auto-rendered, and get titles/hooks via the fill-only
+    metadata task.
+    """
+    await check_positive_balance(creator.id, session)
+
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    if video.ingest_status != IngestStatus.done:
+        raise HTTPException(status_code=400, detail="Video is not fully ingested yet")
+
+    signals = await session.get(Signals, video_id)
+    if not signals:
+        raise HTTPException(status_code=400, detail="Signals not available for this video")
+
+    from clip_engine.ranking import append_ranked_clips, load_existing_clips, score_and_rank
+
+    existing = await load_existing_clips(session, video_id, creator.id)
+    engine_clips = [c for c in existing if c.rank is not None]
+    if not engine_clips:
+        raise HTTPException(
+            status_code=409,
+            detail="No generated clips exist for this video yet — generate clips first.",
+        )
+    if len(engine_clips) >= settings.CLIP_REGEN_TOTAL_CAP:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This video already has {len(engine_clips)} generated clips — the per-video "
+                "limit is reached. Re-scoring the same footage again would mostly resurface "
+                "the same moments."
+            ),
+        )
+    # Regeneration never re-proposes a story the creator already has: existing
+    # windows (creator-made clips included — setup NULL coerces to start_s)
+    # become containment-exclusion seeds for the new pass.
+    exclude_windows = [
+        {
+            "setup_start_s": c.setup_start_s if c.setup_start_s is not None else c.start_s,
+            "end_s": c.end_s,
+        }
+        for c in existing
+    ]
+
+    transcript = await session.get(Transcript, video_id)
+    transcript_segments = transcript.segments_jsonb.get("segments", []) if transcript else []
+
+    from dna.profile import get_active, get_style_notes
+
+    dna_profile = await get_active(session, creator.id)
+    dna_brief = dna_profile.brief_text if dna_profile else None
+    style_row = await get_style_notes(session, creator.id)
+    style_notes = style_row.notes_text if style_row else None
+
+    timeline = signals.timeline_jsonb
+
+    from models import VideoContext
+
+    vc_row = await session.get(VideoContext, video_id)
+    video_context = vc_row.context_jsonb if vc_row else None
+
+    import db
+
+    # Issue 82b: release the request-scoped connection before the LLM call.
+    await session.close()
+
+    ranked = await score_and_rank(
+        video_id=video_id,
+        creator_id=creator.id,
+        timeline=timeline,
+        dna_brief=dna_brief,
+        transcript_segments=transcript_segments,
+        max_candidates=settings.CLIP_REGEN_BATCH_MAX,
+        ledger_session_factory=db.AsyncSessionLocal,
+        style_notes=style_notes,
+        video_context=video_context,
+        exclude_windows=exclude_windows,
+    )
+
+    async with db.AsyncSessionLocal() as persist_session:
+        # RLS (Issue 79): stamp creator_id BEFORE the first query.
+        persist_session.info["creator_id"] = creator.id
+        if ranked:
+            await append_ranked_clips(persist_session, video_id, creator.id, ranked)
+            # Fill-only metadata for the appended NULL rows (idempotent task).
+            from worker.tasks import generate_clip_metadata
+
+            try:
+                generate_clip_metadata.delay(str(video_id))
+            except Exception:
+                logger.warning(
+                    "generate-more: metadata enqueue failed for %s — titles stay NULL until retry",
+                    video_id,
+                )
+        clips = await load_existing_clips(persist_session, video_id, creator.id)
+        message = None if ranked else "No new distinct moments found — try after more feedback."
+        return {"clips": [_clip_response(c) for c in clips], "message": message}
+
+
 class CreateClipIn(BaseModel):
     """Creator-selected source range for a manual clip (Issue 373).
 

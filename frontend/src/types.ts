@@ -406,6 +406,9 @@ export interface PersonalizationStatus {
 export interface ReviewClipListResponse {
   clips: ReviewClip[]
   personalization?: PersonalizationStatus | null
+  // Issue 431 — generate-more returns the FULL refreshed list; message is set
+  // (honestly) when a pass found no new distinct moments to append.
+  message?: string | null
   // Issue 217 — "why not clipped" transparency surface.
   // skip_reason is a stable code string (e.g. "no_signal_above_threshold");
   // skip_reason_label is the human-readable, principle-grounded explanation.

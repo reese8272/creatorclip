@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useIsMutating, useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { STAGE_CELL } from '@/lib/toolLayout'
@@ -16,6 +16,8 @@ import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { StyleReview } from '@/components/review/StyleReview'
+import { GenerateMoreClipsButton } from '@/components/review/GenerateMoreClipsButton'
+import { generateMoreMutationKey } from '@/lib/mutationKeys'
 import { GenerateClipsButton, VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
 import { ShortStage } from '@/components/stage/ShortStage'
 import { Button } from '@/components/ui/button'
@@ -235,18 +237,33 @@ export function Review() {
   const clips = showAllCandidates || shortlistedClips.length === 0 ? allClips : shortlistedClips
   const reviewed = clips.length > 0 && index >= clips.length
   const clip = clips[index]
+  // Issue 431: an in-flight generate-more request must hold the "all reviewed"
+  // redirect open — otherwise the dashboard navigation yanks the creator away
+  // while the server is still finding their new clips.
+  const generatingMore =
+    useIsMutating({ mutationKey: generateMoreMutationKey(videoId ?? '') }) > 0
 
   function toggleShowAllCandidates() {
     setShowAllCandidates((v) => !v)
     setIndex(0)
   }
 
+  // Issue 431: appended clips are never shortlisted, so show the full set and
+  // land on the first new clip — the pre-append list length is its index.
+  function handleMoreClips(newTotal: number, message: string | null) {
+    if (message || newTotal <= allClips.length) return
+    setShowAllCandidates(true)
+    setIndex(allClips.length)
+  }
+
   useEffect(() => {
-    if (reviewed) {
-      const t = setTimeout(() => navigate('/dashboard'), 2000)
+    if (reviewed && !generatingMore) {
+      // 8s (was 2s pre-431): the terminal state now carries a real CTA —
+      // "Generate more clips" needs to be clickable before the redirect fires.
+      const t = setTimeout(() => navigate('/dashboard'), 8000)
       return () => clearTimeout(t)
     }
-  }, [reviewed, navigate])
+  }, [reviewed, generatingMore, navigate])
 
   // Every branch renders inside ToolShell, so the honesty statement and the legal
   // links are structurally impossible to omit — including the loading and error
@@ -297,7 +314,21 @@ export function Review() {
         </ToolMain>
       </ToolShell>
     )
-  if (reviewed) return message('All clips reviewed! Great work. Taking you back to the dashboard…')
+  if (reviewed)
+    return (
+      <ToolShell>
+        <ToolMain className="flex flex-col items-center gap-3 text-center">
+          <p className="text-sm text-muted">
+            {generatingMore
+              ? 'All clips reviewed! Finding more clips for this video…'
+              : 'All clips reviewed! Great work. Taking you back to the dashboard…'}
+          </p>
+          {/* Issue 431: the natural moment to ask for more — feedback just given
+              sharpens the next pass, and the same footage costs no new minutes. */}
+          <GenerateMoreClipsButton videoId={videoId} onDone={handleMoreClips} />
+        </ToolMain>
+      </ToolShell>
+    )
   if (!clip)
     return (
       <ToolShell>
@@ -354,13 +385,16 @@ export function Review() {
           </div>
         )}
 
-        {/* Issue 370: the whole video's style is reviewable, not just its clips. */}
-        <button
-          onClick={() => setParams({ video_id: videoId, mode: 'style' })}
-          className="hover:text-accent-text"
-        >
-          Review this video’s overall style <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
-        </button>
+        <div className="flex items-center gap-4">
+          {/* Issue 370: the whole video's style is reviewable, not just its clips. */}
+          <button
+            onClick={() => setParams({ video_id: videoId, mode: 'style' })}
+            className="hover:text-accent-text"
+          >
+            Review this video’s overall style <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
+          </button>
+          <GenerateMoreClipsButton videoId={videoId} onDone={handleMoreClips} />
+        </div>
       </div>
 
       <ReviewClipView
