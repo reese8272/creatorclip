@@ -59,3 +59,26 @@ test('the review media box is at least 1.8x the pre-L26 area at 1440x900', async
     `media box ${Math.round(box!.width)}×${Math.round(box!.height)} is under 1.8× the old ${273}×${486}`,
   ).toBeGreaterThanOrEqual(1.8 * PRE_L26_AREA)
 })
+
+// L26 Issue 426 — the crop-track overlay. c1 404s (`no_crop_track`, the normal
+// pre-pipeline state) and must show NOTHING; c2 is the one tracked clip and
+// shows the honest mini-map, which may never intercept pointers.
+test('the crop-track mini-map shows on the tracked clip and never on the 404 clip', async ({
+  page,
+}) => {
+  await page.goto('review?video_id=v1', { waitUntil: 'domcontentloaded' })
+  await page.locator('section[aria-label="Clip preview"] video').waitFor()
+
+  // c1: the 404 clip — give the query time to settle, then assert absence.
+  await page.waitForTimeout(600)
+  await expect(page.getByTestId('crop-track-overlay')).toHaveCount(0)
+
+  // Advance to c2, the tracked clip.
+  await page.getByRole('button', { name: /Next clip/ }).click()
+  const overlay = page.getByTestId('crop-track-overlay')
+  await overlay.waitFor()
+  await expect(overlay).toContainText('AI framing')
+  expect(await overlay.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none')
+  // One tick for the fixture's speaker-change cut.
+  await expect(page.getByTestId('crop-cut-tick')).toHaveCount(1)
+})

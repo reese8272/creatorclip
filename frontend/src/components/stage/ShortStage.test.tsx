@@ -179,6 +179,59 @@ describe('ShortStage meta + honesty', () => {
   })
 })
 
+describe('ShortStage crop-track overlay (Issue 426)', () => {
+  it('renders NOTHING when the crop-track endpoint 404s — honest absence, no error', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/crop-track'))
+        return {
+          status: 404,
+          ok: false,
+          json: async () => ({ detail: { code: 'no_crop_track', message: 'No crop track' } }),
+        }
+      return { status: 200, ok: true, json: async () => ({}) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderStage({ clip: BASE })
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]).endsWith('/clips/c1/crop-track')),
+      ).toBe(true)
+    })
+    expect(screen.queryByTestId('crop-track-overlay')).toBeNull()
+    expect(screen.queryByText(/framing/i)).toBeNull()
+  })
+
+  it('shows the mini-map when a track exists for the rendered artifact', async () => {
+    const track = {
+      version: 1,
+      mode: 'speaker_cut',
+      source: { width: 1920, height: 1080 },
+      crop: { width: 608, height: 1080 },
+      origin_s: 0,
+      duration_s: 18,
+      keyframes: [
+        { t: 0, x: 100 },
+        { t: 18, x: 100 },
+      ],
+      cuts: [],
+      shots: [],
+      speakers: { count: 1, mapping_confidence: 1 },
+      meta: { sample_fps: 5, fallback: false },
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/crop-track'))
+        return { status: 200, ok: true, json: async () => track }
+      return { status: 200, ok: true, json: async () => ({}) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderStage({ clip: BASE })
+
+    expect(await screen.findByTestId('crop-track-overlay')).toBeInTheDocument()
+    expect(screen.getByText('AI framing')).toBeInTheDocument()
+  })
+})
+
 describe('ShortStage cleaned-preview tab swap (Issue 425)', () => {
   it('swaps ONE player to the edited preview when a cleaned render lands, and back', async () => {
     const onConfirm = vi.fn()

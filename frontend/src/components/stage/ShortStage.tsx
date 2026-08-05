@@ -1,11 +1,13 @@
-import { useState, type ReactNode, type Ref } from 'react'
+import { useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
 import { cn } from '@/lib/utils'
 import { STAGE_MEDIA_W } from '@/lib/toolLayout'
 import { fitTier } from '@/lib/fit'
 import { FitBadge } from '@/components/ui/fit-badge'
 import { Button } from '@/components/ui/button'
+import { CropTrackOverlay } from '@/components/stage/CropTrackOverlay'
 import { StagePlaceholder } from '@/components/stage/StagePlaceholder'
 import { useClipRender } from '@/hooks/useClipRender'
+import { useCropTrack } from '@/hooks/useCropTrack'
 import type { ReviewClip } from '@/types'
 import { VideoPlayer, type VideoPlayerHandle } from '@/components/ui/video-player'
 import { Card } from '@/components/ui/card'
@@ -62,6 +64,32 @@ export function ShortStage({
   className,
 }: ShortStageProps) {
   const render = useClipRender(clip)
+  // The persisted crop track (Issue 426) — null while absent/404, in which
+  // case the stage renders no framing overlay at all (honest absence).
+  const track = useCropTrack(clip)
+  // The overlay animates off the player's imperative handle, so the stage
+  // keeps its own handle ref and forwards the page's playerRef (the Editor
+  // passes one for seek/transport wiring) through a stable delegating proxy —
+  // useImperativeHandle is the sanctioned prop-ref writer, and delegation
+  // keeps the parent's handle valid across mediaKey remounts.
+  const innerHandleRef = useRef<VideoPlayerHandle | null>(null)
+  useImperativeHandle(
+    playerRef,
+    (): VideoPlayerHandle => ({
+      play: () => innerHandleRef.current?.play() ?? Promise.resolve(),
+      pause: () => innerHandleRef.current?.pause(),
+      seek: (t) => innerHandleRef.current?.seek(t),
+      seekBy: (delta) => innerHandleRef.current?.seekBy(delta),
+      getCurrentTime: () => innerHandleRef.current?.getCurrentTime() ?? 0,
+      getDuration: () => innerHandleRef.current?.getDuration() ?? 0,
+      setRate: (r) => innerHandleRef.current?.setRate(r),
+      subscribeTime: (cb) => innerHandleRef.current?.subscribeTime(cb) ?? (() => {}),
+      get element() {
+        return innerHandleRef.current?.element ?? null
+      },
+    }),
+    [],
+  )
   // Cleaned-preview tab swap: ONE player, two sources — replaces the second
   // stacked player. When a cleaned render lands the stage swaps to it (the
   // creator just asked for it); `chosen` records an explicit tab click. When
@@ -88,7 +116,7 @@ export function ShortStage({
       {clip.render_uri ? (
         <div className="relative">
           <VideoPlayer
-            ref={playerRef}
+            ref={innerHandleRef}
             // Keyed on the artifact, not just the clip: a confirmed trim/clean
             // swap changes render_uri but not the download src, so without a
             // key change the element would keep playing the old media.
@@ -101,6 +129,11 @@ export function ShortStage({
             onTimeChange={onTimeChange}
             className={STAGE_MEDIA_W}
           />
+          {/* The track describes the MAIN render's framing; hide it while the
+              cleaned/trimmed variant is showing. */}
+          {track && !showCleaned && (
+            <CropTrackOverlay track={track} handleRef={innerHandleRef} />
+          )}
           {overlay}
         </div>
       ) : (
