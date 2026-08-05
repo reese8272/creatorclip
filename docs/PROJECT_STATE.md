@@ -4,6 +4,20 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-04 — Lane L26 declared: A→B Auto-Clipping MVP (Issues 414–426). BUILD IN PROGRESS.
+
+User-driven MVP push: "the best auto-clipping short creation on the planet" is the viability bar.
+Three-track plan researched, designed, and approved this session (plan file + `docs/DECISIONS.md`
+2026-08-04 L26 entry, 10 locked decisions): **A** — whole-video LLM context pass feeding hybrid
+(LLM ∪ signal) candidates + one batched auto-metadata call so every clip lands packaged with
+title/description/hook (414–417); **B** — speaker-aware dynamic crop: Deepgram diarization, ffmpeg
+scdet shots, speaker→face voting, cut-on-turn/pan-within-shot, persisted crop track + API, image
+rollout closing Issue 189's four unlock criteria (418–422); **C** — short-first unified UI: shared
+ShortStage, Review+Editor flips (~2.0× media area on Review), compact metadata rows, crop-track
+overlay (423–426). L25 Batch C paused (#394/#396 re-scoped, #399 unaffected). Merge order A → B → C.
+
+---
+
 ## 2026-08-04 — Issue 413: app typeface swapped to Lexend (user-driven)
 
 Creator feedback after the close-out wave: the main text still read "blocky and ugly". Chosen by
