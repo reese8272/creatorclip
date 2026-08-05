@@ -5,6 +5,33 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-05 (night) — Issue 431: append-mode regeneration ("Generate more clips")
+
+Four rulings:
+
+**(1) Append skips `rerank_with_preference`.** The preference reranker renumbers ranks from 1
+across whatever list it receives — running it over appended rows would collide with the
+existing set's ranks (`uq_clips_video_rank`) or, run over the union, silently reorder clips
+the creator already reviewed. Appended clips keep their scored order after the existing set;
+the preference model still shapes them upstream (score_and_rank → the NEXT pass benefits from
+new feedback). Evidence: `rerank_with_preference` (`clip_engine/ranking.py`) sorts and assigns
+`rank = i + 1` unconditionally.
+
+**(2) Exclusion = the Issue-429 containment test vs ALL persisted windows** (engine + creator-
+made; NULL `setup_start_s` coerces to `start_s`), applied post-suppression in `score_and_rank`
+via `exclude_windows`, with dense renumber before the trim. Same IoMin ≥ 0.8 threshold —
+one duplicate definition across suppression and regeneration, no second knob.
+
+**(3) Caps: `CLIP_REGEN_BATCH_MAX=6` per call, `CLIP_REGEN_TOTAL_CAP=24` per video** (2× the
+12-clip pool). Past ~2 pool-widths, re-scoring the same footage mostly resurfaces the same
+moments — the 409 message says exactly that. Regeneration is one scoring LLM call (no
+re-ingest, no minute charge), guarded by the existing flag/spend-breaker/rate-limit stack.
+
+**(4) Review's "all reviewed → dashboard" redirect: 2 s → 8 s, and held open while a
+generate-more request is in flight** (TanStack `useIsMutating` on the shared mutation key).
+The terminal state now carries a real CTA; a 2 s redirect made it unclickable. Deviation from
+the pre-431 UX is deliberate and small.
+
 ## 2026-08-05 (night) — Issue 433: region-aware reframe (chrome removal composed with speaker cuts)
 
 Five rulings:

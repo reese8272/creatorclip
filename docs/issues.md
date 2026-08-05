@@ -1997,7 +1997,7 @@ crop treats the whole 16:9 frame as camera when much of it is chrome.
 
 ### Issue 433: Region-aware reframe — compose camera-region crop with speaker cuts
 
-- [x] **Status:** BUILT 2026-08-05 (night) — live verification on the next produced-layout upload pending · **Size:** M · **Depends:** 422 (flag on), 430 (detector)
+- [x] **Status:** DEPLOYED 2026-08-05 (night, `433aaa6`) with `CAMERA_REGION_DETECT_ENABLED=true` in prod — live verification on the next produced-layout upload pending · **Size:** M · **Depends:** 422 (flag on), 430 (detector)
 
 The Issue-430 camera-region pre-crop and the Issue-422 speaker reframe are mutually exclusive
 today: `render_clip_file` skips chrome detection when `ACTIVE_SPEAKER_REFRAME_ENABLED` is on,
@@ -2044,7 +2044,7 @@ needs a matching render-worker Deployment when Issue 275 lands.
 
 ### Issue 431: "Generate more clips" — user-triggered regeneration excluding existing windows
 
-- [ ] **Status:** open · **Size:** M · filed 2026-08-05 (user directive during the 427–430 wave)
+- [x] **Status:** DONE 2026-08-05 (night) — live smoke rides the next fresh upload · **Size:** M · filed 2026-08-05 (user directive during the 427–430 wave)
 
 Generation is deliberately one-shot idempotent (`POST /videos/{id}/clips/generate` short-circuits
 when clips exist — Issue 61). With the wider pool (12 persisted / top-8 rendered, shipped in the
@@ -2061,11 +2061,22 @@ the preference model, then "more clips" surfaces fresh windows ranked by the upd
   gate behind the existing spend guard + a per-video regeneration cap.
 - Review-screen button ("Generate more clips") shown once feedback exists or all clips reviewed.
 
+**Shipped (2026-08-05):** `POST /videos/{id}/clips/generate-more` — same guard stack as
+generate (flag + spend breaker + 10/hour + daily LLM limit + positive balance); 409 without an
+engine baseline or at `CLIP_REGEN_TOTAL_CAP` (24); `score_and_rank(exclude_windows=…)` drops
+candidates ≥80% contained (IoMin) in ANY persisted window (creator-made clips' NULL setup
+coerces to `start_s`); `append_ranked_clips` continues ranks past the max engine rank, skips
+the preference rerank (rank-collision hazard — DECISIONS), retries once on a
+`uq_clips_video_rank` race. `CLIP_REGEN_BATCH_MAX=6` per call; fill-only metadata task
+enqueued; appended clips never shortlisted/auto-rendered. Review UI: `GenerateMoreClipsButton`
+in the toolbar + the all-reviewed terminal state (redirect held open while in flight, 2 s→8 s).
+
 **Acceptance**
-- [ ] Regeneration never duplicates an existing clip window (containment vs persisted set)
-- [ ] Existing clips, feedback, and renders are untouched (append-only)
-- [ ] No minute deduction; LLM spend guarded + capped
-- [ ] Button in Review; disabled state explains when nothing new can be found
+- [x] Regeneration never duplicates an existing clip window (containment vs persisted set — `tests/test_generate_more.py`)
+- [x] Existing clips, feedback, and renders are untouched (append-only; no delete path exists in `append_ranked_clips`)
+- [x] No minute deduction; LLM spend guarded + capped (guard stack + 6/call + 24/video)
+- [x] Button in Review; honest "No new distinct moments" message when a pass finds nothing new
+- [ ] Live smoke on the next fresh upload: review → generate more → appended non-duplicate clips, metadata fills, no minute deduction
 
 ---
 

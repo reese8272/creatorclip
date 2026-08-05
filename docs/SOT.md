@@ -56,13 +56,16 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | Conditional | **Required in production** (and whenever `STORAGE_BACKEND=r2`). Synced from GitHub secrets on deploy. The bucket needs the browser-upload CORS policy — set once per environment with `scripts/r2_set_cors.py <app-origin>` (Issue 395). |
 | `UPLOAD_MAX_FILE_GB` | No | `20` — per-file abuse ceiling for direct-to-R2 multipart uploads (declared at presign, HEAD-verified at complete); the real gate is the minutes quota. `UPLOAD_MAX_MB` now bounds only the proxy paths (dev fallback + OBS `/clips/ingest`). Issue 395. |
 | `SOURCE_MEDIA_RETENTION_HOURS` | No | Default `72`; source video purge timer |
-| `CLIPS_PER_VIDEO_DEFAULT` | No | Default `8` |
+| `CLIPS_PER_VIDEO_DEFAULT` | No | Default `12` (raised from 8, 2026-08-05 — "more clips, then narrow down"; top-8 auto-render via `AUTO_RENDER_TOP_N`) |
+| `CLIP_REGEN_BATCH_MAX` | No | Default `6`. Clips appended per `POST /videos/{id}/clips/generate-more` call (Issue 431 — one scoring LLM call, no re-ingest/minute charge). |
+| `CLIP_REGEN_TOTAL_CAP` | No | Default `24`. Hard per-video ceiling on engine-generated clips (initial + appended); 409 past it (Issue 431). |
 | `MIN_VIDEOS_FOR_DNA` | No | Default `10` |
 | `MIN_SHORTS_FOR_DNA` | No | Default `5` |
 | `SHORTS_MAX_DURATION_S` | No | Default `180`. YouTube's official Shorts maximum (raised from 60s in Oct 2024). Issue 87. |
 | `PERSONALIZATION_THRESHOLD_LABELS` | No | Default `20` |
 | `LLM_TIMEOUT_SECONDS` | No | Default `120` |
-| `ACTIVE_SPEAKER_REFRAME_ENABLED` | No | Default `False`. Gates the per-frame MediaPipe reframe path in render.py (Issue 189). Keep False until render-env smoke test passes. |
+| `ACTIVE_SPEAKER_REFRAME_ENABLED` | No | Default `False`. Gates the per-frame MediaPipe reframe path in render.py (Issue 189). **ON in prod since 2026-08-05** (Issue 422 — all four unlocks verified live). |
+| `REFRAME_MIN_MAPPING_CONFIDENCE` | No | Default `0.3` (prod `0.2`). Speaker-map confidence floor for the speaker_cut rung; side-by-side layouts honestly score low because co-occurrence votes carry no signal (Issue 422 drill). |
 | `REFRAME_SAMPLE_FPS` | No | Default `5.0`. Frames/second to sample for face detection in the per-frame reframe path. Ignored when `ACTIVE_SPEAKER_REFRAME_ENABLED=false`. |
 | `TRANSCRIPTION_DIARIZE_ENABLED` | No | Default `True`. Requests per-word speaker labels (Deepgram `diarize` / AssemblyAI `speaker_labels`); additive `speaker` fields feed the reframe ladder (Issue 418). Deepgram bills +$0.0020/min for it. |
 | `SHOT_DETECT_SCDET_THRESHOLD` | No | Default `10.0`. ffmpeg scdet scene-change threshold for shot detection (Issue 419). |
@@ -136,7 +139,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── scoring.py              # Multi-signal + DNA-weighted scoring (Claude Opus 5 + features)
 │   ├── ranking.py              # DNA-weighted + preference-model rerank; merges LLM moments pre-scoring + suppress_contained (IoMin≥0.8 dedup, Issue 429) + post-ranking trim (Issue 416)
 │   ├── merge.py                # Hybrid candidate merge — LLM moments ∪ signal peaks under signal-priority NMS (Issue 416); sentence-snap + 90s clamp on LLM windows (Issue 428)
-│   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex; flag-gated per-frame reframe (Issue 189) + camera-region pre-crop (Issue 430, CAMERA_REGION_DETECT_ENABLED); Haar face BOX feeds caption avoidance (Issue 427)
+│   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex; flag-gated per-frame reframe (Issue 189) COMPOSED with the camera-region pre-crop (Issues 430+433: region-space analysis, `crop@spk`-labeled sendcmd target, CAMERA_REGION_DETECT_ENABLED); unconditional Haar face BOX feeds caption avoidance (Issues 427/433)
 │   ├── camera_region.py        # (NEW Issue 430) cv2 temporal-variance camera-region detection for produced layouts (static chrome vs moving camera); fail-open gates keep plain sources byte-identical
 │   ├── reframe.py              # (Issue 189, extended Issue 420/421) speaker-aware dynamic crop: single-VideoCapture detection pass (BlazeFace boxes + keypoints + mouth patches) → shots/turns/mapping → plan_crop_directives (J-cut, snap, punch-in suppression) → segmented-EMA sendcmd + unified wire-contract track JSON (compute_dynamic_crop); lazy imports; gated by ACTIVE_SPEAKER_REFRAME_ENABLED (default False — staging pending, Issue 422)
 │   ├── shots.py                # (NEW Issue 419) shot-change detection: ffmpeg scdet pass (lavfi.scd.time from stderr) + numpy histogram-diff fallback over the 5fps samples; total failure → [] = one shot
@@ -192,7 +195,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── auth.py                 # OAuth login/callback, session
 │   ├── creators.py             # Creator profile, DNA, onboarding state
 │   ├── videos.py               # Link/upload video, ingestion status; /videos/uploads/* presigned-multipart endpoints (Issue 395)
-│   ├── clips.py                # List candidate clips, get clip, render status; POST /clips/{id}/title-suggestions, /caption-hooks, /explanation (Issues 322/323/325); GET /clips/{id}/crop-track — persisted reframe track, 404 no_crop_track (Issue 421). ClipOut carries origin + suggested_title/description/hook + has_crop_track (L26)
+│   ├── clips.py                # List candidate clips, get clip, render status; POST /clips/{id}/title-suggestions, /caption-hooks, /explanation (Issues 322/323/325); GET /clips/{id}/crop-track — persisted reframe track, 404 no_crop_track (Issue 421). ClipOut carries origin + suggested_title/description/hook + has_crop_track (L26). POST /videos/{id}/clips/generate-more — append-mode regeneration, excludes persisted windows, caps CLIP_REGEN_BATCH_MAX/TOTAL_CAP (Issue 431)
 │   ├── review.py               # Feedback: upvote/downvote/skip/trim/format
 │   ├── upload_intel.py         # GET timing recommendation
 │   ├── improvement.py          # GET improvement brief
@@ -457,7 +460,11 @@ clips
     done-marking transaction as render_uri on EVERY render — never stale.
     Served at GET /clips/{id}/crop-track (404 no_crop_track);
     ClipOut carries only has_crop_track. NOT in clip_edit_documents —
-    worker writes would bump CAS revisions)
+    worker writes would bump CAS revisions.
+    Issue 433: `source` = the PAN-SPACE rect (the camera region when one was
+    detected, else the full frame) — keyframe x stays relative to it, so
+    frontend math is unchanged; additive `region` key {x,y,width,height}
+    (absolute source rect, provenance) present ONLY when a region was used)
 
 clip_edit_documents                  -- the creator's in-progress edit (Issue 391, migration 0052)
   -- READ BY THE RENDER PATH. POST /clips/{id}/cuts sends only `base_revision`;

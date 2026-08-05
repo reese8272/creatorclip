@@ -4,6 +4,33 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-05 (night) — Issues 433 + 431 BUILT & DEPLOYED; test videos deleted; camera-region flag ON in prod
+
+Ran the approved two-issue plan after deleting both test uploads (DB cascade + 88 R2
+artifacts verified gone; the creator re-uploads fresh once both features are live).
+
+- **Issue 433 — region-aware reframe (chrome removal ∘ speaker cuts):** sendcmd targets are
+  now always instance-labeled (`crop@spk` — bare `crop` empirically addresses EVERY crop
+  instance, which was also silently corrupting the reframe+zoom punch-in); camera-region
+  detection composes with the reframe via region-sliced analysis frames (no offset
+  arithmetic anywhere); crop track stays v1 with `source` = pan-space rect + additive
+  `region` provenance key; the Haar face pass is unconditional again, so caption
+  face-avoidance works under the reframe flag. Deployed (`433aaa6`, chain green) and
+  `CAMERA_REGION_DETECT_ENABLED=true` set in prod (render-worker recreated; reframe on,
+  floor 0.2). Live check rides the next produced-layout upload.
+- **Issue 431 — "Generate more clips" (append-mode regeneration):**
+  `POST /videos/{id}/clips/generate-more` re-runs the ONE scoring call over persisted
+  signals (no re-ingest, no minute charge), excludes windows ≥80% IoMin-contained in ANY
+  persisted clip, appends at ranks max+1… (preference rerank deliberately skipped — rank
+  collision; DECISIONS), caps 6/call + 24/video, fill-only metadata enqueue. Review UI:
+  `GenerateMoreClipsButton` in the toolbar + all-reviewed terminal state; redirect held
+  open while in flight (and 2 s→8 s so the CTA is clickable). Deployed (`e6d7334`).
+- **Gates:** backend **2871/0** (9 new tests in `tests/test_generate_more.py`), Layer 0 all
+  ok (coverage 84.2, clip_engine 92.1), frontend 641/641 on node 22 + tsc + build + eslint
+  0 errors (node-26 runs false-fail the localStorage suites — use 22).
+- **Next:** fresh upload → verify cuts + no source chrome + captions (433/427), then review
+  → "Generate more clips" live smoke (431).
+
 ## 2026-08-05 (late evening) — SPEAKER CUTS LIVE: Issue 422 CLOSED (all four unlocks), Issue 432 filed+fixed+verified, universal 90 s clamp, Issue 433 filed
 
 Post-deploy assessment of the first wave upload (video `6c221f12`) surfaced "no cuts" +
