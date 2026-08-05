@@ -440,10 +440,15 @@ def render_clip_file(
     style_preset: dict | None = None,
     transcript_segments: list[dict] | None = None,
     peak_s: float | None = None,
-) -> None:
+) -> dict | None:
     """
     Cut [start_s, end_s] from source, crop to 9:16 centered on detected face,
     scale to OUTPUT_W×OUTPUT_H, write to out_path (mp4).
+
+    Returns the computed crop-track dict (the UNIFIED wire contract from
+    ``clip_engine.reframe.compute_dynamic_crop`` — Issue 421) when the
+    speaker-aware reframe ran, else ``None`` (flag off → the caller nulls any
+    previously persisted track so it can never go stale).
 
     ``style_preset`` is a dict with optional keys:
       - ``subtitle``: one of "bold_pop" | "bold_pop_highlight" | "gradient_slide"
@@ -503,16 +508,26 @@ def render_clip_file(
     from config import settings as _settings  # local import avoids circular dep at module init
 
     sendcmd_path: Path | None = None  # set when the per-frame path is active
+    reframe_track: dict | None = None  # the wire-contract dict returned to the caller
+
+    # Punch-in activity is needed BEFORE the reframe call: the planner
+    # suppresses speaker cuts inside the zoom pulse (±0.6s of the peak).
+    punch_in_active = bool(
+        style_preset
+        and style_preset.get("zoom_on_peak")
+        and peak_s is not None
+        and 0.0 <= (peak_s - start_s) <= duration
+    )
 
     if _settings.ACTIVE_SPEAKER_REFRAME_ENABLED:
-        # Per-frame active-speaker reframe (Issue 189).
+        # Speaker-aware dynamic crop (Issue 189 + Issue 420/421).
         # Principle 4 (Pattern interrupt) + Principle 11 (Audience-fit).
-        # Import the module (not the function) so `clip_engine.reframe.compute_reframe_crop`
+        # Import the module (not the function) so `clip_engine.reframe.compute_dynamic_crop`
         # is the canonical patch target in tests (patching a `from … import` binding
         # would only patch the local reference, not the source).
         import clip_engine.reframe as _reframe_mod  # noqa: PLC0415
 
-        smoothed_track, sendcmd_script = _reframe_mod.compute_reframe_crop(
+        reframe_result = _reframe_mod.compute_dynamic_crop(
             source_path=source_path,
             start_s=start_s,
             end_s=end_s,
@@ -520,7 +535,12 @@ def render_clip_file(
             frame_height=frame_h,
             crop_w=crop_w,
             sample_fps=_settings.REFRAME_SAMPLE_FPS,
+            transcript_segments=transcript_segments,
+            punch_in_peak_s=peak_s if punch_in_active else None,
         )
+        smoothed_track = reframe_result.track_points
+        sendcmd_script = reframe_result.sendcmd_text
+        reframe_track = reframe_result.track_json
         if smoothed_track:
             # Use the first smoothed center as the static fallback; sendcmd
             # will override x dynamically if there are multiple points.
@@ -534,14 +554,15 @@ def render_clip_file(
             sendcmd_path.parent.mkdir(parents=True, exist_ok=True)
             sendcmd_path.write_text(sendcmd_script)
             logger.info(
-                "Per-frame reframe enabled for %s: sendcmd written to %s",
+                "Per-frame reframe enabled for %s: mode=%s, sendcmd written to %s",
                 source_path.name,
+                reframe_result.mode,
                 sendcmd_path,
             )
         else:
             # Single-sample or empty track: fall through to static crop.
             logger.info(
-                "Per-frame reframe: single-sample track for %s — using static x_offset=%d",
+                "Per-frame reframe: static/single-sample track for %s — using static x_offset=%d",
                 source_path.name,
                 x_offset,
             )
@@ -583,10 +604,8 @@ def render_clip_file(
     # Auto-zoom punch-in (Issue 184): applied to the framed video BEFORE subtitles
     # so the captions stay steady while the content zooms. Off unless the creator
     # opted in and the peak actually falls inside this clip window.
-    if style_preset and style_preset.get("zoom_on_peak") and peak_s is not None:
-        peak_offset_s = peak_s - start_s
-        if 0.0 <= peak_offset_s <= duration:
-            vf_parts.append(_punch_in_filter(peak_offset_s, out_w, out_h))
+    if punch_in_active and peak_s is not None:
+        vf_parts.append(_punch_in_filter(peak_s - start_s, out_w, out_h))
 
     ass_path: Path | None = None
     if style_preset:
@@ -697,6 +716,7 @@ def render_clip_file(
     logger.info(
         "Rendered clip %s→%s style=%s (%s)", source_path.name, out_path.name, style_preset, vf
     )
+    return reframe_track
 
 
 # Per-segment audio fade applied at every splice point in render_cleaned_clip_file.

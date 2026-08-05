@@ -1992,14 +1992,19 @@ async def _load_clip_render_plan(clip_id: str, creator_id: str) -> _ClipRenderPl
         peak_s = clip.peak_s  # for the opt-in auto-zoom punch-in (Issue 184)
         clip.render_status = RenderStatus.running
         style_preset = clip.style_preset  # snapshot before session closes
-        # Transcript segments only needed when style_preset selects a caption
-        # style — skip the load otherwise (Issue 133). Gate off the single
-        # source of truth so new styles (e.g. bold_pop_highlight, Issue 183)
-        # don't silently render captionless.
+        # Transcript segments are needed when style_preset selects a caption
+        # style (Issue 133 — gate off the single source of truth so new styles
+        # don't silently render captionless) OR when the speaker-aware reframe
+        # is on (Issue 421 — the cut planner reads diarized speaker turns from
+        # the transcript, whatever the caption style). Skip the load otherwise.
         from clip_engine.captions import VALID_STYLES as _CAPTION_STYLES
+        from config import settings as _settings
 
         transcript_segments: list[dict] | None = None
-        if style_preset and style_preset.get("subtitle") in _CAPTION_STYLES:
+        needs_transcript = bool(
+            style_preset and style_preset.get("subtitle") in _CAPTION_STYLES
+        ) or _settings.ACTIVE_SPEAKER_REFRAME_ENABLED
+        if needs_transcript:
             transcript = await session.get(Transcript, video.id)
             if transcript and isinstance(transcript.segments_jsonb, dict):
                 segments = transcript.segments_jsonb.get("segments")
@@ -2109,7 +2114,9 @@ async def _encode_and_upload_clip(
             stage="render",
             clip_duration_s=plan.clip_duration_s,
         )
-        await asyncio.to_thread(
+        # render_clip_file returns the computed crop-track dict (unified wire
+        # contract, Issue 421) when the speaker-aware reframe ran, else None.
+        reframe_track = await asyncio.to_thread(
             render_clip_file,
             source_path=src,
             start_s=plan.setup_start_s if plan.setup_start_s is not None else plan.start_s,
@@ -2143,6 +2150,11 @@ async def _encode_and_upload_clip(
             clip.render_uri = render_uri
             if poster_uri:
                 clip.poster_uri = poster_uri
+            # Crop track rides the SAME done-marking transaction as render_uri
+            # (Issue 421): every render replaces it — or nulls it when the
+            # reframe flag is off — so the persisted track always describes
+            # the render the creator sees, never a stale geometry.
+            clip.reframe_track_jsonb = reframe_track
             clip.render_status = RenderStatus.done
             await session.commit()
 

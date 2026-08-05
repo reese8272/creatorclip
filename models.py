@@ -702,6 +702,15 @@ class Clip(Base):
     # no angle brackets) so the worker never has to truncate an applied value.
     applied_title: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     applied_description: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Speaker-aware crop track (migration 0055, Issue 421) — the UNIFIED wire
+    # contract dict computed by clip_engine.reframe.compute_dynamic_crop.
+    # NULL = no track (reframe flag off at render time / pre-feature clip);
+    # recomputed and replaced (or nulled) in the same done-marking transaction
+    # as render_uri on EVERY render — never stale. Served at
+    # GET /clips/{id}/crop-track; the list surface only carries the boolean
+    # has_crop_track (a track is ~15–20 KB). NOT part of ClipEditDocument —
+    # worker writes there would bump CAS revisions and kill client autosaves.
+    reframe_track_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
