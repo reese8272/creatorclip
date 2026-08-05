@@ -5,6 +5,50 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-05 (evening) — ACTIVE_SPEAKER_REFRAME_ENABLED flipped ON in prod (Issue 422 / 189 reversal entry)
+
+**Decision:** the speaker-aware reframe is LIVE in production (`ACTIVE_SPEAKER_REFRAME_ENABLED=true`
+in the VM env, consumed by the render-worker — all renders route there since Issue 432), with the
+new `REFRAME_MIN_MAPPING_CONFIDENCE=0.2` (code default stays 0.3). This closes Issue 189's four
+unlock criteria with recorded evidence, gathered on the live two-speaker fixture (video `6c221f12`,
+rank-4 clip `746467e7`, window 1172.7–1211.8 — speaker 1 asks a question for ~4 s, speaker 0
+answers):
+
+- **Unlock #1 (image + detector):** `mediapipe 1.0.0` imports in the prod worker;
+  `_create_face_detector()` returns a live Tasks `FaceDetector` (cv2 4.13.0 owned by
+  opencv-contrib per the Dockerfile force-reinstall).
+- **Unlock #2 (visual cut):** first drill (floor 0.3) → mode `face_pan`, mapping confidence
+  0.248, pan keyframes x 268→1132 — the crop swept ACROSS the side-by-side panel seam
+  (broken-looking mid-transition frames). Second drill (floor 0.2) → mode `speaker_cut`, ONE cut
+  at t=5.2 (from_x 271 → to_x 1121, speaker 0) right after the diarized turn at t≈4.1;
+  frame-extraction confirms a clean hard camera-to-camera cut with correct framing on both sides.
+  The crop-track payload carries the cut (`GET /clips/{id}/crop-track`).
+- **Unlock #3 (timing):** `reframe_stages` on the 39 s clip: detect 19 109 ms, shots 13 466 ms,
+  plan 23 ms (195 samples @5 fps). Overhead ≈ 0.84× clip duration, inside the duration-scaled
+  render timeout (`max(120, 4×duration)`); detection dominates as designed.
+- **Unlock #4 (cleanup):** ffmpeg SIGKILLed mid-encode with `/tmp/tmp6jrtbvnq.sendcmd` live —
+  the file was gone within 2 s (the `finally` cleanup), and the Celery retry re-rendered the
+  clip to `done` with no leftovers.
+
+**Why floor 0.2:** the mapping-confidence margin ratio is structurally depressed on side-by-side
+two-camera layouts — co-occurrence and largest-face votes carry no signal when both faces are
+always on screen, leaving mouth-motion as the only discriminator — yet these are exactly the
+layouts where a pan looks broken (panel-seam sweep) and a hard cut is correct. The floor is now
+env-tunable (`REFRAME_MIN_MAPPING_CONFIDENCE`, commit `4ffe7da`) so future fixtures calibrate it
+without code changes; the ladder still degrades to `face_pan` below it.
+
+**Known tradeoff (filed as Issue 433):** with the reframe on, the Issue-430 camera-region
+pre-crop is skipped by design (sendcmd x-commands and the persisted crop track are
+full-frame-coordinate contracts), so produced-layout chrome remains in frame until the
+region-aware reframe integration lands. `CAMERA_REGION_DETECT_ENABLED` stays false.
+
+**Verbose-logging deviation, opened and closed same session:** `VERBOSE_LOGGING` +
+`VERBOSE_LOGGING_ALLOW_PROD` were enabled on the render-worker ONLY, solely to capture the
+`reframe_stages` timings the checklist requires, and removed from the VM env before the next
+deploy could propagate them to the app containers.
+
+---
+
 ## 2026-08-05 — Shorts clip-quality wave (Issues 427–430 + Opus upgrade + wider pool + 422 unblock)
 
 Ten rulings from the wave fixing the four clip-audit defects plus the user's four directives

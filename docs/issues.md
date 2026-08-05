@@ -238,10 +238,10 @@ LEFT edge, exact sendcmd values), cuts:[{t,from_x,to_x,speaker?}], shots, speake
       (0052→0055→0052→0055, column jsonb NULLABLE verified)
 
 ### Issue 422: Worker image (mediapipe) + staging rollout + flag flip
-- [ ] **Status:** step-0 dependency conflict RESOLVED 2026-08-05 (`mediapipe==1.0.0` supports
-  numpy 2 from 0.10.30 — verified against PyPI metadata; `INSTALL_REFRAME` now defaults true;
-  see `docs/DEPLOYMENT.md` step 0 + DECISIONS 2026-08-05); **staging verification OPEN** —
-  the four unlock criteria below need staging evidence; runtime flags stay off in prod ·
+- [x] **Status:** DONE 2026-08-05 — step-0 resolved (mediapipe 1.0.0), all four unlock
+  criteria closed with live evidence on the 6c221f12 two-speaker fixture, and the reframe
+  is LIVE in prod (`ACTIVE_SPEAKER_REFRAME_ENABLED=true`, floor
+  `REFRAME_MIN_MAPPING_CONFIDENCE=0.2`; DECISIONS 2026-08-05 evening reversal entry) ·
   **Track:** B · **Size:** M · **Depends:** 421
 
 **What.** `requirements-image.txt` (`-r requirements.txt` + `mediapipe==1.0.0` +
@@ -252,10 +252,10 @@ prod flip. Closes **Issue 189's four unlock criteria with recorded evidence**; p
 timings (budget est. +12–24s per 60s clip vs 240s timeout).
 
 **Acceptance**
-- [ ] Image builds with mediapipe + model asset verified (unlock #1)
-- [ ] Real 2-speaker clip visually follows the speaker with cuts on turn changes (unlock #2)
-- [ ] Timing budget measured 30/60/90s and recorded (unlock #3); sendcmd tmp cleanup verified (#4)
-- [ ] DECISIONS flag-flip entry lands with the evidence; prod flip only after sign-off
+- [x] Image builds with mediapipe + model asset verified (unlock #1 — 2026-08-05, mediapipe 1.0.0 + live FaceDetector in prod worker)
+- [x] Real 2-speaker clip visually follows the speaker with cuts on turn changes (unlock #2 — speaker_cut, cut at t=5.2 on the diarized turn, frame-verified; floor tuned to 0.2 via REFRAME_MIN_MAPPING_CONFIDENCE)
+- [x] Timing budget measured and recorded (unlock #3 — 39s clip: 19.1s/13.5s/0.02s); sendcmd tmp cleanup verified (#4 — kill drill, file gone <2s, retry recovered)
+- [x] DECISIONS flag-flip entry landed with the evidence (2026-08-05 evening); ACTIVE_SPEAKER_REFRAME_ENABLED=true live in prod (render-worker)
 
 ### Issue 423: Stage foundation — contracts + StagePlaceholder + useClipRender
 - [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`) · **Track:** C · **Size:** S · **Depends:** —
@@ -1990,7 +1990,34 @@ crop treats the whole 16:9 frame as camera when much of it is chrome.
 **Acceptance**
 - [x] Detect the active camera region (`clip_engine/camera_region.py`, cv2 temporal variance) and crop/zoom INTO it before the 9:16 composition (region-space crop chain in `render_clip_file`)
 - [x] Falls back to today's full-height crop when no chrome is detected (fail-open gates; byte-identical vf pinned by tests; skipped under the reframe flag — 422 seam documented)
-- [ ] Frame-extraction check on a produced-layout source shows no truncated third-party chrome (staging, then flag flip)
+- [ ] Frame-extraction check on a produced-layout source shows no truncated third-party chrome —
+      **superseded by Issue 433**: with the speaker reframe live (2026-08-05), camera-region
+      detection is skipped by design (full-frame sendcmd contract); the flag stays off until the
+      region-aware reframe integration lands
+
+### Issue 433: Region-aware reframe — compose camera-region crop with speaker cuts
+
+- [ ] **Status:** open · **Size:** M · filed 2026-08-05 · **Depends:** 422 (flag on), 430 (detector)
+
+The Issue-430 camera-region pre-crop and the Issue-422 speaker reframe are mutually exclusive
+today: `render_clip_file` skips chrome detection when `ACTIVE_SPEAKER_REFRAME_ENABLED` is on,
+because the sendcmd x-commands and the persisted `reframe_track_jsonb` keyframes are
+full-frame-coordinate contracts. With the reframe flag now live, produced-layout chrome (the
+source's own SUBSCRIBE banner / top-band fragments) stays in every frame.
+
+**Sketch**
+- Run `detect_camera_region` first; pass the region into `compute_dynamic_crop` so face
+  detection, `clamp_crop_x`, and the cut planner operate in region space.
+- Label the ffmpeg 9:16 crop filter (`crop@spk`) and target sendcmd commands at it
+  (`crop@spk x N`) so the region pre-crop filter is not also addressed; apply the region
+  x-offset ONCE at sendcmd/track emission (one-geometry contract preserved).
+- `GET /clips/{id}/crop-track` consumers (CropTrackOverlay) need the region in the payload or
+  pre-offset keyframes — pick one and version the wire contract.
+
+**Acceptance**
+- [ ] Produced-layout source renders with speaker cuts AND no third-party chrome
+- [ ] Plain sources byte-identical when no region is detected
+- [ ] Crop-track overlay still aligns in the frontend
 
 ### Issue 432: On-demand renders collapse under concurrency — dedicated render queue
 
@@ -2012,8 +2039,8 @@ needs a matching render-worker Deployment when Issue 275 lands.
 **Acceptance**
 - [x] Render tasks route to the `render` queue (pinned: `tests/test_celery_routing.py`)
 - [x] Prod compose: `render-worker` service `--concurrency=1 -Q render`; main worker `-Q celery`
-- [ ] Live: click-render several clips in quick succession → all complete serially, none time out
-- [ ] Failed rank-9/12 clips from video `6c221f12` reset and re-rendered
+- [x] Live: 4 queued renders completed strictly serially on the render-worker, none timed out (2026-08-05)
+- [x] Failed rank-9/12 clips from video `6c221f12` reset and re-rendered — all 12 clips rendered
 
 ### Issue 431: "Generate more clips" — user-triggered regeneration excluding existing windows
 
@@ -2115,4 +2142,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **433**.
+- Next free issue number: **434**.

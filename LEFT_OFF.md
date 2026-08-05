@@ -1,12 +1,13 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-05 (evening) · **Branch:** `main` @ `2797385` (wave committed + pushed) ·
-working tree clean after this close-out · in sync with `origin/main`
-**Prod:** `https://autoclip.studio` — **the 427–430 wave IS DEPLOYED AND LIVE** (docker-publish
-31034922676 green in 7m42s incl. the new mediapipe layer; deploy 31035542194 green; `/health` 200;
-worker imports `mediapipe 1.0.0` + `cv2 4.13.0`; live config verified: pool 12 / signal 12 /
-LLM 6 / top-8 render / Opus 5 / camera-region flag off). The VM `.env` had `CLIPS_PER_VIDEO_DEFAULT=8`
-pinned — updated to 12 and app+worker recreated.
+**Last updated:** 2026-08-05 (late evening) · **Branch:** `main` @ `4ffe7da` + this docs
+close-out · in sync with `origin/main` after push
+**Prod:** `https://autoclip.studio` — **SPEAKER CUTS ARE LIVE** (Issue 422 CLOSED: all four
+unlocks evidenced, `ACTIVE_SPEAKER_REFRAME_ENABLED=true` +
+`REFRAME_MIN_MAPPING_CONFIDENCE=0.2` in the VM env, renders on the dedicated serial
+`render-worker` — Issue 432). The 427–430 wave was already live; post-deploy assessment of
+video `6c221f12` (12 clips, sentence-clean opens, no dupes, Opus 5 confirmed) drove this
+session's fixes. Deploy chain green ×3 today.
 **Git note:** `stash@{0}` remains the owner's own "wip LEFT_OFF before research-branch checkout"
 stash — popping it onto this file WILL conflict; resolve by hand or drop deliberately.
 
@@ -16,31 +17,29 @@ stash — popping it onto this file WILL conflict; resolve by hand or drop delib
 
 ## CURRENT FOCUS
 
-**The Shorts clip-quality wave (Issues 427–430 + Opus 5 + 12-clip pool + caption position +
-Issue 422 unblock) is DEPLOYED TO PROD — what remains is live verification on a real video.**
-Ten rulings in `docs/DECISIONS.md` (2026-08-05 clip-quality wave entry); session log in
-`docs/PROJECT_STATE.md` top entry.
+**Speaker cuts, the serial render queue, and the universal 90 s clamp are LIVE and
+verified; the active tail is Issue 433 (region-aware reframe — cuts AND chrome removal
+together) plus the parked product items.** Evidence + rulings: `docs/DECISIONS.md` two
+2026-08-05 entries; session log: `docs/PROJECT_STATE.md` top two entries.
 
 ## → NEXT ACTIONS (in order)
 
-1. **Live-verify on a real upload** (audit video `e290e6f4` purges ~2026-08-08;
-   re-upload the 273 MB podcast if gone) and verify: **12 persisted clips / top 8 rendered**;
-   every `setup_start_s` on a sentence start (psql audit method below); no contained duplicate
-   pair; no clip > 90 s; hooks match the first ~5 s of speech; Opus 5 token logs + cache hits
-   (`cache_read_input_tokens > 0` on the second video).
-2. **Issue 427 spot-check:** re-render one clip → presign → frame-extract → captions sit in the
-   lower band off the face; try `caption_position` top/middle/bottom from the CaptionStylePanel
-   and the brand kit. Then check the last 427 acceptance box in `docs/issues.md`.
-3. **Issue 430 staging flip:** on the VM set `CAMERA_REGION_DETECT_ENABLED=true` (staging
-   compose), render the produced-layout podcast source, frame-check that no third-party chrome
-   is truncated → flip prod → check the last 430 box.
-4. **Issue 422 staging checklist** (`docs/DEPLOYMENT.md` § staging rollout): step 0 is RESOLVED
-   (mediapipe 1.0.0); unlock #1 half-verified live 2026-08-05 (`import mediapipe` → 1.0.0 in
-   the prod worker; still record `_create_face_detector() is not None`). Unlocks #2–#4 need
-   the user's 2-speaker fixture on staging; flags stay off in prod until sign-off.
-5. **Parked:** Issue 431 ("Generate more clips" — filed, not built) · Issue-395 live drills
-   (>2 GB, reload-resume, session-expiry) · operator punch-list (`docs/GO_LIVE.md`): #29 OAuth
-   verification · #26/#28 friend beta · #282 uptime monitor · #255 key escrow.
+1. **Optional but nice:** the video's other 11 clips were rendered BEFORE cuts went live —
+   only rank 4 (`746467e7`) and rank 8 (`785859a3`) carry the speaker-cut render. Re-render
+   any clip from Review (or reset+`celery call` per the drill pattern) to get cuts on it;
+   they queue serially on the render-worker.
+2. **Issue 433 (next build): region-aware reframe** — compose the Issue-430 chrome removal
+   with speaker cuts (labeled `crop@spk` filter + region offset applied once at
+   sendcmd/track emission; wire-contract versioning for CropTrackOverlay). Until then the
+   source's own SUBSCRIBE banner stays in frame (documented tradeoff, DECISIONS).
+3. **Issue 431 ("Generate more clips")** — filed with sketch; run the issue workflow when
+   scheduled.
+4. **Watch for**: 427 live acceptance box (frame spot-check done informally — captions in
+   band, off face; formally re-check after any caption_position experimentation) · caption
+   position UX feedback · Opus 5 cache HITS on the next video (`cache_read_input_tokens > 0`).
+5. **Parked:** Issue-395 live drills (>2 GB, reload-resume, session-expiry) · operator
+   punch-list (`docs/GO_LIVE.md`): #29 OAuth verification · #26/#28 friend beta · #282 uptime
+   monitor · #255 key escrow.
 
 ### Local gate incantations
 
@@ -102,7 +101,7 @@ FLOOR 21; `mid_sentence_open` verified RED on the legacy path first) · Layer-0 
 |---|---|
 | Repo | `github.com/reese8272/creatorclip` · prod = VM (`ssh creatorclip-vm`, standing permission), `/opt/autoclip`, docker-compose, Cloudflare tunnel |
 | Deploy chain | push to `main` → docker-publish → deploy (staging gate → prod). **A failed image build silently SKIPS deploy** — `gh run list` after every push. After merge: `git push origin main:staging` |
-| Wave flags | `CAMERA_REGION_DETECT_ENABLED=false` (flip after staging frame check) · `ACTIVE_SPEAKER_REFRAME_ENABLED=false` (422 unlocks pending) · `CAPTION_*` + `CAMERA_REGION_*` knobs in `.env.example` |
+| Wave flags | `ACTIVE_SPEAKER_REFRAME_ENABLED=true` + `REFRAME_MIN_MAPPING_CONFIDENCE=0.2` LIVE (VM .env; DECISIONS 2026-08-05 evening) · `CAMERA_REGION_DETECT_ENABLED=false` (superseded by Issue 433 — skipped by design while reframe owns geometry) · `CAPTION_*` knobs in `.env.example` |
 | Clip-quality models | `ANTHROPIC_MODEL_VIDEO_CONTEXT/SCORING/CLIP_METADATA = claude-opus-5` (env-overridable; billing follows configured model) |
 | Pool | `CLIPS_PER_VIDEO_DEFAULT=12` · `CLIP_SIGNAL_POOL_MAX=12` · `LLM_CANDIDATES_MAX=6` · `AUTO_RENDER_TOP_N=8` |
 | Audit video | `videos.id = e290e6f4-12b9-4d6c-a4c2-d56542502740` (26:57 podcast) — source purges ~2026-08-08; re-upload if needed |
@@ -125,8 +124,15 @@ FLOOR 21; `mid_sentence_open` verified RED on the legacy path first) · Layer-0 
 - **Opus 5 call sites:** thinking is on by default — `max_tokens` covers thinking + text; never
   lower the raised caps back to 2000. Cache floors deliberately stay 1024 (shared with Sonnet
   callers — DECISIONS ruling 6).
-- **mediapipe 1.0.0 image:** first `docker-publish` after commit is the real test; contrib
-  force-reinstall in the Dockerfile is load-bearing (two opencv wheels share the cv2 path).
+- **mediapipe 1.0.0 image:** proven in prod (three green publishes); contrib force-reinstall
+  in the Dockerfile is load-bearing (two opencv wheels share the cv2 path).
+- **Render topology (Issue 432):** ALL ffmpeg tasks run on `render-worker` (`-Q render`,
+  concurrency 1, node name `render@%h` — single `%`, `%%h` breaks the healthcheck). The main
+  worker consumes `-Q celery` only. Enqueue drills with
+  `docker compose exec -T worker celery -A worker.celery_app call worker.tasks.render_clip --args '["<id>"]'`
+  after resetting `render_status='pending'` (the done-with-uri redelivery guard skips otherwise).
+- **Reframe floor:** side-by-side layouts honestly score LOW mapping confidence (0.248 on the
+  live fixture) — don't "fix" the mapping when tuning; the floor knob exists for this.
 - **Pre-existing local failures (not this wave):** `test_render_summary_file_real_ffmpeg_smoke`
   fails on pristine base (local ffmpeg env — OFF_COURSE_BUGS 2026-08-05) ·
   `test_response_models` env-dependent gap · node-26 jsdom gotcha (.nvmrc fix still unfiled).

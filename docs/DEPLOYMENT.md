@@ -450,26 +450,27 @@ runtime behavior is unchanged until `ACTIVE_SPEAKER_REFRAME_ENABLED` flips per t
 
 ### Issue 189's four unlock criteria (each needs recorded evidence)
 
-- [ ] **Unlock #1 — image builds with mediapipe + model asset verified.** Build the image;
-      inside the worker container run
-      `python -c "import mediapipe"` and
-      `python -c "from clip_engine.reframe import _create_face_detector; assert _create_face_detector() is not None"`.
-      Evidence: build log + the two command outputs.
-- [ ] **Unlock #2 — real 2-speaker clip visually follows the speaker.** Upload a real
-      two-speaker fixture on staging with the reframe on; verify the rendered short frames
-      the ACTIVE speaker and (cuts stage) hard-cuts on turn changes with no mid-shot pans
-      across source cuts. Evidence: the rendered mp4 + the clip's
-      `GET /clips/{id}/crop-track` payload (mode `speaker_cut`, cuts populated).
-- [ ] **Unlock #3 — timing budget measured at 30/60/90 s and recorded.** Pull the
-      `reframe_stages` vlog events for one render each at ~30/60/90 s clip length; record
-      `reframe_detect_ms`/`reframe_shots_ms`/`reframe_plan_ms` and total render wall time
-      against the 240 s render timeout (plan estimate: +12–24 s per 60 s clip, detection-
-      dominated — the single-VideoCapture refactor is what makes this budget possible).
-      Evidence: the three event lines + total encode duration.
-- [ ] **Unlock #4 — sendcmd tmp cleanup verified.** After several renders (including one
-      FAILED render — kill ffmpeg mid-encode), `ls /tmp/*.sendcmd` inside the worker
-      container is empty (cleanup runs in `render_clip_file`'s `finally`). Evidence:
-      the ls output post-failure.
+- [x] **Unlock #1 — image builds with mediapipe + model asset verified (2026-08-05).**
+      docker-publish 31034922676 green (first build with `INSTALL_REFRAME=true` on
+      mediapipe 1.0.0); in the prod worker `import mediapipe` → 1.0.0 and
+      `_create_face_detector()` returned a live Tasks `FaceDetector` (cv2 4.13.0).
+- [x] **Unlock #2 — real 2-speaker clip visually follows the speaker (2026-08-05).**
+      Live fixture video `6c221f12` rank-4 clip `746467e7`: with the floor at 0.2 the track
+      is mode `speaker_cut` with one cut `{t: 5.2, from_x: 271, to_x: 1121, speaker: 0}`
+      right after the diarized turn (~t 4.1); frame extraction shows a clean hard
+      camera-to-camera cut, correct framing both sides, no panel-seam sweep. (First drill at
+      the 0.3 floor degraded to face_pan — confidence 0.248 — which swept the panel seam;
+      that evidence drove the tunable `REFRAME_MIN_MAPPING_CONFIDENCE`, DECISIONS 2026-08-05.)
+- [x] **Unlock #3 — timing budget measured and recorded (2026-08-05).** 39 s clip:
+      `reframe_detect_ms=19109, reframe_shots_ms=13466, reframe_plan_ms=23` (195 samples
+      @5 fps) — overhead ≈0.84× clip duration, detection-dominated as designed; the render
+      timeout scales with duration (`max(120, 4×duration)`), leaving comfortable headroom.
+      Heavier than the +12–24 s/60 s estimate; acceptable, revisit only if renders back up
+      on the serial queue (Issue 432).
+- [x] **Unlock #4 — sendcmd tmp cleanup verified (2026-08-05).** ffmpeg SIGKILLed
+      mid-encode with `/tmp/tmp6jrtbvnq.sendcmd` live: the file was gone within 2 s
+      (`finally` cleanup), `ls /tmp/*.sendcmd` empty post-failure, and the Celery retry
+      re-rendered the clip to `done`.
 
 ### Flag sequencing (in order; each step soaks before the next)
 

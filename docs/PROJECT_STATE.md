@@ -4,6 +4,42 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-05 (late evening) — SPEAKER CUTS LIVE: Issue 422 CLOSED (all four unlocks), Issue 432 filed+fixed+verified, universal 90 s clamp, Issue 433 filed
+
+Post-deploy assessment of the first wave upload (video `6c221f12`) surfaced "no cuts" +
+4 failed on-demand renders + a 100.6 s clip; all three resolved same session. Evidence and
+rulings: `docs/DECISIONS.md` 2026-08-05 evening entry; checklist: `docs/DEPLOYMENT.md`.
+
+- **Issue 422 CLOSED — the speaker-aware reframe is LIVE in prod.** All four Issue-189
+  unlocks recorded on the live 2-speaker fixture: mediapipe 1.0.0 + FaceDetector in the prod
+  worker (#1); a frame-verified hard camera-to-camera cut at t=5.2 on the diarized turn
+  (#2 — `speaker_cut`, crop-track cut `{t:5.2, from_x:271, to_x:1121}`); stage timings
+  19.1 s/13.5 s/0.02 s on a 39 s clip (#3); kill-drill cleanup, sendcmd gone <2 s + retry
+  recovery (#4). Key finding en route: the 0.3 mapping-confidence floor rejected an honest
+  0.248 mapping on the side-by-side layout (co-occurrence votes carry no signal when both
+  faces always co-occur) and the resulting face_pan swept the panel seam — the floor is now
+  the env-tunable `REFRAME_MIN_MAPPING_CONFIDENCE` (default 0.3; prod 0.2).
+- **Issue 432 filed + fixed + live-verified:** 4 concurrent on-demand render clicks starved
+  ffmpeg into collective timeout on the 4-core VM. All ffmpeg tasks now route to a dedicated
+  `render` queue consumed by a new `render-worker` compose service (`--concurrency=1`);
+  routing pinned by `tests/test_celery_routing.py`. The 4 failed clips re-rendered strictly
+  serially — all 12 clips on the video are rendered.
+- **90 s ceiling now universal:** a signal window stretched to 100.6 s by edge snapping
+  (rank 10); `snap_candidates_to_sentences` now applies `CLIP_TARGET_MAX_S` to every
+  candidate, sentence-aligned and floored past the peak.
+- **Issue 433 filed:** camera-region pre-crop (430) and the reframe are mutually exclusive
+  (full-frame sendcmd contract) — with cuts live, produced-layout chrome stays in frame until
+  the region-aware integration (labeled crop filter + offset-once emission). 430's staging
+  flip is superseded; `CAMERA_REGION_DETECT_ENABLED` stays false.
+- **Also verified live this session:** sentence-clean opens on the new video (rank 1 exactly
+  at the sentence start; rank 2 in the inter-sentence pause), 12-clip pool / top-8
+  auto-render, no contained duplicates (max IoMin ≈ 0.28), 3-word caption groups at ~72%
+  height off the face, Opus 5 on all three clip-quality calls with 1 h caches written.
+- **Gates:** backend **2856/0** (new routing + ladder-floor + clamp tests) across the two
+  ship commits (`a4d5d95`, `4ffe7da`); deploy chain green ×2; prod healthy.
+
+---
+
 ## 2026-08-05 — Shorts clip-quality wave BUILT: Issues 428 + 429 done, 427 + 430 code-complete (live spot-checks owed), Opus 5 + 12-clip pool + caption position + 422 unblock
 
 The four clip-audit defects from the first live A→B run, plus four user directives, in one
