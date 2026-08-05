@@ -5,7 +5,12 @@ DB-free, import-only. Tests the wrap_untrusted helper added in Issue 224.
 
 import json
 
-from knowledge.util import extract_json_block, extract_transcript_range, wrap_untrusted
+from knowledge.util import (
+    extract_json_block,
+    extract_transcript_range,
+    extract_transcript_window,
+    wrap_untrusted,
+)
 
 
 class TestExtractJsonBlock:
@@ -223,3 +228,46 @@ class TestExtractTranscriptRange:
         long_segments = {"segments": [{"start": 0.0, "end": 5.0, "text": "x" * 2000}]}
         text = extract_transcript_range(long_segments, 0.0, 5.0, max_chars=50)
         assert len(text) == 50
+
+
+class TestExtractTranscriptWindow:
+    """Issue 414 — clip-window transcript extraction with midpoint assignment
+    (the scoring.py rule): a segment belongs to the window iff its midpoint
+    falls in [start_s, end_s), so adjacent windows partition the transcript."""
+
+    _SEGMENTS = {
+        "segments": [
+            {"start": 0.0, "end": 5.0, "text": "Minute zero intro."},
+            {"start": 55.0, "end": 65.0, "text": "Straddles the boundary."},  # midpoint 60.0
+            {"start": 65.0, "end": 75.0, "text": "Inside the window."},
+            {"start": 118.0, "end": 122.0, "text": "Straddles the end."},  # midpoint 120.0
+            {"start": 130.0, "end": 140.0, "text": "After the window."},
+        ]
+    }
+
+    def test_returns_only_midpoint_assigned_segments(self) -> None:
+        text = extract_transcript_window(self._SEGMENTS, 60.0, 120.0)
+        assert "Straddles the boundary" in text  # midpoint 60.0 → included (>= start)
+        assert "Inside the window" in text
+        assert "Straddles the end" not in text  # midpoint 120.0 → excluded (half-open end)
+        assert "Minute zero intro" not in text
+        assert "After the window" not in text
+
+    def test_adjacent_windows_partition_segments(self) -> None:
+        """A straddling segment lands in exactly ONE of two adjacent windows."""
+        first = extract_transcript_window(self._SEGMENTS, 0.0, 60.0)
+        second = extract_transcript_window(self._SEGMENTS, 60.0, 120.0)
+        assert "Straddles the boundary" not in first
+        assert "Straddles the boundary" in second
+
+    def test_empty_for_missing_transcript(self) -> None:
+        assert extract_transcript_window(None, 0.0, 60.0) == ""
+        assert extract_transcript_window({}, 0.0, 60.0) == ""
+
+    def test_empty_when_no_segment_midpoint_in_window(self) -> None:
+        assert extract_transcript_window(self._SEGMENTS, 200.0, 260.0) == ""
+
+    def test_truncates_to_max_chars(self) -> None:
+        long_segments = {"segments": [{"start": 0.0, "end": 5.0, "text": "y" * 3000}]}
+        text = extract_transcript_window(long_segments, 0.0, 10.0, max_chars=1200)
+        assert len(text) == 1200

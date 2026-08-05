@@ -12,7 +12,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Backend | FastAPI (Python 3.12+) | Async-first |
-| Task queue | Celery + Redis | Durable video jobs: ingest → transcribe → signals → DNA → clip → render |
+| Task queue | Celery + Redis | Durable video jobs: ingest → transcribe → video-context (L26, never-fails) → signals → DNA → clip → render (+ batched clip-metadata sibling) |
 | LLM | Anthropic SDK; per-task model registry (Issue 318): **`claude-sonnet-4-6`** for reasoning/streaming tasks (DNA brief, titles, thumbnails, scoring, analysis, improvement, chat, intake); **`claude-haiku-4-5`** for cheap classify tasks (hooks, chapters, performer analysis); **no Opus** — see docs/DECISIONS.md (Issue 221). Each task has an independently overridable `ANTHROPIC_MODEL_<TASK>` env var in config.py. Sonnet 4.6 cacheable-prefix floor = 1024 tokens; Haiku 4.5 = 4096 tokens (confirmed 2026-06-26). | Prompt caching on DNA profile + evergreen corpus **mandatory**; web-search tool for live research |
 | Embeddings | Voyage AI (`voyage-3.5`) → pgvector | Local sentence-transformers as offline fallback |
 | Transcription | Deepgram nova-3 (default, `TRANSCRIPTION_BACKEND=deepgram`) | WhisperX (faster-whisper + forced alignment) available as self-hosted opt-in; AssemblyAI also supported; all selected via `TRANSCRIPTION_BACKEND` config. MIP opt-out (`mip_opt_out=True`) enforced on every Deepgram call (Issue 251). |
@@ -126,7 +126,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── window.py               # Rolling 60–90s context window
 │   ├── candidates.py           # Peak detection + backward look for setup start
 │   ├── scoring.py              # Multi-signal + DNA-weighted scoring (Claude + features)
-│   ├── ranking.py              # DNA-weighted + preference-model rerank
+│   ├── ranking.py              # DNA-weighted + preference-model rerank; merges LLM moments pre-scoring + post-ranking trim (Issue 416)
+│   ├── merge.py                # Hybrid candidate merge — LLM moments ∪ signal peaks under signal-priority NMS (Issue 416)
 │   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex; flag-gated per-frame reframe path (Issue 189, ACTIVE_SPEAKER_REFRAME_ENABLED)
 │   ├── reframe.py              # (NEW Issue 189) per-frame MediaPipe BlazeFace face tracking → EMA-smoothed crop-center timeline → ffmpeg sendcmd script; lazy import; gated by ACTIVE_SPEAKER_REFRAME_ENABLED (default False — render-env pending)
 │   ├── captions.py             # Animated word-level ASS subtitles (Issue 133 — bold_pop / gradient_slide / minimal via pysubs2 + libass)
@@ -154,6 +155,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── clip_titles.py          # Per-clip Short-title + hook-rewrite generator (Issue 322)
 │   ├── clip_captions.py        # Per-clip caption-hook / thumbnail overlay-text (Issue 323)
 │   ├── clip_explain.py         # Per-clip Why-This-Clip narrative, cites CLIPPING_PRINCIPLES (Issue 325)
+│   ├── clip_metadata.py        # Batched suggested title/description/hook — ONE call per video (Issue 417)
 │   ├── util.py                 # Shared transcript extraction helpers
 │   └── seed/                   # Evergreen corpus: hook psychology, pacing, retention theory
 │
@@ -161,7 +163,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   └── timing.py               # Best upload window + optimal gap from analytics
 │
 ├── analysis/
-│   └── brief.py                # Video performance analysis (Claude streaming, Issue 121)
+│   ├── brief.py                # Video performance analysis (Claude streaming, Issue 121)
+│   └── video_context.py        # Whole-video context pass — ONE full-transcript call, validated moments (Issue 415)
 │
 ├── improvement/
 │   └── brief.py                # Content-improvement brief generation
@@ -380,6 +383,13 @@ transcripts
 signals
   video_id (FK), timeline_jsonb (audio energy, silence, laughter, retention spikes)
 
+video_context                        -- whole-video LLM context pass (Issue 415, migration 0053)
+  video_id (PK = FK, CASCADE), context_jsonb (version, summary, structure,
+    narrative_arcs, tone, audience_relevance, moments[] — validated, <=4
+    LLM-proposed clip moments consumed by the Issue-416 hybrid merge),
+  model, prompt_version, created_at
+  RLS: tenant_isolation via videos.creator_id (0044 subquery pattern, 0045-hardened GUC)
+
 creator_dna                          -- the inferred profile (versioned)
   id, creator_id (FK), version, brief_text, patterns_jsonb,
   top_video_ids_jsonb, bottom_video_ids_jsonb,
@@ -423,6 +433,12 @@ clips
   applied_title, applied_description   -- creator-approved publish metadata
                                        -- (migration 0047; NULL = publish falls
                                        -- back to video.title / "#Shorts")
+  suggested_title, suggested_description, suggested_hook,
+  suggestions_generated_at             -- pipeline-suggested metadata (Issue 417,
+                                       -- migration 0054; one batched call per
+                                       -- video, pre-clamped; publish precedence
+                                       -- applied_* -> suggested_* -> video.title|"#Shorts";
+                                       -- fill-only on suggested_title IS NULL)
 
 clip_edit_documents                  -- the creator's in-progress edit (Issue 391, migration 0052)
   -- READ BY THE RENDER PATH. POST /clips/{id}/cuts sends only `base_revision`;

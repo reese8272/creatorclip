@@ -1,0 +1,41 @@
+scenario: merge_overlap_dedupe
+kind: merge
+description: >
+  Signal-priority NMS: the timeline produces one strong signal candidate
+  around [76, 111] (the basic_retention_peak geometry). An LLM moment covering
+  nearly the same window (IoU > 0.5) must be SUPPRESSED — the harness-verified
+  signal geometry wins pre-scoring — while a second, non-overlapping LLM
+  moment is admitted. Total pool: 1 signal + 1 llm.
+
+input:
+  timeline:
+    version: 1
+    duration_s: 600.0
+    events:
+      - {type: silence,         start_s: 73.0, end_s: 76.0}
+      - {type: energy_spike,    start_s: 76.0, end_s: 91.0, value: 0.9}
+      - {type: laughter,        start_s: 85.0, end_s: 87.0, value: 0.7}
+      - {type: retention_spike, start_s: 91.0, end_s: 93.0, value: 1.6}
+  moments:
+    # Near-duplicate of the signal candidate's [76, ~111] window — even at
+    # higher confidence than the admitted moment below, it must be suppressed.
+    - start_s: 78.0
+      end_s: 112.0
+      reason: "The same joke the energy peak already covers."
+      principle: "Tension and release"
+      confidence: 0.95
+    # Far from any signal candidate — admitted.
+    - start_s: 300.0
+      end_s: 360.0
+      reason: "A quiet, self-contained insight with no energy signature."
+      principle: "One idea per Short"
+      confidence: 0.7
+
+expected:
+  min_total: 2
+  max_total: 2
+  llm_candidates: 1
+  candidates:
+    - origin: llm
+      setup_start_s_min: 295.0
+      setup_start_s_max: 305.0

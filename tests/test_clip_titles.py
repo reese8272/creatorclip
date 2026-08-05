@@ -206,3 +206,82 @@ def test_build_request_no_creator_id_in_system() -> None:
     system, _messages = _build_request("My Channel", "Brief.", "Transcript.")
     full_text = " ".join(b.get("text", "") for b in system)
     assert creator_id_str not in full_text, "creator_id must not appear in system blocks"
+
+
+# ── Issue 414: title-suggestions ground in the clip's OWN window ──────────────
+
+
+def test_title_suggestions_grounds_in_clip_window_not_minute_zero(client, mocker) -> None:
+    """POST /clips/{id}/title-suggestions for a LATE clip must pass the clip's
+    own transcript window text to the LLM builder — not the whole-video
+    transcript truncated to 1500 chars (which was always minute-0 content).
+    """
+    import uuid as _uuid
+    from unittest.mock import AsyncMock, MagicMock
+
+    from auth import get_current_creator
+    from db import get_session
+    from main import app
+    from models import Clip, Creator
+    from tests._helpers import override_current_creator
+
+    creator = MagicMock(spec=Creator)
+    creator.id = _uuid.uuid4()
+    creator.minutes_balance = 100
+    creator.channel_title = "TestChannel"
+
+    cl = MagicMock(spec=Clip)
+    cl.id = _uuid.uuid4()
+    cl.creator_id = creator.id
+    cl.video_id = _uuid.uuid4()
+    cl.setup_start_s = 300.0
+    cl.start_s = 300.0
+    cl.end_s = 360.0
+
+    transcript = MagicMock()
+    transcript.segments_jsonb = {
+        "segments": [
+            {"start": 0.0, "end": 8.0, "text": "MINUTE ZERO INTRO."},
+            {"start": 305.0, "end": 320.0, "text": "LATE WINDOW STORY."},
+            {"start": 400.0, "end": 410.0, "text": "PAST THE CLIP."},
+        ]
+    }
+
+    async def _session():
+        s = AsyncMock()
+        exec_result = MagicMock()
+        # get_owned → scalar_one_or_none returns the clip (ownership passes)
+        exec_result.scalar_one_or_none.return_value = cl
+        # dna.profile.get_active → execute(...).scalars() must be sync-iterable
+        exec_result.scalars = MagicMock(return_value=iter([]))
+        s.execute = AsyncMock(return_value=exec_result)
+        # Transcript lookup via session.scalar
+        s.scalar = AsyncMock(return_value=transcript)
+        yield s
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _session
+    try:
+        gen = mocker.patch(
+            "knowledge.clip_titles.generate_clip_title_suggestions",
+            new=AsyncMock(
+                return_value=(
+                    {"titles": [], "hook_rewrites": [], "disclaimer": "Estimates only."},
+                    {"input_tokens": 5, "output_tokens": 2, "cache_read": 0, "cache_creation": 0},
+                )
+            ),
+        )
+        mocker.patch("routers.clips.check_positive_balance", new=AsyncMock(return_value=None))
+        mocker.patch("billing.ledger.record_llm_usage", new=AsyncMock())
+        mocker.patch("routers.clips.record_llm_tokens")
+
+        resp = client.post(f"/clips/{cl.id}/title-suggestions")
+        assert resp.status_code == 200, resp.text
+
+        # Third positional arg is clip_transcript (channel_title, dna_brief, transcript)
+        passed_transcript = gen.call_args.args[2]
+        assert "LATE WINDOW STORY" in passed_transcript
+        assert "MINUTE ZERO INTRO" not in passed_transcript
+        assert "PAST THE CLIP" not in passed_transcript
+    finally:
+        app.dependency_overrides.clear()

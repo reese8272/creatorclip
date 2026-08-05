@@ -205,8 +205,9 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
     signals_stub.timeline_jsonb = {}
 
     fake_session = AsyncMock()
-    # get() returns Video, then Creator, then Signals, then Transcript (None).
-    fake_session.get = AsyncMock(side_effect=[video_stub, creator_stub, signals_stub, None])
+    # get() returns Video, then Creator, then Signals, then Transcript (None),
+    # then VideoContext (None — Issue 416 reads the context row here).
+    fake_session.get = AsyncMock(side_effect=[video_stub, creator_stub, signals_stub, None, None])
     # `existing_done` check returns None (no rendered clips yet).
     fake_session.scalar = AsyncMock(return_value=None)
     fake_session.commit = AsyncMock()
@@ -288,7 +289,8 @@ def _generate_clips_scaffold(mocker, *, clips, brand_kit_style=None):
     signals_stub.timeline_jsonb = {}
 
     fake_session = AsyncMock()
-    fake_session.get = AsyncMock(side_effect=[video_stub, creator_stub, signals_stub, None])
+    # Video, Creator, Signals, Transcript (None), VideoContext (None — Issue 416).
+    fake_session.get = AsyncMock(side_effect=[video_stub, creator_stub, signals_stub, None, None])
     if brand_kit_style is not None:
         style_row = MagicMock()
         style_row.style = brand_kit_style

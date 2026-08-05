@@ -75,6 +75,13 @@ class ClipOut(BaseModel):
     # PATCH /clips/{id}; null = publish falls back to video.title / "#Shorts".
     applied_title: str | None = None
     applied_description: str | None = None
+    # Pipeline-suggested metadata (Issue 417, migration 0054) — written once by
+    # the batched generate_clip_metadata task, pre-clamped to YouTube limits.
+    # Null = generation skipped/failed; publish precedence is
+    # applied_* → suggested_* → (video.title | "#Shorts").
+    suggested_title: str | None = None
+    suggested_description: str | None = None
+    suggested_hook: str | None = None
     # Issue 373 — provenance: "creator" for a manually-selected source range
     # (never engine-scored; the UI shows honest "Your selection" framing
     # instead of a fit tier), "engine" otherwise.
@@ -248,6 +255,9 @@ def _clip_response(clip: Clip) -> dict:
         "cleaned_render_uri": clip.cleaned_render_uri,
         "applied_title": clip.applied_title,
         "applied_description": clip.applied_description,
+        "suggested_title": clip.suggested_title,
+        "suggested_description": clip.suggested_description,
+        "suggested_hook": clip.suggested_hook,
         "origin": sj.get("origin", "engine"),
         "aspect": (clip.style_preset or {}).get("aspect") or "9:16",
         "shortlisted": is_shortlisted(clip.rank),
@@ -344,6 +354,13 @@ async def generate_clips(
 
     timeline = signals.timeline_jsonb
 
+    # Issue 416 — whole-video context row (written by the Issue 415 chain
+    # member; None when skipped/disabled → signal-only, today's behavior).
+    from models import VideoContext
+
+    vc_row = await session.get(VideoContext, video_id)
+    video_context = vc_row.context_jsonb if vc_row else None
+
     # Issue 82b (pool starvation): release the request-scoped DB connection
     # BEFORE the per-candidate LLM scoring round-trip (30–120 s). The session
     # is closed here — get_session's context manager makes the later double
@@ -359,6 +376,7 @@ async def generate_clips(
         max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
         ledger_session_factory=db.AsyncSessionLocal,
         style_notes=style_notes,
+        video_context=video_context,
     )
     if not ranked:
         return {"clips": []}
@@ -1761,7 +1779,7 @@ async def get_clip_title_suggestions(
     from billing.ledger import record_llm_usage
     from dna.profile import get_active as _get_active_dna
     from knowledge.clip_titles import generate_clip_title_suggestions
-    from knowledge.util import extract_transcript_text
+    from knowledge.util import extract_transcript_window
 
     await check_positive_balance(creator.id, session)
 
@@ -1772,8 +1790,13 @@ async def get_clip_title_suggestions(
     transcript = await session.scalar(
         select(Transcript).where(Transcript.video_id == clip.video_id)
     )
-    clip_transcript = extract_transcript_text(
-        transcript.segments_jsonb if transcript else None, 1500
+    # Issue 414: ground suggestions in the CLIP'S OWN transcript window
+    # ([setup_start_s ?? start_s, end_s], midpoint-assigned) — previously this
+    # passed the whole video transcript truncated to 1500 chars, so any clip
+    # past ~minute 2 was titled against minute-0 content.
+    window_start = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    clip_transcript = extract_transcript_window(
+        transcript.segments_jsonb if transcript else None, window_start, clip.end_s
     )
 
     # Fetch the creator's DNA brief.

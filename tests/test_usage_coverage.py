@@ -150,6 +150,14 @@ _ANTHROPIC_CALL_SITES: dict[tuple[str, str], list[tuple[str, str, str]]] = {
     ("analysis/brief.py", "generate_video_analysis"): [
         ("worker/tasks.py", "_generate_video_analysis_async", "record_llm_usage"),
     ],
+    # Issue 415 — whole-video context pass, billed in the worker chain member.
+    ("analysis/video_context.py", "build_video_context"): [
+        ("worker/tasks.py", "_video_context_async", "record_llm_usage"),
+    ],
+    # Issue 417 — batched clip metadata, billed in the sibling worker task.
+    ("knowledge/clip_metadata.py", "generate_clip_metadata_batch"): [
+        ("worker/tasks.py", "_clip_metadata_async", "record_llm_usage"),
+    ],
     ("knowledge/titles.py", "generate_title_suggestions"): [
         ("worker/tasks.py", "_generate_title_suggestions_async", "record_llm_usage"),
     ],

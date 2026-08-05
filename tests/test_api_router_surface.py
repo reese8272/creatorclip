@@ -67,6 +67,9 @@ def _clip(
     cl.style_preset = None
     cl.applied_title = None
     cl.applied_description = None
+    cl.suggested_title = None
+    cl.suggested_description = None
+    cl.suggested_hook = None
     return cl
 
 
@@ -293,6 +296,9 @@ def test_list_clips_truncated_true_when_at_limit(client):
         cl.cleaned_render_uri = None
         cl.applied_title = None
         cl.applied_description = None
+        cl.suggested_title = None
+        cl.suggested_description = None
+        cl.suggested_hook = None
         cl.style_preset = None  # Issue 373: _clip_response derives `aspect` from it
         return cl
 

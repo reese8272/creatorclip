@@ -1,0 +1,31 @@
+scenario: merge_flat_energy_story
+kind: merge
+description: >
+  The core Issue-416 capability: a story-heavy video with NO audio-energy
+  signal above the detection threshold. extract_candidates yields zero
+  candidates, so the pre-416 engine was blind to it. The whole-video context
+  pass proposed one moment on narrative value ("value in the words, not the
+  audio energy"); the merge must admit it as an origin:"llm" candidate with
+  valid clip geometry (setup < peak, >= MIN_CLIP_S, inside the video).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 600.0
+    events: []
+  moments:
+    - start_s: 120.0
+      end_s: 180.0
+      reason: "A complete personal story with a calm, quotable payoff."
+      principle: "Front-load value"
+      confidence: 0.85
+
+expected:
+  min_total: 1
+  llm_candidates: 1
+  candidates:
+    - origin: llm
+      setup_start_s_min: 115.0
+      setup_start_s_max: 125.0
+      end_s_min: 175.0
+      end_s_max: 185.0

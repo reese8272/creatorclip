@@ -4,6 +4,43 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-04 — L26 Track A COMPLETE: Issues 414–417 all DONE (branch `lane/l26-intel`)
+
+The intelligence pipeline shipped in build order 414 → 415 → 416 → 417, one commit per issue:
+
+- **414** — `knowledge/util.py::extract_transcript_window` (midpoint-assignment) + the
+  title-suggestions grounding fix: `/clips/{id}/title-suggestions` now reads the clip's own
+  `[setup_start_s ?? start_s, end_s]` window instead of the whole transcript truncated at 1500 chars.
+- **415** — whole-video context pass: chain is now `ingest | transcribe | analyze_video_context |
+  build_signals`. New never-fails task (plain celery, max_retries=0, catch-all → `context_skipped`
+  SSE + return), `analysis/video_context.py` (ONE full-transcript Sonnet call, [512s]-marker
+  paragraphs, per-paragraph coarsening, floor-gated 1h cache marker, structured output, ≤4 validated
+  moments), 1:1 `video_context` table (migration 0053, 0044 RLS pattern + 0045-hardened GUC),
+  PK check-then-insert idempotency, spend-guard skip, ledger billing after the round-trip.
+- **416** — hybrid candidate merge: `clip_engine/merge.py` (LLM moments → candidates,
+  signal-priority NMS IoU>0.5), `score_and_rank(video_context=…)` scores the merged pool (≤8+≤4)
+  in the ONE existing call then trims post-ranking to `CLIPS_PER_VIDEO_DEFAULT`;
+  `extract_candidates` byte-untouched; scorer gains citable #12 "Clean Context Boundary",
+  origin/llm_reason payload, max_tokens 1800, cold-start rule `max(signal, 0.8·llm_confidence)`;
+  provenance in `signals_jsonb["origin"]`; 3 new `kind: merge` eval scenarios, `SCENARIO_FLOOR` 15→18.
+- **417** — batched auto-metadata: `knowledge/clip_metadata.py` (ONE structured-output call per
+  video, per-clip windows wrapped untrusted, YouTube-limit clamps incl. UTF-8-byte description cap),
+  migration 0054 `clips.suggested_*` + `suggestions_generated_at`, publish precedence
+  `applied_* → suggested_* → (video.title | "#Shorts")`, sibling task enqueued post-persist parallel
+  with render (fill-only on `suggested_title IS NULL`), non-terminal `metadata_ready` SSE,
+  `ClipOut.suggested_*`.
+
+**Verification:** full backend unit lane **2646 passed / 70 skipped** (from 2480 at track start);
+eval harness 22/22 `eval_scenario` tests incl. the merge kind; repo-wide ruff clean. Migrations
+0053/0054 are structurally smoke-tested in the unit lane; the live up/down runs at deploy
+(integration lane / prod alembic). One pre-existing base-commit failure
+(`test_response_models` — peaks/stream routes) logged in `docs/OFF_COURSE_BUGS.md`, not Track A's.
+New config: `ANTHROPIC_MODEL_VIDEO_CONTEXT`, `ANTHROPIC_MODEL_CLIP_METADATA`,
+`VIDEO_CONTEXT_ENABLED`, `VIDEO_CONTEXT_TRANSCRIPT_MAX_CHARS`, `LLM_CANDIDATES_MAX`,
+`AUTO_CLIP_METADATA`. Tracks B (418–422) and C (423–426) remain open; B rebases on A.
+
+---
+
 ## 2026-08-04 — Lane L26 declared: A→B Auto-Clipping MVP (Issues 414–426). BUILD IN PROGRESS.
 
 User-driven MVP push: "the best auto-clipping short creation on the planet" is the viability bar.
