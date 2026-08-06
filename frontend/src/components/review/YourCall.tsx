@@ -20,6 +20,31 @@ const DENY_TAGS = [
   { id: 'wrong_length', label: 'Wrong length' },
 ]
 
+type FlashTone = 'muted' | 'success' | 'danger'
+
+const FLASH_TONE_CLASS: Record<FlashTone, string> = {
+  muted: 'text-muted',
+  success: 'text-success',
+  danger: 'text-danger',
+}
+
+// The queue reads "Keep"/"Drop"; echoing the wire enum back ("upvote recorded")
+// named the transport, not the creator's decision.
+const ACTION_CONFIRMATION: Record<FeedbackAction, string> = {
+  upvote: 'Kept',
+  downvote: 'Dropped',
+  skip: 'Skipped',
+  trim: 'Trim saved',
+}
+
+// A 502/503 from the edge, or a dropped connection, means the write never
+// reached the API — say so, because the clip stays put and the creator has no
+// other way to tell a lost rating from a saved one.
+function feedbackErrorText(e: unknown): string {
+  if (e instanceof ApiError && e.status < 500) return e.message
+  return "Couldn't reach the server — nothing was saved. Try again."
+}
+
 // Issue 306: the triage actions grouped into one "Your call" card (moved out of
 // ClipPlayer). Keep/Drop open the inline feedback-tag panel; Save trim submits
 // the trim region the filmstrip produced; Download streams the rendered clip.
@@ -37,7 +62,12 @@ export function YourCall({
   const [panel, setPanel] = useState<'upvote' | 'downvote' | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [note, setNote] = useState('')
-  const [flash, setFlash] = useState('')
+  // Issue 437: the tagged {text, tone} idiom the profile sections already use
+  // (IdentitySection, BrandKitSection, DnaCard, …). A bare string forced ONE
+  // colour on every outcome, so a failed keep/drop rendered in the success
+  // green and read as confirmation.
+  const [flash, setFlash] = useState<{ text: string; tone: FlashTone } | null>(null)
+  const [submitting, setSubmitting] = useState(false)
   const [trimApplying, setTrimApplying] = useState(false)
   const [trimStatus, setTrimStatus] = useState<{ text: string; error: boolean } | null>(null)
 
@@ -74,7 +104,13 @@ export function YourCall({
     }
   }
 
-  async function sendFeedback(action: FeedbackAction, tags?: string[], feedbackNote?: string) {
+  /** Resolves true when the rating actually reached the API. */
+  async function sendFeedback(
+    action: FeedbackAction,
+    tags?: string[],
+    feedbackNote?: string,
+  ): Promise<boolean> {
+    if (submitting) return false
     const body: FeedbackPayload = { action }
     if (action === 'trim') {
       body.trim_start_s = trimStart
@@ -82,13 +118,21 @@ export function YourCall({
     }
     if (tags?.length) body.feedback_tags = tags
     if (feedbackNote) body.feedback_note = feedbackNote
+    setSubmitting(true)
+    setFlash({ text: 'Saving…', tone: 'muted' })
     try {
       await api(`/clips/${clip.id}/feedback`, { method: 'POST', body })
-      setFlash(action === 'trim' ? 'Trim saved' : `${action} recorded`)
-      setTimeout(() => setFlash(''), 1500)
+      setFlash({ text: ACTION_CONFIRMATION[action], tone: 'success' })
+      setTimeout(() => setFlash(null), 1500)
       if (action !== 'trim') onAdvance()
-    } catch {
-      setFlash('Error — try again')
+      return true
+    } catch (e) {
+      // Deliberately NOT auto-cleared: a success can fade, a lost rating can't
+      // (cf. SaveStatus.tsx — "PERSISTENT, NOT A TOAST").
+      setFlash({ text: feedbackErrorText(e), tone: 'danger' })
+      return false
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -107,12 +151,12 @@ export function YourCall({
     })
   }
 
-  function submitTagged() {
-    if (!panel) return
+  async function submitTagged() {
+    if (!panel || submitting) return
     const tags = Array.from(selected).filter((t) => t !== '__other__')
-    const action = panel
-    setPanel(null)
-    sendFeedback(action, tags, note.trim() || undefined)
+    // Closed only on success — a failed write leaves the panel, the tags and
+    // the note exactly as the creator left them, so one click re-submits.
+    if (await sendFeedback(panel, tags, note.trim() || undefined)) setPanel(null)
   }
 
   const tags = panel === 'upvote' ? APPROVE_TAGS : DENY_TAGS
@@ -121,7 +165,20 @@ export function YourCall({
     <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
       <div className="mb-3.5 flex items-center justify-between">
         <span className="text-h3 font-semibold text-fg">Your call</span>
-        <span className="min-h-[14px] font-mono text-small text-success">{flash}</span>
+        {/* Rendered unconditionally: a live region must exist BEFORE its first
+            update or the announcement is dropped (SaveStatus.tsx). One polite
+            region serves both tones — a role that mutates per-outcome is
+            announced unreliably. */}
+        <span
+          role="status"
+          aria-live="polite"
+          className={cn(
+            'min-h-[14px] font-mono text-small',
+            FLASH_TONE_CLASS[flash?.tone ?? 'muted'],
+          )}
+        >
+          {flash?.text ?? ''}
+        </span>
       </div>
 
       <div className="flex gap-2.5">
@@ -134,10 +191,22 @@ export function YourCall({
       </div>
 
       <div className="mt-2.5 flex gap-2">
-        <Button variant="secondary" size="sm" className="h-[38px] flex-1" onClick={() => sendFeedback('skip')}>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-[38px] flex-1"
+          disabled={submitting}
+          onClick={() => void sendFeedback('skip')}
+        >
           Skip
         </Button>
-        <Button variant="secondary" size="sm" className="h-[38px] flex-1" onClick={() => sendFeedback('trim')}>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-[38px] flex-1"
+          disabled={submitting}
+          onClick={() => void sendFeedback('trim')}
+        >
           <Scissors className={ICON_SIZE.sm} aria-hidden="true" /> Save trim
         </Button>
         {clip.render_uri ? (
@@ -223,8 +292,8 @@ export function YourCall({
             <Button variant="secondary" size="sm" onClick={() => setPanel(null)}>
               Cancel
             </Button>
-            <Button size="sm" onClick={submitTagged}>
-              Submit
+            <Button size="sm" onClick={() => void submitTagged()} disabled={submitting}>
+              {submitting ? 'Saving…' : 'Submit'}
             </Button>
           </div>
         </div>

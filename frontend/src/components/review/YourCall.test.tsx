@@ -1,10 +1,11 @@
 /**
- * YourCall — trim → re-render flow (Wave-1 trim-rerender contract).
+ * YourCall — two contracts.
  *
- * 80/20: the POST body (clip-relative seconds), the review-then-confirm
- * affordance riding cleaned_render_uri, and the two load-bearing error edges
- * (409 pending_clean_or_edit surfaces the pending preview; 422 messages show
- * verbatim). Save-trim feedback logging is unchanged and untested here.
+ * 1. Trim → re-render (Wave-1 trim-rerender contract). 80/20: the POST body
+ *    (clip-relative seconds), the review-then-confirm affordance riding
+ *    cleaned_render_uri, and the two load-bearing error edges (409
+ *    pending_clean_or_edit surfaces the pending preview; 422 messages verbatim).
+ * 2. The keep/drop write's FAILURE path (Issue 437) — see that describe block.
  */
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -39,9 +40,9 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
 }
 
-function renderYourCall(clip: ReviewClip = CLIP) {
+function renderYourCall(clip: ReviewClip = CLIP, onAdvance: () => void = () => {}) {
   return render(
-    <YourCall clip={clip} trimStart={2} trimEnd={18} onAdvance={() => {}} />,
+    <YourCall clip={clip} trimStart={2} trimEnd={18} onAdvance={onAdvance} />,
     { wrapper },
   )
 }
@@ -179,5 +180,104 @@ describe('YourCall — apply trim & re-render', () => {
     vi.stubGlobal('fetch', trimRenderFetch())
     renderYourCall({ ...CLIP, render_uri: null })
     expect(screen.getByRole('button', { name: /Apply trim & re-render/ })).toBeDisabled()
+  })
+})
+
+// ── Issue 437 — the keep/drop write must not fail silently ────────────────────
+//
+// Found live: during a 502 the owner's Keep/Drop appeared to do nothing. The
+// write is a plain POST with no local buffer, so an unreachable origin losing
+// the rating is expected — presenting that loss as a success is not. These are
+// the only guard on this class of bug: `design-tokens.contract.test.ts` flags
+// UNDECLARED token names, so a text-success/text-danger swap resolves cleanly
+// and passes it.
+
+function postsTo(fetchMock: ReturnType<typeof vi.fn>, path: string) {
+  return fetchMock.mock.calls.filter(
+    ([u, init]) => String(u).endsWith(path) && (init as RequestInit | undefined)?.method === 'POST',
+  )
+}
+
+// A 502 from the Cloudflare edge returns an HTML error page, so `resp.json()`
+// REJECTS — that rejection path is what the incident actually exercised.
+function feedbackFetch(status = 201) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (init?.method === 'POST' && url.endsWith('/clips/c1/feedback')) {
+      return {
+        status,
+        ok: status < 400,
+        json: async () => {
+          if (status >= 400) throw new SyntaxError('Unexpected token < in JSON at position 0')
+          return { id: 'f1', action: 'upvote' }
+        },
+      }
+    }
+    return { status: 200, ok: true, json: async () => ({}) }
+  })
+}
+
+describe('YourCall — keep/drop write failures (Issue 437)', () => {
+  it('a failed Keep keeps the panel open, preserves the tags, and reads as an error', async () => {
+    const fetchMock = feedbackFetch(502)
+    vi.stubGlobal('fetch', fetchMock)
+    const onAdvance = vi.fn()
+    renderYourCall(CLIP, onAdvance)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Keep' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Good hook' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    // Says plainly that nothing was persisted, in the danger tone — not green.
+    const status = await screen.findByRole('status')
+    await waitFor(() => expect(status).toHaveTextContent(/nothing was saved/i))
+    expect(status.className).toContain('text-danger')
+    expect(status.className).not.toContain('text-success')
+
+    // The creator's work survives, so one click re-submits it.
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Good hook' })).toHaveClass('border-accent')
+    expect(onAdvance).not.toHaveBeenCalled()
+  })
+
+  it('a successful Keep closes the panel and advances the queue', async () => {
+    const fetchMock = feedbackFetch(201)
+    vi.stubGlobal('fetch', fetchMock)
+    const onAdvance = vi.fn()
+    renderYourCall(CLIP, onAdvance)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Keep' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    await waitFor(() => expect(onAdvance).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument()
+    expect(screen.getByRole('status').className).toContain('text-success')
+    expect(postsTo(fetchMock, '/clips/c1/feedback')).toHaveLength(1)
+  })
+
+  it('locks Submit while the write is in flight so a double-click writes one row', async () => {
+    let release: () => void = () => {}
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (init?.method === 'POST' && url.endsWith('/clips/c1/feedback')) {
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return { status: 201, ok: true, json: async () => ({ id: 'f1', action: 'upvote' }) }
+      }
+      return { status: 200, ok: true, json: async () => ({}) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderYourCall()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Keep' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    const inFlight = await screen.findByRole('button', { name: 'Saving…' })
+    expect(inFlight).toBeDisabled()
+    await userEvent.click(inFlight)
+
+    expect(postsTo(fetchMock, '/clips/c1/feedback')).toHaveLength(1)
+    release()
   })
 })

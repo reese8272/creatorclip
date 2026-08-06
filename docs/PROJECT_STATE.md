@@ -4,6 +4,39 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-05 — Issue 437 DONE: Keep/Drop no longer fails silently
+
+Filed and fixed from a live incident, not a planned issue. autoclip.studio briefly returned
+502 (Cloudflare edge up, origin unreachable — **root cause not investigated**, owner deferred);
+during the window the owner's Keep/Drop "didn't work". The lost write was expected — the
+rating is a live `POST /clips/{clip_id}/feedback` with no local buffer. The defect was that
+`review/YourCall.tsx` **presented the loss as a success**: the status line was hardcoded to
+`text-success`, so `'Error — try again'` rendered in the success green, and the tag panel was
+closed *before* the POST was awaited, so a failure looked identical to a success on a clip that
+simply hadn't advanced. Tags and note were discarded, and there was no in-flight guard.
+
+Fixed to the standard `StyleReview.tsx` (same directory) already met: `{ text, tone }` status
+idiom, panel closes only on success, `submitting` guard, `role="status" aria-live="polite"`,
+and honest copy — *"Couldn't reach the server — nothing was saved."* Three regression tests
+were demonstrated **failing against the old component first**; they are the only possible guard,
+since `design-tokens.contract.test.ts` catches only *undeclared* token names and both tokens
+here are declared. The convention is now written into `docs/UI.md` → *Status messaging*.
+
+Descoped deliberately: automatic retry / offline outbox (the endpoint is not idempotent — a
+retry double-counts the rating and retriggers the preference-model retrain), and the two sibling
+token-misuse sites found while sweeping (`OnboardingIdentity.tsx:120`, `Onboarding.tsx:286,294`),
+which are logged in `docs/OFF_COURSE_BUGS.md` rather than fixed.
+
+**Gates:** frontend lane **649/649** on the CI-pinned Node 22 · eslint 0 errors (1 pre-existing
+warning in `useStageStream.ts`) · `tsc` + build clean · design-token contract 3/3.
+Backend untouched, so the Python Layer-0 gates are unaffected. Note the local box runs Node
+26.5.1 against `.nvmrc` 22, which fails 35 `localStorage` tests in 3 files unrelated to this
+change — verified identical on a clean tree (known row in `docs/OFF_COURSE_BUGS.md`, 2026-08-03).
+
+**Open:** live confirmation — block `**/clips/*/feedback` in devtools on the next Review pass.
+
+---
+
 ## 2026-08-05 (late night) — Fresh-upload review wave: Issues 434–436 + camera-region floor (BUILT, deploying)
 
 The creator's fresh upload (`b8505eb7`, 27-min podcast, 12 clips / top-8 rendered) live-verified

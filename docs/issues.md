@@ -2150,6 +2150,56 @@ WITHIN a turn; face_pan see-sawed in 25–60 px steps. The only smoothing was EM
 - [x] `test_render.py` and punch-in pins pass unmodified (consumer contract intact)
 - [x] Live: re-rendered ranks 1 (speaker_cut) + 2 (face_pan) of `b8505eb7` 2026-08-05 — crop track collapsed 336→3 keyframes (cuts+1 exactly) and 172→47 (holds + glide ramps); by construction the only x-changes left in rank 1 are the two cuts. Frames verified: steady, tight, chrome-free
 
+### Issue 437: Keep/Drop fails silently — a lost rating is painted as a confirmation
+
+- [x] **Status:** DONE 2026-08-05 — filed+fixed from a live 502 on autoclip.studio · **Size:** S
+
+During a brief 502 (Cloudflare edge up, origin unreachable) Keep/Drop "didn't work" with no
+usable signal. The lost write is expected — `POST /clips/{clip_id}/feedback` is a live write
+with no local buffer, so an unreachable origin means no `ClipFeedback` row. **Presenting that
+loss as a success was the defect**, and it destroyed the creator's input on the way out:
+
+- `YourCall.tsx:124` hardcoded the status line to `text-success`, so `'Error — try again'`
+  rendered in the **success green**, 12px mono, in the card header.
+- `submitTagged` called `setPanel(null)` *before* awaiting the POST, so the tag panel closed
+  exactly as it does on success; `onAdvance` fires only on success, so the clip didn't change.
+  Panel closed + same clip + green text = "the button did nothing."
+- The selected tags and note were discarded (`openPanel` resets them) — a retry started blank.
+- No in-flight guard at all, so the write could also be fired twice.
+
+`StyleReview.tsx` — same directory, same feature — already did all of this correctly
+(`:87-89` separate `errorMessage`, `:182,186` `disabled={isPending}` + `'Saving…'`).
+`YourCall` was the outlier; the fix brings it to the sibling's standard.
+
+**Shipped:** `flash` becomes the repo's `{ text, tone: 'muted' | 'success' | 'danger' }` idiom
+(five profile sections already use it), rendered through `FLASH_TONE_CLASS`. `sendFeedback`
+returns a boolean and owns a `submitting` flag cleared in `finally`; `submitTagged` closes the
+panel **only** on success, so tags + note survive untouched. A ≥500 `ApiError` or a network
+drop reads *"Couldn't reach the server — nothing was saved. Try again."* (a <500 `ApiError`
+still shows the server's own message, matching `applyTrimRender`); the error tone does **not**
+auto-clear. Submit/Skip/Save-trim are `disabled` while in flight, Submit reading `'Saving…'`.
+The status span is now an always-rendered `role="status" aria-live="polite"` live region. Also
+fixed the wire-enum leak — `"upvote recorded"` → `"Kept"`/`"Dropped"`/`"Skipped"`.
+
+Rule written into `docs/UI.md` → *Status messaging*, because **no gate can catch this class**:
+`design-tokens.contract.test.ts` only flags *undeclared* token names, and both `text-success`
+and `text-danger` are declared, so a semantic swap compiles and ships. The regression tests are
+the only guard.
+
+**Deliberately not done:** automatic retry / offline outbox. `POST /clips/{id}/feedback` is not
+idempotent — it inserts a row and retriggers the preference-model retrain (`routers/review.py:227-229`)
+— so retrying a timed-out-but-applied write double-counts the rating. Preserving the choice so
+*one* click re-submits is the correct fix at this size; a real outbox needs a server-side
+idempotency key. The 502's own root cause on the VM was not investigated.
+
+**Acceptance**
+- [x] Failed Keep keeps the panel open, keeps the tag selected, renders `text-danger` (not `text-success`), says nothing was saved, and does not advance (`YourCall.test.tsx`)
+- [x] Successful Keep closes the panel, advances once, exactly one POST
+- [x] Submit locked while in flight — double-click writes one row
+- [x] Status line is a `role="status" aria-live="polite"` region rendered before its first message
+- [x] Full frontend lane green on the CI-pinned Node 22: 649/649
+- [ ] Live: block `**/clips/*/feedback` in devtools on the next Review pass and confirm the red persistent message + preserved tags
+
 ---
 
 ## Source index

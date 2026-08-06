@@ -1,11 +1,15 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-05 (end of night session) · **Branch:** `main` @ `8b50d43`, clean
-tree, in sync with `origin/main` · all deploy chains green (`gh run list` verified)
-**Prod:** `https://autoclip.studio` healthy — the ENTIRE night's stack is LIVE and
+**Last updated:** 2026-08-05 (post-437) · **Branch:** `main` — **Issue 437 is BUILT but
+UNCOMMITTED** (`frontend/src/components/review/YourCall.{tsx,test.tsx}` + 5 docs); everything
+before it is in sync with `origin/main` @ `d198ae5`, deploy chains green.
+**Prod:** `https://autoclip.studio` healthy (200, ~0.3 s) — the night's stack is LIVE and
 live-verified on real footage: speaker cuts (422) · serial render queue (432) · region-aware
 reframe + chrome removal (433) · generate-more (431) · Review audio toggle (434) · video
 titles + rename (435) · **virtual-tripod framing (436)** · camera-region floor 0.45.
+**Note:** prod returned **502 briefly on 2026-08-05** (edge up, origin unreachable). It
+self-recovered and the **root cause was NOT investigated** — worth a look, since renders are
+memory-hungry and it will recur. Issue 437 fixed the UI's *handling* of it, not the outage.
 **Git note:** `stash@{0}` remains the owner's own "wip LEFT_OFF before research-branch checkout"
 stash — popping it onto this file WILL conflict; resolve by hand or drop deliberately.
 
@@ -22,6 +26,12 @@ session log: `docs/PROJECT_STATE.md` top two entries.
 
 ## → NEXT ACTIONS (in order)
 
+0. **Commit + deploy Issue 437** (built this session, working tree dirty). Then live-confirm:
+   Review → devtools request-blocking on `**/clips/*/feedback` → Keep → pick a tag → Submit.
+   Expect a **red persistent** "Couldn't reach the server — nothing was saved", the panel still
+   open with the tag still selected, same clip on screen; unblock → one click saves + advances.
+   (Before 437 that path showed "Error — try again" in the **success green** with the panel
+   already closed, which is why the 502's lost ratings read as "the button did nothing".)
 1. **Creator browser checks on video `b8505eb7`** (nothing here needs code):
    - Review page → click the speaker icon once → audio plays and stays on across clips (434).
    - Dashboard → hover title → **Rename** → set a real name; confirm it shows in the Review

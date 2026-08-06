@@ -110,6 +110,41 @@ was to contrast, not to hierarchy.
 | `--color-warning` | `oklch(75% 0.16 75)` | `oklch(18% 0.05 75)` | `oklch(32% 0.09 75)` |
 | `--color-danger` | `oklch(62% 0.20 25)` | `oklch(18% 0.06 25)` | `oklch(32% 0.11 25)` |
 
+### Status messaging — the outcome of a write
+
+The table above gives the semantic tokens values but historically assigned them
+no meaning, and nothing enforces the mapping: `design-tokens.contract.test.ts`
+only catches token names that **don't exist**, so a wrong-but-declared token
+compiles, renders, and ships. Issue 437 shipped exactly that — Review's
+Keep/Drop rendered `'Error — try again'` in `text-success`, so a rating lost to
+a 502 was painted as a confirmation. The rule, which the codebase already
+follows everywhere else:
+
+| Outcome | Token | Persistence |
+|---|---|---|
+| In flight | `text-muted` (`'Saving…'`) | Replaced by the result |
+| Succeeded | `text-success` (`'Saved.'`) | May auto-clear (~1.5–2.5s) |
+| Failed | `text-danger` | **Persists** until the next attempt |
+
+- **An error is never `text-success`, `text-warning`, or `text-muted`.**
+  `text-warning` means *degraded or not-yet-done*, not *failed*.
+- Errors do not auto-clear. A success that fades costs nothing; a failure that
+  fades leaves the creator believing the write landed. See `SaveStatus.tsx` —
+  *"PERSISTENT, NOT A TOAST."*
+- Say what happened to the data. "Couldn't reach the server — nothing was
+  saved" beats "Error — try again", which leaves the creator unable to tell a
+  lost write from a saved one.
+- Render the status element **unconditionally** (reserve its height, e.g.
+  `min-h-[14px]`) with `role="status" aria-live="polite"`. A live region
+  mounted at the same moment as its first message is not announced. Use one
+  polite region for all tones rather than swapping to `role="alert"` per
+  outcome — a mutating `role` is announced unreliably.
+- A control that fires a write is `disabled` while in flight, and the surface
+  that collects the input (tag panel, form) stays open on failure so one click
+  re-submits. Never discard the user's input on a failed write.
+- The shape to reuse: `useState<{ text: string; tone: 'muted' | 'success' | 'danger' } | null>`
+  (`profile/IdentitySection.tsx`, `review/YourCall.tsx`, and three others).
+
 ---
 
 ## Elevation — which surface a container takes
