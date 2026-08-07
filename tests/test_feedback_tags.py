@@ -51,6 +51,68 @@ def _fake_session(clip: MagicMock):
     return _session
 
 
+def test_feedback_tags_and_note_land_on_the_persisted_row(client):
+    """The 201 proves the endpoint ACCEPTED the tags, not that it STORED them.
+
+    ``FeedbackOut`` returns only ``{id, action}``, so nothing downstream reads
+    the tags back — a regression that dropped them would be invisible until a
+    creator's style distillation quietly ran on empty input. Captures the row
+    handed to ``session.add`` and asserts the columns actually carry the values.
+    (Found while verifying Issue 437 live: all four production feedback rows had
+    ``feedback_tags = NULL`` because the creator used the free-text note, so this
+    path had never once been exercised end to end.)
+    """
+    from models import ClipFeedback
+
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+    added: list = []
+
+    def _session_capturing_add():
+        async def _session():
+            session = AsyncMock()
+            session.execute = AsyncMock(
+                side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, clip)
+            )
+
+            async def _refresh(obj):
+                pass
+
+            session.refresh = _refresh
+            session.commit = AsyncMock()
+            session.add = MagicMock(side_effect=added.append)
+            yield session
+
+        return _session
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _session_capturing_add()
+
+    with patch("worker.tasks.retrain_preference") as mock_retrain:
+        mock_retrain.delay = MagicMock()
+        try:
+            resp = client.post(
+                f"/clips/{clip.id}/feedback",
+                json={
+                    "action": "downvote",
+                    "feedback_tags": ["wrong_moment", "bad_hook"],
+                    "feedback_note": "Cut slid too soon",
+                },
+                cookies={"session": "x"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 201, resp.text
+    rows = [o for o in added if isinstance(o, ClipFeedback)]
+    assert len(rows) == 1, f"expected exactly one ClipFeedback row, got {len(rows)}"
+    row = rows[0]
+    assert row.feedback_tags == ["wrong_moment", "bad_hook"]
+    assert row.feedback_note == "Cut slid too soon"
+    assert row.clip_id == clip.id
+    assert row.creator_id == creator.id
+
+
 def test_feedback_accepts_tags_and_note(client):
     """Feedback with feedback_tags and feedback_note posts successfully."""
     creator = _mock_creator()

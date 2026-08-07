@@ -440,12 +440,6 @@ def _face_inside(
     rx, ry, rw, rh = region
     return rx <= fx + fw / 2 <= rx + rw and ry <= fy + fh / 2 <= ry + rh
 
-_BACKGROUND_STYLES: dict[str, str] = {
-    "blur": "split[v][blur];[blur]scale={ow}:{oh},boxblur=luma_radius=20:luma_power=2[blurred];[blurred][v]overlay=(W-w)/2:(H-h)/2",
-    "black": "",  # default — letterbox fills with black (ffmpeg default pad colour)
-}
-
-
 # Auto-zoom punch-in at peak (Issue 184, opt-in via style_preset["zoom_on_peak"]).
 # Principle 4 (pattern interrupt). A triangular zoom pulse centered on the clip's
 # peak ramps to (1 + _PUNCH_IN_SCALE)× over ±_PUNCH_IN_RAMP_S seconds, then back to
@@ -491,7 +485,12 @@ def render_clip_file(
       - ``caption_position``: "top" | "middle" | "bottom" | None (Issue 427) —
         the creator's caption band. None → per-style default (karaoke at the
         ~70% bottom band with face avoidance; minimal/gradient lower-third).
-      - ``background``: "blur" | "black" | None  (None → default black letterbox)
+      - ``background``: ACCEPTED AND PERSISTED BUT NOT APPLIED (Issue 442). The
+        filter chain is crop→scale, i.e. full-bleed at every supported aspect,
+        so there is no letterbox to fill and no background to composite behind.
+        The ``_BACKGROUND_STYLES`` table that once held a blur graph was dead
+        code — never referenced — and has been deleted rather than left as a
+        promise. Resolve by building the feature or removing the key end to end.
       - ``captions_enabled``: bool (currently informational — the subtitle key
         is the load-bearing switch)
       - ``zoom_on_peak``: bool (Issue 184) — when set and ``peak_s`` is inside the

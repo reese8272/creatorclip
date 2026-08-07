@@ -2481,6 +2481,30 @@ is replaced by a pair covering both sides of the new boundary.
 - [x] `SCENARIO_FLOOR` 21 → 23; landing-page public count synced 22 → 24
 - [ ] Live: next fresh upload shows no verbatim duplicated speech between clips and no conjunction-initial opens — **cannot be verified on `3b6992fe`**, whose windows are already persisted; needs a new upload or a regeneration pass
 
+### Issue 442: `style_preset["background"]` is accepted, persisted, and never applied
+
+**Severity: medium — a creator-visible setting that silently does nothing.**
+
+Found while fixing Issue 438. `background` ("blur" | "black") is accepted by `RenderStyleIn`,
+merged into the clip's preset, stored on the brand kit (`CreatorStyle.style`) and round-tripped by
+`GET/PUT /creators/me/brand-kit` — but the render never reads it. The `_BACKGROUND_STYLES` table
+holding a boxblur graph was dead code, referenced nowhere; it has been deleted and the render
+docstring now says plainly that the key is not applied, rather than leaving a promise in the code.
+
+The reason it does nothing is structural, not a missing branch: the filter chain is crop→scale,
+i.e. **full-bleed at every supported aspect** (`OUTPUT_PRESETS` picks the canvas, the crop keeps
+full region height). There is no letterbox to fill and nothing to composite behind, so a
+background only becomes meaningful alongside a "fit whole frame" export mode.
+
+Not fixed inline because both honest options are breaking changes beyond a cleanup: rejecting the
+key at the endpoint would 422 the existing brand-kit UI, and implementing it means a new
+letterbox/contain render mode.
+
+**Acceptance**
+- [ ] Decide: build a contain/letterbox mode where a background is meaningful, or remove `background` end to end (API field, `CreatorStyle` payload, brand-kit UI, docs)
+- [ ] Whichever way, no code path accepts a style key it does not honor
+- [ ] A creator setting a background either sees it in the render or cannot set it at all
+
 ---
 
 ## Source index
@@ -2556,5 +2580,5 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **442**.
+- Next free issue number: **443**.
 #JS9DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW     RRRRRRRRRRRRRRRRREEEEEEEEEEE[ -KQLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL;]

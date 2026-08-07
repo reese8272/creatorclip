@@ -55,34 +55,52 @@ def main() -> None:
     creator = sys.argv[1] if len(sys.argv) > 1 else None
 
     with psycopg.connect(_normalize(raw), connect_timeout=15) as conn, conn.cursor() as cur:
+        # Every tenant table is FORCE ROW LEVEL SECURITY and the app role has no
+        # BYPASSRLS, so with `app.creator_id` unset these SELECTs return zero rows
+        # and NO error — which this script used to report as "No videos found."
+        # against a perfectly full database. `creators` is RLS-exempt, so it is the
+        # bootstrap; every query below runs with the GUC set for one creator at a
+        # time, INCLUDING the clip breakdown (leaving the GUC on whichever creator
+        # happened to be last would silently hide every clip row).
+        # See scripts/clip_audit.py.
         if creator:
-            cur.execute(
-                "SELECT id, youtube_video_id, ingest_status, failure_reason, created_at "
-                "FROM videos WHERE creator_id = %s ORDER BY created_at DESC LIMIT 50",
-                (creator,),
-            )
+            creator_ids = [creator]
         else:
+            cur.execute("SELECT id FROM creators")
+            creator_ids = [str(c[0]) for c in cur.fetchall()]
+
+        videos: list = []
+        clip_rows: dict = {}
+        for cid in creator_ids:
+            cur.execute("SELECT set_config('app.creator_id', %s, false)", (cid,))
             cur.execute(
                 "SELECT id, youtube_video_id, ingest_status, failure_reason, created_at "
-                "FROM videos ORDER BY created_at DESC LIMIT 20"
+                "FROM videos ORDER BY created_at DESC LIMIT 50"
             )
-        videos = cur.fetchall()
+            mine = cur.fetchall()
+            if not mine:
+                continue
+            videos.extend(mine)
+            # Clip breakdown per video, while this creator's GUC is still set.
+            cur.execute(
+                "SELECT video_id, render_status, COUNT(*), "
+                "COUNT(render_uri) FILTER (WHERE render_uri IS NOT NULL) "
+                "FROM clips WHERE video_id = ANY(%s) GROUP BY video_id, render_status",
+                ([v[0] for v in mine],),
+            )
+            for vid, status, n, with_uri in cur.fetchall():
+                clip_rows.setdefault(vid, []).append((str(status), n, with_uri))
+
+        videos.sort(key=lambda v: v[4], reverse=True)
+        videos = videos[: 50 if creator else 20]
 
         if not videos:
-            print("No videos found.")
+            print(
+                "No videos found. (If this is unexpected: every tenant table is FORCE RLS "
+                "and the app role has no BYPASSRLS, so an unset app.creator_id GUC yields "
+                "zero rows with no error.)"
+            )
             return
-
-        # Clip breakdown per video: render_status counts + render_uri presence.
-        vids = [v[0] for v in videos]
-        cur.execute(
-            "SELECT video_id, render_status, COUNT(*), "
-            "COUNT(render_uri) FILTER (WHERE render_uri IS NOT NULL) "
-            "FROM clips WHERE video_id = ANY(%s) GROUP BY video_id, render_status",
-            (vids,),
-        )
-        clip_rows: dict = {}
-        for vid, status, n, with_uri in cur.fetchall():
-            clip_rows.setdefault(vid, []).append((str(status), n, with_uri))
 
         print(f"{'video':>12}  {'yt_id':<14} {'ingest':<8}  clips (by render_status)")
         print("-" * 78)
