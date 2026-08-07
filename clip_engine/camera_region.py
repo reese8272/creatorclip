@@ -210,6 +210,7 @@ def detect_video_camera_region(
     frame_h: int,
     *,
     sample_frames: int = 24,
+    timeout_s: float = 240.0,
     **kwargs: object,
 ) -> dict | None:
     """Resolve the camera region ONCE for a whole video (Issue 439).
@@ -237,6 +238,9 @@ def detect_video_camera_region(
         frame_w,
         frame_h,
         sample_frames=sample_frames,
+        # Generous by default: this runs at ingest and in a Beat backfill, never
+        # in the render hot path, and it seeks across the whole runtime.
+        timeout_s=timeout_s,
         **kwargs,  # type: ignore[arg-type]
     )
     if region is None:
@@ -285,6 +289,117 @@ def region_from_video_json(
         return None
 
 
+# Above this span a single decode pass stops being viable. One ffmpeg call with
+# an `fps` filter must decode the WHOLE span linearly; that is optimal for a
+# 30-90 s clip window (one process, sequential read) but over a 27-minute video
+# it is 20-30x the work and blew the 60 s timeout on the first real backfill —
+# 24 frames at fps=0.0148 meant decoding all 1617 seconds. Long spans switch to
+# one input-seek per frame, which is O(1) per sample regardless of file length.
+# The threshold sits well above the 90 s clip ceiling so every per-clip call
+# keeps its existing, frame-verified behaviour byte-identical.
+_LINEAR_DECODE_MAX_SPAN_S = 120.0
+# Per-seek ceiling; an input seek lands in well under a second on a local file.
+_SEEK_FRAME_TIMEOUT_S = 10.0
+
+
+def _sample_by_linear_decode(
+    source_path: Path,
+    start_s: float,
+    duration: float,
+    sample_frames: int,
+    timeout_s: float,
+    tmp_dir: str,
+) -> bool:
+    """Original single-pass extraction — one ffmpeg call over a short span."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{start_s:.3f}",
+        "-t",
+        f"{duration:.3f}",
+        "-i",
+        str(source_path),
+        "-vf",
+        f"fps={sample_frames / duration:.6f},scale={_ANALYSIS_WIDTH}:-2,format=gray",
+        "-frames:v",
+        str(sample_frames),
+        str(Path(tmp_dir) / "f%03d.png"),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("camera_region: frame sampling failed (%s)", exc)
+        return False
+    if result.returncode != 0:
+        logger.warning(
+            "camera_region: ffmpeg sampling failed: %s",
+            result.stderr[-300:] if result.stderr else "?",
+        )
+        return False
+    return True
+
+
+def _sample_by_seeking(
+    source_path: Path,
+    start_s: float,
+    duration: float,
+    sample_frames: int,
+    timeout_s: float,
+    tmp_dir: str,
+) -> bool:
+    """One input-seek per frame — cost is independent of the span's length.
+
+    ``-ss`` BEFORE ``-i`` is input seeking: ffmpeg jumps to the nearest keyframe
+    instead of decoding forward to it. Frames therefore land on keyframes rather
+    than exact timestamps, which is irrelevant here — the detector wants diverse
+    samples across the runtime, not precise ones.
+
+    A single unreadable sample must not lose the whole pass, so failures are
+    skipped; the caller's ``< 3 frames`` guard still rejects a stack too sparse
+    to measure temporal variance against.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    captured = 0
+    for i in range(sample_frames):
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "camera_region: sampling budget (%.0fs) exhausted after %d/%d frames",
+                timeout_s,
+                captured,
+                sample_frames,
+            )
+            break
+        t = start_s + duration * (i + 0.5) / sample_frames
+        out = Path(tmp_dir) / f"f{i:03d}.png"
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            f"{t:.3f}",
+            "-i",
+            str(source_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={_ANALYSIS_WIDTH}:-2,format=gray",
+            "-f",
+            "image2",
+            str(out),
+        ]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=_SEEK_FRAME_TIMEOUT_S
+            )
+        except (subprocess.SubprocessError, OSError):
+            continue
+        if result.returncode == 0 and out.exists():
+            captured += 1
+    return captured > 0
+
+
 def _sample_gray_frames(
     source_path: Path,
     start_s: float,
@@ -298,34 +413,15 @@ def _sample_gray_frames(
     import cv2
 
     duration = max(0.1, end_s - start_s)
-    fps = sample_frames / duration
     with tempfile.TemporaryDirectory(prefix="camregion_") as tmp_dir:
-        pattern = str(Path(tmp_dir) / "f%03d.png")
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            f"{start_s:.3f}",
-            "-t",
-            f"{duration:.3f}",
-            "-i",
-            str(source_path),
-            "-vf",
-            f"fps={fps:.6f},scale={_ANALYSIS_WIDTH}:-2,format=gray",
-            "-frames:v",
-            str(sample_frames),
-            pattern,
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-        except (subprocess.SubprocessError, OSError) as exc:
-            logger.warning("camera_region: frame sampling failed (%s)", exc)
-            return None
-        if result.returncode != 0:
-            logger.warning(
-                "camera_region: ffmpeg sampling failed: %s",
-                result.stderr[-300:] if result.stderr else "?",
-            )
+        if duration > _LINEAR_DECODE_MAX_SPAN_S:
+            if not _sample_by_seeking(
+                source_path, start_s, duration, sample_frames, timeout_s, tmp_dir
+            ):
+                return None
+        elif not _sample_by_linear_decode(
+            source_path, start_s, duration, sample_frames, timeout_s, tmp_dir
+        ):
             return None
         frames = []
         for p in sorted(Path(tmp_dir).glob("f*.png")):

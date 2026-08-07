@@ -103,6 +103,81 @@ def test_detects_inner_camera_region():
     assert 700 <= rh <= 880
 
 
+# ── frame sampling strategy ──────────────────────────────────────────────────
+#
+# These exercise _sample_gray_frames ITSELF. Every other test in this file
+# patches it out, which is exactly why the first live backfill hit a defect the
+# suite could not see: a whole-video call built ONE ffmpeg pass with
+# `fps=0.0148`, forcing a linear decode of all 1617 seconds, and timed out.
+
+
+def _sampling_commands(start_s: float, end_s: float, frames: int = 24) -> list[list[str]]:
+    """Capture the ffmpeg command(s) _sample_gray_frames issues for a span."""
+    from clip_engine.camera_region import _sample_gray_frames
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        from unittest.mock import MagicMock
+
+        return MagicMock(returncode=1, stdout="", stderr="")
+
+    with patch("clip_engine.camera_region.subprocess.run", side_effect=_fake_run):
+        _sample_gray_frames(_SRC, start_s, end_s, frames, 60.0)
+    return calls
+
+
+def test_short_clip_window_still_uses_one_linear_decode_pass():
+    """The per-clip path is frame-verified in production — it must not change."""
+    calls = _sampling_commands(10.0, 70.0)
+    assert len(calls) == 1
+    vf = calls[0][calls[0].index("-vf") + 1]
+    assert "fps=" in vf
+
+
+def test_whole_video_span_seeks_per_frame_instead_of_decoding_linearly():
+    """Issue 439: a 27-minute span must not be decoded end to end.
+
+    One pass with an `fps` filter costs O(span); 24 input seeks cost O(1) each.
+    This is the defect the first live backfill surfaced — the suite could not
+    have caught it while every test patched the sampler out.
+    """
+    calls = _sampling_commands(0.0, 1617.2)
+    assert len(calls) == 24, f"expected one seek per frame, got {len(calls)} call(s)"
+    for cmd in calls:
+        joined = " ".join(cmd)
+        assert "fps=" not in joined, "long spans must not use the linear-decode filter"
+        assert cmd.index("-ss") < cmd.index("-i"), "-ss must precede -i (input seeking)"
+        assert cmd[cmd.index("-frames:v") + 1] == "1"
+    # Seek timestamps must actually spread across the whole runtime.
+    stamps = [float(c[c.index("-ss") + 1]) for c in calls]
+    assert stamps == sorted(stamps)
+    assert stamps[0] < 60.0 and stamps[-1] > 1500.0
+
+
+def test_seek_sampling_survives_individual_frame_failures():
+    """One unreadable sample must not lose the pass; the <3-frame guard still
+    rejects a stack too sparse to measure variance against."""
+    from clip_engine.camera_region import _sample_by_seeking
+
+    seen: list[list[str]] = []
+
+    def _flaky(cmd, **kwargs):
+        seen.append(cmd)
+        from unittest.mock import MagicMock
+
+        return MagicMock(returncode=1 if len(seen) % 2 else 0, stdout="", stderr="")
+
+    with (
+        patch("clip_engine.camera_region.subprocess.run", side_effect=_flaky),
+        patch("pathlib.Path.exists", return_value=True),
+    ):
+        ok = _sample_by_seeking(_SRC, 0.0, 1617.2, 8, 60.0, "/tmp")
+    assert ok is True
+    assert len(seen) == 8, "a failed frame must not abort the remaining samples"
+
+
 # ── video-level region (Issue 439 Stage 2) ───────────────────────────────────
 
 
