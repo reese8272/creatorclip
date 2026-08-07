@@ -22,29 +22,39 @@ hand or drop deliberately.
 
 ## CURRENT FOCUS
 
-**The UI features are all creator-validated. The open work is now CLIP QUALITY** — the
-2026-08-07 audit of a real upload found four confirmed defects in the rendered output
-(Issues **438-441**), all filed with evidence, none yet fixed. Rulings: `docs/DECISIONS.md`
-three 2026-08-05 entries; session log: `docs/PROJECT_STATE.md` top entry.
+**Issues 438-441 are BUILT AND COMMITTED but NOT DEPLOYED.** The 2026-08-07 audit of video
+`3b6992fe` found four confirmed defects in the rendered output; all four are fixed, each gated
+before the next started. Every remaining acceptance box is a **live** one — they need a deploy
+(which now carries **migration 0056**) plus, for 441, a fresh upload. Rulings:
+`docs/DECISIONS.md` three 2026-08-07 entries (439, 440, 441) + three 2026-08-05; session log:
+`docs/PROJECT_STATE.md` top entry.
+
+**Three plan deviations worth knowing before touching this code**, each recorded in DECISIONS
+with the evidence that forced it: no camera-region height ceiling (it would reject legitimate
+regions), no speaker-following on the `face_pan` rung (built, then rejected by its own test),
+and no coordinators or pronouns in the weak-opener list (they broke pinned snap cases).
 
 ## → NEXT ACTIONS (in order)
 
-1. **Work Issues 438-441** (filed 2026-08-07 from the audit of video `3b6992fe`; full evidence
-   in `docs/issues.md` § *Wave 11 · Lane L26 · Batch D*). Suggested order — 438 first (smallest,
-   and it is shipping captionless clips today), then 439, then 440, then 441:
-   - **438** captionless renders when `style_preset` is NULL (`worker/tasks.py:3547` seeds the
-     kit style onto the auto-render top-N only; `routers/clips.py:871` backfills only when a
-     request body is present). Ranks 9-12+14 of `3b6992fe` will render captionless as-is.
-   - **439** camera-region detection unions animated overlays into the region
-     (`camera_region.py:92-102` admits any contour ≥20% of the largest blob; the height frac is a
-     floor with no ceiling; the face gate is containment-only so widening never trips it) — rank 6
-     burned the SUBSCRIBE/socials/superchat overlay into the bottom third for 84 s.
-   - **440** `face_pan` sweeps — the tripod (436) holds only in `speaker_cut`; rank 7 does 7
-     full-width sweeps, rank 2 lands a frame on empty background.
-   - **441** overlapping clip windows + mid-sentence cold opens in the PRIMARY generation pass
-     (regeneration is clean). Note the eval is green while production fails — widen the 428/429
-     fixtures to partial overlap and conjunction-initial opens BEFORE touching the ranker.
-   Re-run the audit after each fix: `scripts/clip_audit.py` (see *Clip audit method* below).
+1. **DEPLOY 438-441 and run the live checks.** All four are built, gated and committed
+   (`79b9e63..651f902`, backend 2916/0, Layer 0 green, eval 24/24) but **nothing is deployed**.
+   Issue 439 Stage 2 ships **migration 0056** (`videos.camera_region_jsonb`) — additive nullable
+   JSONB, expand-only, so the still-unset `BACKUP_R2_BUCKET` (Issue 256) is not a blocker, but set
+   it before anything destructive. `gh run list` after the push: **a failed image build silently
+   SKIPS deploy.**
+   Then re-render the known-bad clips of `3b6992fe` and re-audit:
+   - **rank 13** → captions must appear (438)
+   - **rank 6** → SUBSCRIBE button, socials strip and superchat must be gone (439)
+   - **ranks 2 and 7** → no empty-background frames, bounded motion (440)
+   Drill: reset `render_status='pending'` per clip id, then
+   `docker compose exec -T worker celery -A worker.celery_app call worker.tasks.render_clip --args '["<id>"]'`.
+   Verify with `scripts/clip_audit.py` (see *Clip audit method* below) against the recorded
+   baseline in `docs/PROJECT_STATE.md`.
+2. **441 cannot be verified on `3b6992fe`** — its windows are already persisted. It needs a
+   **fresh upload** (or a regeneration pass) showing no verbatim duplicated speech between clips
+   and no conjunction-initial opens. Also worth watching on that upload: the video-level camera
+   region is now resolved at ingest, so check `videos.camera_region_jsonb` is populated and that
+   every clip's `reframe_track_jsonb.region` matches it.
 2. **Still owed on 437:** the *failure*-path browser drill — Review → devtools request-blocking
    on `**/clips/*/feedback` → **Keep** → pick a **tag** → **Submit**. Expect a **red, persistent**
    *"Couldn't reach the server — nothing was saved"*, panel **still open**, tag **still
@@ -101,9 +111,11 @@ were **demonstrated failing first** against the old component.
 **Gates on the prior wave (`5a8d0f1`):** backend **2877/0** · Layer 0 ALL GREEN (coverage 84+,
 ruff/mypy/bandit/pip-audit 0) · frontend 646/646 on node 22.
 
-**Issue map:** 431/432/433/434/435/436/**437** all DONE in `docs/issues.md`; live boxes on
-431/434/435 closed 2026-08-07, 437's failure-path box still open. **438-441 FILED, NOT STARTED.**
-**Next free issue number: 442.**
+**Issue map:** 431-437 DONE (live boxes on 431/434/435 closed 2026-08-07; 437's failure-path box
+still open). **438/439/440/441 BUILT + COMMITTED, NOT DEPLOYED** — every open box on them is a
+`Live:` one. **442 FILED, NOT STARTED** (`style_preset["background"]` accepted but never applied —
+decide whether to build a contain/letterbox mode or remove the key end to end).
+**Next free issue number: 443.**
 
 **Audit verdict on `3b6992fe` (2026-08-07) — do not re-derive:** container and audio delivery are
 flawless on all 9 rendered clips (1080×1920 h264/aac, duration exact to ±0.01 s, −13.9 to

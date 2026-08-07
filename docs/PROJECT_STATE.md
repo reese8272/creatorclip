@@ -4,6 +4,49 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-07 (later) — Issues 438-441 ALL BUILT + the audit cleanup
+
+All four audit defects fixed, one at a time, each gated before the next started. Backend
+**2916/0**, Layer 0 all green, eval **24 scenarios / 100%**. Six commits, `79b9e63..651f902`.
+**Nothing is deployed yet** — every "Live:" acceptance box remains open, and Issue 439 Stage 2
+ships migration **0056**.
+
+- **438** — style seeding hoisted out of the auto-render top-N slice *and* out of the
+  `AUTO_RENDER_CLIPS` guard; the render endpoint resolves the brand kit whether or not a body is
+  sent (which also repairs every already-NULL row with no backfill); two silent caption drops now
+  warn.
+- **439** — Stage 1: the region anchors on the largest blob and unions a secondary only if it
+  shares its vertical span, so an animated overlay is excluded instead of absorbed. Stage 2:
+  migration 0056 + `Video.camera_region_jsonb`, resolved once at ingest from 24 frames across the
+  whole runtime, preferred by the render with a per-clip face-box safety valve, plus an hourly
+  backfill.
+- **440** — `face_pan` holds the dominant seat per shot instead of gliding across a two-shot;
+  **concurrency** (not separation) distinguishes a two-shot from a subject who relocated; the
+  surviving pan path's deadband scales to the pan space.
+- **441** — an absolute-seconds overlap predicate (`_MAX_OVERLAP_S = 3.0`) alongside the untouched
+  containment ratio; sentence spans carry their first token so a start can walk back off a
+  dependent opener; two new eval fixtures, floor 21 → 23, landing-page count 22 → 24.
+
+**Three plan deviations, all evidence-driven and recorded in `docs/DECISIONS.md`:**
+1. Issue 439's `CAMERA_REGION_MAX_HEIGHT_FRAC` ceiling was **not** added — a pre-existing test
+   asserts a legitimate 0.648–0.815 height fraction and the defective region was 0.694, inside
+   that band, so any ceiling catching the real failure would reject correct regions.
+2. Issue 440 does **not** cut to the speaker on the pan rung — built, then rejected by its own
+   test at five flips in ten seconds. No traversal-budget constant either.
+3. Issue 441's opener list ships **without coordinators or pronouns** — including them broke two
+   pinned snap cases, and no live failure was coordinator- or pronoun-initial.
+
+**Two pinned tests were deliberately changed** (both stated in their commits):
+`test_partial_overlap_admitted_by_nms_is_kept` asserted two 60 s windows sharing **40 s** must
+both survive — that is the defect, not a keep — and the `build_sentence_index` shape tests, whose
+contract now carries `first_word`.
+
+Cleanup: `feedback_tags` persistence asserted end to end; `scripts/clip_pipeline_state.py` made
+RLS-aware (verified against prod); `style_preset["background"]` promoted to **Issue 442** with its
+dead `_BACKGROUND_STYLES` table deleted. Next free issue number **443**.
+
+---
+
 ## 2026-08-07 — Post-render clip audit: 4 defects filed (438-441), 3 live boxes closed
 
 First full-set audit of a real creator upload — video `3b6992fe` ("Video 2 Test", Backboard
