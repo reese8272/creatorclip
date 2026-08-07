@@ -4,6 +4,53 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-07 — Post-render clip audit: 4 defects filed (438-441), 3 live boxes closed
+
+First full-set audit of a real creator upload — video `3b6992fe` ("Video 2 Test", Backboard
+Media, 27 min source, 14 clips, 9 rendered). Built `scripts/clip_audit.py` (read-only:
+prod-container `manifest` + local `inspect` producing ffprobe/EBU-R128/contact sheets) and
+looked at every rendered clip. Notable mechanic: the prod app role is `creatorclip_app` with
+`FORCE ROW LEVEL SECURITY` and no `BYPASSRLS`, so every query must set the `app.creator_id`
+GUC first — `scripts/clip_pipeline_state.py` reports a misleading "No videos found." without it
+(logged in OFF_COURSE_BUGS).
+
+**Verified good and not to be re-investigated:** all 9 renders are 1080×1920 h264/aac; duration
+matches `end_s - COALESCE(setup_start_s, start_s)` to ±0.01 s on every clip; integrated loudness
+is −13.9 to −14.0 LUFS against the `I=-14` target on every clip; ranks 1/3/4/5/8 are tight,
+stable, chrome-free and correctly captioned. The virtual tripod (436) holds exactly as designed
+in `speaker_cut` mode — 2-3 keyframes, x changing only at cuts.
+
+**Filed (all confirmed on delivered media, not inferred):**
+- **438** — clips render captionless when `style_preset` is NULL. Rank 13 shipped with zero
+  captions. `worker/tasks.py:3547` seeds the kit style onto the auto-render top-N only, and
+  `routers/clips.py:871` backfills it only when a request body is present, so a bodiless
+  "Render this clip" renders with `None` and `render.py:676` silently drops the caption branch.
+  Ranks 9-12 and 14 are primed to do the same.
+- **439** — camera-region detection unions animated overlays into the region. Rank 6 resolved a
+  0.694 height-frac region against its siblings' 0.507 and burned the SUBSCRIBE button,
+  `@WSHCARTER` socials strip and a superchat overlay into the bottom third for 84 s. (The issue's
+  first draft blamed "a single midpoint frame"; corrected the same day — detection samples 10
+  frames across the window, and the real defect is the ≥20%-of-largest contour union at
+  `camera_region.py:92-102` plus a height floor with no ceiling.)
+- **440** — the `face_pan` fallback degenerates into repeated full-width sweeps; the tripod does
+  not hold there. Rank 7: 343 keyframes, 7 monotonic runs of ±900 px (the whole pan range) in
+  42.6 s. Rank 2 — the clip the creator dropped — has a frame sitting on **empty background**.
+  Root cause is a deadband scaled to crop width (~46 px) while the speakers sit ~900 px apart.
+- **441** — primary generation emits overlapping windows and mid-sentence cold opens. Five
+  overlapping pairs (largest 17.4 s = 41% of rank 7), verbatim duplicated speech between ranks 2
+  and 6, and 5 of 9 clips opening on a subordinate clause or dangling referent. The 428/429 eval
+  fixtures pass because containment only catches *fully contained* duplicates — the eval is green
+  while production fails.
+
+**Live boxes closed:** 431 (generate-more verified on ranks 13+14 created 12:21Z — no minute
+deduction, no duplicate windows), 434 (audio), 435 (rename). **437's success path** verified in
+the DB — exactly two `clip_feedback` rows, one `upvote` + one `downvote`, no double-count, notes
+persisted, `preference_models` advanced to v3; its *failure*-path live box remains open.
+
+Gates: backend **2882/0**, Layer 0 all green (ruff/mypy/bandit/pip-audit 0, coverage 84.28).
+
+---
+
 ## 2026-08-05 — Issue 437 DONE: Keep/Drop no longer fails silently
 
 Filed and fixed from a live incident, not a planned issue. autoclip.studio briefly returned

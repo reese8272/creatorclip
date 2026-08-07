@@ -2076,7 +2076,7 @@ in the toolbar + the all-reviewed terminal state (redirect held open while in fl
 - [x] Existing clips, feedback, and renders are untouched (append-only; no delete path exists in `append_ranked_clips`)
 - [x] No minute deduction; LLM spend guarded + capped (guard stack + 6/call + 24/video)
 - [x] Button in Review; honest "No new distinct moments" message when a pass finds nothing new
-- [ ] Live smoke on the next fresh upload: review → generate more → appended non-duplicate clips, metadata fills, no minute deduction
+- [x] Live smoke on the next fresh upload: review → generate more → appended non-duplicate clips, metadata fills, no minute deduction — verified 2026-08-07 on video `3b6992fe` (Backboard Media). Ranks 13+14 created `12:21:41Z`, three minutes after the keep/drop; the original 12 were created `2026-08-05 23:35:02Z`. `minute_deductions` holds exactly one row for the video (27 min at ingest, `23:33:13Z`) — regeneration deducted nothing. Both appended clips carry generated titles. Neither appended window overlaps any existing clip (the overlaps found on this video are all inside the *original* batch — Issue 441). Caveat: rank 13 came back `render_status=done`, so an appended clip did get rendered; that is the manual "Render this clip" path, and it exposed Issue 438
 
 ### Issue 434: Review page is silent — muted autoplay with no unmute control
 
@@ -2097,7 +2097,7 @@ persists per session (`sessionStorage` `cc-player-muted`) so advancing the Revie
 - [x] Unmute toggle in the chrome; autoplay still starts muted (`video-player.test.tsx`)
 - [x] Choice survives the per-clip remount (sessionStorage pin)
 - [x] Non-autoplay surfaces unaffected (start unmuted, ignore the stored choice)
-- [ ] Live: sound audible in Review after one click on the next upload
+- [x] Live: sound audible in Review after one click on the next upload — creator-confirmed 2026-08-07 ("speaker icon allows me to hear the video now"). The delivered files were never the problem: all 9 rendered clips of `3b6992fe` ffprobe as `aac` stereo and measure −13.9 to −14.0 LUFS integrated, dead on the `I=-14` render target
 
 ### Issue 435: Video titles — filename seed + inline rename ("Untitled" dead end)
 
@@ -2117,7 +2117,7 @@ invalidation, so the review/editor pickers pick the rename up for free.
 - [x] Upload seeds title from filename (`test_videos_multipart_upload.py` happy path)
 - [x] Tri-state PATCH + isolation (`tests/test_video_title.py`: set/clear/untouched/404)
 - [x] Inline rename on the Dashboard (`VideoTitleCell.test.tsx`)
-- [ ] Live: rename the fresh upload on the Dashboard and see it in the Review picker
+- [x] Live: rename the fresh upload on the Dashboard and see it in the Review picker — creator-confirmed 2026-08-07. Video `3b6992fe` carries the title "Video 2 Test"; the pre-435 upload `b8505eb7` still has `title IS NULL` (the "Untitled" dead end this issue closed)
 
 ### Issue 436: Jittery AI framing — virtual-tripod hold (stop chasing the raw face center)
 
@@ -2199,6 +2199,206 @@ idempotency key. The 502's own root cause on the VM was not investigated.
 - [x] Status line is a `role="status" aria-live="polite"` region rendered before its first message
 - [x] Full frontend lane green on the CI-pinned Node 22: 649/649
 - [ ] Live: block `**/clips/*/feedback` in devtools on the next Review pass and confirm the red persistent message + preserved tags
+- [x] Live (success path only): the 2026-08-07 Review session wrote exactly two `clip_feedback` rows — `upvote` on rank 1 at `12:18:17Z`, `downvote` on rank 2 at `12:18:26Z`, one row each (no double-count), both `feedback_note` values persisted verbatim, and `preference_models` advanced to v3. The *failure* path above is still owed
+
+---
+
+## Wave 11 · Lane L26 · Batch D — post-render quality audit (2026-08-07)
+
+> Filed from the first full-set audit of a real creator upload (video `3b6992fe`, Backboard
+> Media, 14 clips / 9 rendered). Method and evidence: `scripts/clip_audit.py` (read-only prod
+> manifest + local ffprobe/loudness/contact-sheet pass). Every finding below was confirmed on
+> delivered media, not inferred from code. What was **verified good**: all 9 renders are
+> 1080×1920 h264/aac, duration exact to ±0.01 s against `end_s - COALESCE(setup_start_s, start_s)`,
+> integrated loudness −13.9 to −14.0 LUFS against the `I=-14` target, and 5 of 9 clips
+> (ranks 1/3/4/5/8) are tight, stable, chrome-free and correctly captioned.
+
+### Issue 438: Clips render captionless when `style_preset` is NULL — kit style is seeded onto the auto-render top-N only
+
+**Severity: high — silent, visible, already shipped to a creator.**
+
+Rank 13 of `3b6992fe` has **zero burned-in captions** across its full 89 s. Every other rendered
+clip on the same video has them. `style_preset` is populated on ranks 1–8 and `NULL` on ranks
+9–14; rank 13 is the only NULL clip that has been rendered so far.
+
+Two gaps compose into it:
+- `worker/tasks.py:3547-3552` seeds the brand-kit style only onto the slice it is about to
+  auto-render (`ordered = sorted(clips, …)[:top_n]`, `AUTO_RENDER_TOP_N=8`). Clips outside the
+  top-N are never given a preset.
+- `routers/clips.py:871` backfills the kit style **only `if body is not None`**. A bodiless
+  `POST /clips/{id}/render` — the plain "Render this clip" button and any retry — skips the
+  merge entirely and leaves `style_preset = None`.
+
+`clip_engine/render.py:676` (`if style_preset:`) then drops the whole caption branch, and
+`:715-717` treats a `None` from `build_ass_subtitles` as normal, so the `subtitles=` filter is
+omitted with no error, no warning, and a `done` render status. Ranks 9–12 and 14 are all primed
+to do exactly the same on first render.
+
+**Fix direction:** seed the kit style for every persisted clip (not just the render slice), and
+have the render endpoint resolve the kit whether or not a body is present. Consider making a
+requested-but-unbuildable caption track a loud failure rather than a silent omission.
+
+**Status: DONE (2026-08-07)** — backend 2886/0, Layer 0 all green (coverage 84.35).
+
+**What changed**
+- `worker/tasks.py` — style seeding is now its own block over **every** persisted clip, hoisted
+  out of both the `[:top_n]` slice and the `AUTO_RENDER_CLIPS` guard. `AUTO_RENDER_TOP_N` still
+  caps rendering; it no longer caps styling.
+- `routers/clips.py` — the brand-kit resolve/merge no longer sits inside `if body is not None`.
+  It runs unconditionally, and the body's overrides collapse from seven `if … is not None`
+  branches to `merged.update(body.model_dump(exclude_none=True))` — every `RenderStyleIn` field
+  is optional with `None` meaning "keep existing", so `exclude_none` is exactly the override set.
+  This also repairs every already-NULL row without a migration or backfill.
+- `clip_engine/render.py` — two `logger.warning` calls on the silent-drop paths: a requested
+  caption track that produced no file, and a `subtitle` key outside `VALID_STYLES` (which is the
+  same set as `_ANIMATED_CAPTION_STYLES`, so an unknown key fell straight through). The render
+  still succeeds — a captionless clip beats no clip — but it is no longer invisible.
+
+**Acceptance**
+- [x] A clip persisted outside the auto-render top-N, rendered with a **bodiless** `POST /clips/{id}/render`, resolves the brand kit (`test_brand_kit_render_applies_kit_with_no_request_body` — demonstrated failing first: `assert None == 'bold_pop'`)
+- [x] `style_preset` is non-NULL for every clip a generation pass persists, including clips beyond `AUTO_RENDER_TOP_N` and when `AUTO_RENDER_CLIPS` is off (two tests in `test_progress_emit_wiring.py`, both demonstrated failing first)
+- [x] A requested caption track that resolves to nothing logs a warning (`test_requested_captions_that_resolve_to_nothing_are_logged`, demonstrated failing first)
+- [ ] Surface the captionless state in the clip's render metadata, not only the worker log — **not done**, deliberately deferred: it needs a field on the clip row and a UI affordance, which is its own issue. The warning is the interim signal
+- [ ] Live: re-render rank 13 of `3b6992fe` and confirm captions (needs deploy)
+
+### Issue 439: Camera-region detection unions animated overlays into the region — a whole clip shipped with the SUBSCRIBE/socials overlay burned in
+
+**Severity: high — the exact defect Issue 433 was built to prevent, recurring on a sibling clip.**
+
+Rank 6 of `3b6992fe` carries the source's **SUBSCRIBE button, the `@WSHCARTER` socials strip
+(TikTok/X/Instagram/YouTube icons), and a live superchat overlay** across roughly the bottom
+third of the 9:16 frame for all 84 seconds. Captions are drawn on top of that band, so in places
+both the caption and the donation text are unreadable.
+
+The cause is region disagreement between clips of the *same source*. Detected rects:
+
+| rank | region (x,y,w,h) | height frac |
+|---|---|---|
+| 1 | 169,330,1728,547 | 0.507 |
+| 4 | 301,338,1408,539 | 0.499 |
+| 5 | 185,330,1524,547 | 0.507 |
+| **6** | **0,330,1918,749** | **0.694** |
+| 8 | 185,326,1676,551 | 0.510 |
+| 13 | 137,326,1772,551 | 0.510 |
+
+Rank 6's band extends ~200 px lower than every sibling and spans the full frame width, sweeping
+the overlay strip into the crop. Rank 7 shows a milder version — a residual `NSON91` name-tag
+overlay left in the bottom-left corner.
+
+**Root cause (corrected 2026-08-07 after reading the detector).** An earlier draft of this issue
+said detection "runs once per clip on the midpoint keyframe". That is wrong, and the real
+mechanism matters for the fix. `detect_camera_region` samples **10 frames spread across the clip
+window** and takes a per-pixel temporal standard deviation
+(`clip_engine/camera_region.py:166-213`); the midpoint keyframe feeds only the Haar face box
+(`clip_engine/render.py:535-547`). The defect is at `camera_region.py:92-102`: **every motion
+contour whose area is ≥20% of the largest blob is unioned into the rect**, a rule written so a
+side-by-side two-camera layout yields one region. An animated SUBSCRIBE button, a socials strip
+or a superchat popup is its own motion contour, so it is absorbed rather than excluded — pulling
+`y+h` down ~200 px and `x`/`w` out to the full frame.
+
+Three gates should have caught it and structurally cannot:
+- `CAMERA_REGION_MIN_HEIGHT_FRAC=0.45` is a **floor with no matching ceiling**
+  (`camera_region.py:128-134`), so 0.694 passes unchallenged.
+- `CAMERA_REGION_FULL_FRAME_FRAC=0.92` passes too — the rect is 0.693 of the frame.
+- The face gate (`camera_region.py:141-152`) is a **containment** test, so *widening* a region
+  can never trip it; it only fires when the region is in the wrong place.
+
+There is also no consistency check of any kind between clips of the same source: detection is
+called from exactly one site (`render.py:562`), uncached, so N clips mean N independent answers.
+
+**Fix direction (staged).** Stage 1 — stop unioning overlay strips: admit a secondary contour
+only when it overlaps the primary blob's **vertical** span (a second camera sits *beside* the
+largest blob; a banner sits *below* it), and add a `CAMERA_REGION_MAX_HEIGHT_FRAC` ceiling to
+match the existing floor. Stage 2 — resolve the region **once per video** during ingest, where
+the source is already on disk, store it, and have the render path prefer it, so clips of one
+source can no longer disagree.
+
+**Acceptance**
+- [ ] An animated overlay strip below the camera band is excluded from the region, not unioned into it
+- [ ] A region materially taller than the camera band is rejected by an explicit ceiling
+- [ ] Region is resolved per video, stored, and preferred by the render path (per-clip detection remains the fallback for older videos)
+- [ ] Unit test: a two-band synthetic stack (camera band + intermittent bottom strip) returns only the camera band
+- [ ] Unit test: N per-clip stacks, one poisoned, reconcile to the clean siblings' rect
+- [ ] Live: re-render rank 6 of `3b6992fe` — SUBSCRIBE button, socials strip and superchat all gone
+
+### Issue 440: `face_pan` fallback degenerates into repeated full-width sweeps — the virtual tripod only holds in `speaker_cut` mode
+
+**Severity: high — this is the clip the creator dropped.**
+
+Issue 436 delivered the tripod for `speaker_cut` (ranks 1/4/5/8 hold at 2–3 keyframes; x changes
+only at cuts). It does **not** hold in the `face_pan` fallback. On `3b6992fe`:
+
+| rank | mode | keyframes | monotonic runs | run size | verdict |
+|---|---|---|---|---|---|
+| 3 | face_pan | 47 | ~1 | ±897 px | acceptable — one transition |
+| 2 | face_pan | 99 | 2 | ±890 px | **a sampled frame at t≈22.7 s sits on empty background — no person in shot** |
+| 7 | face_pan | 343 | **7** | ±900 px | 5 of 8 sampled frames are mid-pan; subject repeatedly half-out of frame |
+
+Each run traverses essentially the entire pan range (rank 7 `x_range` = [199, 1141]), so the
+framing whips across the full width of the camera region and back, seven times in 42.6 s.
+
+The three `face_pan` clips are exactly the three below `REFRAME_MIN_MAPPING_CONFIDENCE=0.2`
+(0.031, 0.163, 0.189) — low confidence forces the fallback, and the fallback has no sweep budget.
+The deadband is the mechanism: `REFRAME_PAN_DEADBAND_FRAC=0.15` is a fraction of **crop width**
+(0.15 × ~309 px ≈ 46 px), while the two speakers sit ~900 px apart in region space. Any
+attention change sustained for `REFRAME_PAN_RETARGET_S=1.0` clears a 46 px deadband by a factor
+of 20 and commits to a full-width glide. The deadband is scaled to the wrong space.
+
+**Fix direction:** scale the deadband (or a separate sweep gate) to the **pan space** rather than
+the crop width; and/or budget sweeps per unit time; and/or — when mapping confidence is low on a
+wide multi-person shot — hold a static two-shot instead of panning, which is what the creator
+asked for in their own words on 2026-08-05 ("I love the cropping being still").
+
+**Acceptance**
+- [ ] No rendered clip pans across more than a bounded fraction of the pan space per unit time
+- [ ] A crop window never rests on a region containing no detected face for more than N frames
+- [ ] Low mapping confidence on a wide shot prefers a static hold over a full-width glide
+- [ ] Eval fixture: a two-person wide shot with sub-floor mapping confidence produces a bounded-motion track
+- [ ] Live: re-render ranks 2 and 7 of `3b6992fe` and confirm no empty-background frames
+
+### Issue 441: Primary clip generation emits overlapping windows and mid-sentence cold opens
+
+**Severity: medium-high — editorial quality; the eval harness is green while live output fails.**
+
+Five overlapping pairs on one video, all inside the **original** 12-clip batch (regeneration is
+clean — Issue 431's dedup works):
+
+| pair | overlap | share |
+|---|---|---|
+| rank 7 [1257-1300] × rank 10 [1208-1275] | 17.4 s | 41% of rank 7 |
+| rank 2 [788-821] × rank 6 [812-897] | 9.1 s | 28% of rank 2 |
+| rank 1 [1140-1177] × rank 4 [1173-1212] | 4.1 s | 11% of rank 1 |
+| rank 4 × rank 10 | 3.3 s | 8% |
+| rank 2 × rank 3 | 0.8 s | 3% |
+
+The duplication is verbatim: rank 2's closing line ("I'm starting to feel like I wanna see Rahsao
+Douglas and Trey Amos starting on the outside…") **is** rank 6's opening line.
+
+Adjacent clips also split single sentences across the boundary — rank 3 ends "…I worry about this
+room some **because**" and rank 2 opens "**because** they still don't know what Mikey is." Cold
+opens on subordinate clauses or dangling referents affect 5 of 9 rendered clips: rank 2
+("because…"), rank 5 ("the Terry thing, no."), rank 8 ("when they're cut, when rosters go out."),
+rank 13 ("yeah, they've been awesome so far." — "they" has no antecedent), and rank 1 opens on
+"Like, football speed, easily to me", where the subject Nick Cross is named only in the lead-in
+the clip discards.
+
+**Why the eval did not catch this.** Issues 428/429 added `mid-sentence-open` and
+`contained-duplicate` fixtures and both pass at `SCENARIO_FLOOR=21`. The containment pass only
+rejects windows that are *fully contained* in another, so a 41% partial overlap survives; and
+`sentence_snap` evidently does not treat a conjunction-initial or answer-fragment opening as
+mid-sentence. The fixtures encode narrower failures than the ones production produces.
+
+**Fix direction:** add a partial-overlap rejection (or merge) pass alongside containment; extend
+the setup-start check to reject windows opening on a subordinating conjunction, a bare discourse
+marker ("yeah", "so"), or a pronoun whose referent lies outside the window. Widen the eval
+fixtures to the live failures before changing the ranker.
+
+**Acceptance**
+- [ ] No two persisted clips for a video overlap by more than an agreed fraction of the shorter clip
+- [ ] A clip window may not open on a subordinating conjunction or an unresolved pronoun subject
+- [ ] New eval fixtures reproduce the rank2×rank6 partial overlap and the "because…" cold open, failing before the fix
+- [ ] `SCENARIO_FLOOR` raised to cover them
+- [ ] Live: next fresh upload shows no verbatim duplicated speech between clips
 
 ---
 
@@ -2275,4 +2475,5 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **434**.
+- Next free issue number: **442**.
+#JS9DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW     RRRRRRRRRRRRRRRRREEEEEEEEEEE[ -KQLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL;]

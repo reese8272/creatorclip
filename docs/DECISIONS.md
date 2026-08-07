@@ -5,6 +5,38 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-07 — Issue 439: vertical-overlap union rule, and NO height ceiling
+
+**Decision:** a secondary motion blob joins the camera region only if it clears the existing
+20%-of-largest area ratio **and** shares ≥50% of its vertical span with the primary (largest)
+blob. The region is now anchored on the primary blob's bounding box rather than being a blind
+union of every qualifying contour (`clip_engine/camera_region.py`).
+
+**Why:** the union rule existed so a side-by-side two-camera layout yields one region, but area
+ratio alone cannot distinguish a second camera from an animated overlay. On video `3b6992fe`,
+rank 6's SUBSCRIBE button / `@WSHCARTER` socials strip / live superchat formed their own motion
+contour and were absorbed, pulling the region from the siblings' 0.507 height fraction to 0.694
+and burning the overlay into the bottom third of an 84-second clip. A second camera sits
+*beside* the primary at a similar `y`; an overlay strip sits *below* it and shares no vertical
+span — that geometric prior separates them cleanly.
+
+**Deviation from the approved plan — the `CAMERA_REGION_MAX_HEIGHT_FRAC` ceiling was NOT added.**
+The plan called for a height ceiling to match the existing 0.45 floor. Building it showed the
+instrument cannot work: the pre-existing `test_detects_inner_camera_region` asserts a legitimate
+region height of 700–880 px on a 1080 px frame, i.e. **0.648–0.815** — and the defective rank-6
+region was **0.694**, squarely inside that legitimate band. Any ceiling low enough to catch the
+real failure would reject correct regions on ordinary sources. The geometric union rule catches
+the actual mechanism, and per-video consensus is the durable cross-clip guard; a blunt ceiling
+would only have traded a visible defect for silent false rejections.
+
+**Source/evidence:** live rects and frame-verified renders in `docs/issues.md` § Issue 439;
+detector at `clip_engine/camera_region.py`; the two new tests
+(`test_animated_overlay_strip_below_the_camera_is_excluded` — demonstrated failing first at
+bottom edge 1079 vs the camera band's 800 — and `test_side_by_side_second_camera_is_still_unioned`,
+which passed before and after and pins the behaviour the union rule exists for).
+
+---
+
 ## 2026-08-05 (late night) — Fresh-upload review wave (Issues 434–436 + camera-region floor)
 
 Driven by the creator's review of video `b8505eb7` (8 rendered clips). Four rulings:

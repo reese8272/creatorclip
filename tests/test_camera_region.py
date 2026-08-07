@@ -35,9 +35,59 @@ def _stack(noise_slice: tuple[slice, slice] | None, n: int = 6) -> list[np.ndarr
     return frames
 
 
+def _stack_bands(noise_slices: list[tuple[slice, slice]], n: int = 6) -> list[np.ndarray]:
+    """Like ``_stack`` but with several independently-noisy bands — used to model
+    a live camera band plus a separate animated overlay strip."""
+    rng = np.random.default_rng(42)
+    frames = []
+    for _ in range(n):
+        f = np.full((_AH, _AW), 100, dtype=np.uint8)
+        for rows, cols in noise_slices:
+            shape = (rows.stop - rows.start, cols.stop - cols.start)
+            f[rows, cols] = rng.integers(0, 255, size=shape, dtype=np.uint8)
+        frames.append(f)
+    return frames
+
+
 def _detect(stack, **kwargs):
     with patch("clip_engine.camera_region._sample_gray_frames", return_value=stack):
         return detect_camera_region(_SRC, 10.0, 40.0, _FRAME_W, _FRAME_H, **kwargs)
+
+
+def test_animated_overlay_strip_below_the_camera_is_excluded():
+    """Issue 439: an animated SUBSCRIBE / socials / superchat strip must not be
+    unioned into the camera region.
+
+    The union rule at ``camera_region.py`` admits any contour ≥20% of the largest
+    blob so a side-by-side two-camera layout yields one region. An animated
+    overlay strip is also its own motion contour, so it was absorbed — which is
+    how rank 6 of video 3b6992fe shipped with the SUBSCRIBE button, the socials
+    strip and a live superchat burned into the bottom third for 84 seconds.
+
+    A second camera sits BESIDE the primary blob at a similar y; an overlay strip
+    sits BELOW it, sharing no vertical span.
+    """
+    camera = (slice(40, 200), slice(20, 460))  # the live camera band
+    overlay = (slice(235, 268), slice(20, 460))  # wide, short, vertically disjoint
+    region = _detect(_stack_bands([camera, overlay]))
+    assert region is not None
+    _rx, ry, _rw, rh = region
+    # Analysis→source scale is 4×: the camera band ends at row 200 → 800 px.
+    # Absorbing the overlay would push the bottom edge to ~1072.
+    assert ry + rh <= 880, f"overlay strip was unioned into the region: bottom={ry + rh}"
+
+
+def test_side_by_side_second_camera_is_still_unioned():
+    """The two-camera layout the union rule exists for must keep working: a
+    second blob BESIDE the primary, sharing its vertical span, is still merged."""
+    left = (slice(40, 220), slice(20, 230))
+    right = (slice(45, 215), slice(250, 460))
+    region = _detect(_stack_bands([left, right]))
+    assert region is not None
+    rx, _ry, rw, _rh = region
+    # Must span both cameras: left edge near col 20 (×4) and right edge near 460.
+    assert rx <= 200
+    assert rx + rw >= 1700
 
 
 def test_detects_inner_camera_region():

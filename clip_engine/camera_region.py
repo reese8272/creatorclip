@@ -32,6 +32,17 @@ logger = logging.getLogger(__name__)
 # resolution, and a small stack keeps the pass to tens of milliseconds.
 _ANALYSIS_WIDTH = 480
 
+# A secondary motion blob joins the region only if it is at least this fraction
+# of the largest blob's area …
+_SECONDARY_AREA_FRAC = 0.2
+# … AND shares at least this fraction of its vertical span with the primary blob
+# (Issue 439). A second camera in a side-by-side layout sits BESIDE the primary
+# at a similar y, so it overlaps vertically; an animated SUBSCRIBE button,
+# socials strip or superchat popup sits BELOW the camera and shares no vertical
+# span. Area ratio alone cannot tell those apart, which is how a whole clip
+# shipped with the overlay burned into the bottom third.
+_MIN_VERTICAL_OVERLAP_FRAC = 0.5
+
 
 def detect_camera_region(
     source_path: Path,
@@ -89,17 +100,43 @@ def detect_camera_region(
         largest = max(areas)
         if largest <= 0:
             return None
-        # Union every contour ≥20% of the largest — a side-by-side two-camera
-        # layout must yield ONE region spanning both cameras.
-        xs0, ys0, xs1, ys1 = [], [], [], []
+        # Anchor on the largest blob — that is the camera — then union the
+        # secondary blobs that plausibly belong to the same camera row. A
+        # side-by-side two-camera layout must yield ONE region spanning both
+        # cameras, but an overlay strip must NOT be absorbed (Issue 439), so a
+        # secondary blob has to clear the area ratio AND share the primary's
+        # vertical span.
+        px, py, pw, ph = cv2.boundingRect(contours[areas.index(largest)])
+        boxes = [(px, py, pw, ph)]
         for c, a in zip(contours, areas, strict=True):
-            if a >= 0.2 * largest:
-                x, y, w, h = cv2.boundingRect(c)
-                xs0.append(x)
-                ys0.append(y)
-                xs1.append(x + w)
-                ys1.append(y + h)
-        rx0, ry0, rx1, ry1 = min(xs0), min(ys0), max(xs1), max(ys1)
+            if a < _SECONDARY_AREA_FRAC * largest:
+                continue
+            x, y, w, h = cv2.boundingRect(c)
+            if (x, y, w, h) == (px, py, pw, ph):
+                continue
+            overlap = min(py + ph, y + h) - max(py, y)
+            if overlap >= _MIN_VERTICAL_OVERLAP_FRAC * min(ph, h):
+                boxes.append((x, y, w, h))
+            else:
+                logger.info(
+                    "camera_region: excluding motion blob (%d,%d,%d,%d) — shares %dpx of "
+                    "vertical span with the camera blob (%d,%d,%d,%d), below the %.0f%% "
+                    "floor; treating it as overlay chrome",
+                    x,
+                    y,
+                    w,
+                    h,
+                    max(overlap, 0),
+                    px,
+                    py,
+                    pw,
+                    ph,
+                    _MIN_VERTICAL_OVERLAP_FRAC * 100,
+                )
+        rx0 = min(b[0] for b in boxes)
+        ry0 = min(b[1] for b in boxes)
+        rx1 = max(b[0] + b[2] for b in boxes)
+        ry1 = max(b[1] + b[3] for b in boxes)
 
         # Pad, clamp, and scale back to source pixels.
         mh, mw = std.shape
