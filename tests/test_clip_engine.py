@@ -201,7 +201,7 @@ SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "eval", "scenarios")
 # 15 → 18 when the three kind:merge hybrid-candidate scenarios landed — Issue 416;
 # 18 → 21 when the mid-sentence-open, LLM-length-clamp, and contained-duplicate
 # scenarios landed — Issues 428/429)
-SCENARIO_FLOOR = 21
+SCENARIO_FLOOR = 23
 
 # Scenario files that are explicitly allowed to carry a pytest skip/xfail marker
 # (e.g. a known-broken scenario under active investigation). Add the YAML filename
@@ -428,6 +428,28 @@ def _assert_snap_scenario(scenario: dict) -> None:
                 "sentence — the clip starts mid-sentence"
             )
 
+    if expected.get("opens_on_content_word", False):
+        # Issue 441: `starts_on_sentence_start` cannot express this. Deepgram
+        # splits utterances on PAUSES, so "because they still don't know…" IS a
+        # sentence start — a clean boundary onto a clause that cannot stand
+        # alone. This asserts the OPENING TOKEN can carry a cold open.
+        from clip_engine.sentence_snap import is_weak_opener
+
+        sentences = build_sentence_index(segments)
+        for c in candidates:
+            opener = next(
+                (
+                    s.get("first_word")
+                    for s in sentences
+                    if s["start_s"] >= c["setup_start_s"] - 0.35
+                ),
+                None,
+            )
+            assert not is_weak_opener(opener), (
+                f"[{name}] setup_start_s={c['setup_start_s']} opens on {opener!r} — a "
+                "subordinating conjunction or discourse marker cannot open a clip"
+            )
+
     for exp_c in expected.get("candidates", []):
         anchor = exp_c.get("setup_start_s_min", exp_c.get("setup_start_s_max", 0.0))
         assert candidates, f"[{name}] no candidates to match against"
@@ -465,6 +487,22 @@ def _assert_containment_scenario(scenario: dict) -> None:
     assert [c["rank"] for c in survivors] == list(range(1, len(survivors) + 1)), (
         f"[{name}] survivor ranks not dense: {[c['rank'] for c in survivors]}"
     )
+
+    if "max_pairwise_overlap_s" in expected:
+        # Issue 441: no ratio can express this. The live pairs scored IoMin 0.419
+        # and 0.27 — BELOW the 0.8 containment threshold, which sits above the
+        # 0.67 ceiling on purpose — while sharing 17.4 s and 9.1 s of speech.
+        from clip_engine.ranking import window_overlap_s
+
+        limit = float(expected["max_pairwise_overlap_s"])
+        for i, a in enumerate(survivors):
+            for b in survivors[i + 1 :]:
+                shared = window_overlap_s(a, b)
+                assert shared <= limit, (
+                    f"[{name}] survivors [{a['setup_start_s']}, {a['end_s']}] and "
+                    f"[{b['setup_start_s']}, {b['end_s']}] share {shared:.1f}s of speech "
+                    f"(limit {limit}s) — two clips telling the same story"
+                )
     for exp_c in expected.get("candidates", []):
         anchor = exp_c.get("setup_start_s_min", exp_c.get("setup_start_s_max", 0.0))
         assert survivors, f"[{name}] no survivors to match against"

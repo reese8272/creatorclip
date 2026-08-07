@@ -31,6 +31,64 @@ SENTENCE_SNAP_MAX_S = 10.0  # sentence-scale search radius (the word-level 3 s c
 SENTENCE_LEAD_IN_S = 0.3  # small breath before the sentence's first word
 CLIP_TARGET_MAX_S = 90.0  # hard ceiling for LLM-proposed windows (60–90 s target)
 
+# Tokens that cannot open a clip (Issue 441). A Deepgram utterance boundary is a
+# PAUSE, not a grammatical break, so "because they still don't know what Mikey
+# is." is a first-class sentence start and snapping to it is a no-op — which is
+# how five of nine rendered clips on one video opened mid-thought.
+#
+# A closed word list, not a parser: these are closed grammatical classes, so
+# enumeration is exact and a coreference model would be a dependency bought for
+# nothing.
+#
+# Deliberately narrow — a wrong rejection drags the start earlier, bloats the
+# clip, and can collapse two distinct candidates onto one opening. Only classes
+# the live evidence actually showed broken are listed:
+#   - SUBORDINATORS open a clause that cannot stand alone ("because they still
+#     don't know what Mikey is", "when they're cut, when rosters go out").
+#   - DISCOURSE MARKERS answer something the viewer never heard ("yeah, they've
+#     been awesome so far").
+# Explicitly NOT listed:
+#   - Coordinators (and / but / or / so / yet). "But I think…" is a punchy,
+#     perfectly serviceable Short opening, none of the live failures were
+#     coordinator-initial, and rejecting them broke two pinned snap cases.
+#   - Pronouns and demonstratives. "It's the weakest room on the roster" opens
+#     fine; distinguishing that from a genuinely dangling referent needs more
+#     than a word list, and the one live pronoun case ("yeah, they've…") is
+#     already caught by its discourse marker.
+#   - First and second person, which are self-anchoring.
+_SUBORDINATORS = frozenset(
+    {
+        "because", "although", "though", "whereas", "unless", "until", "since",
+        "while", "when", "whenever",
+    }
+)
+_DISCOURSE_MARKERS = frozenset(
+    {
+        "yeah", "yes", "yep", "yup", "no", "nah", "ok", "okay", "well", "right",
+        "um", "uh", "hmm", "anyway", "anyways",
+    }
+)
+_WEAK_OPENERS = _SUBORDINATORS | _DISCOURSE_MARKERS
+
+# How many sentences back the search may step looking for a clean opener. Bounded
+# so a run of dependent clauses cannot walk the start arbitrarily far back; the
+# `max_snap_s` budget bounds it in time as well.
+_MAX_OPENER_STEPS = 3
+
+# "The start already sits on this sentence boundary" — float coincidence, not a
+# search radius.
+_BOUNDARY_EPSILON_S = 0.05
+
+
+def _normalize_token(word: str) -> str:
+    """Lowercase a transcript token and strip surrounding punctuation."""
+    return word.strip().strip("\"'“”‘’.,!?;:—-…").lower()
+
+
+def is_weak_opener(word: str | None) -> bool:
+    """Whether ``word`` cannot stand as the first word of a clip (Issue 441)."""
+    return _normalize_token(word or "") in _WEAK_OPENERS
+
 
 def build_sentence_index(segments: list[dict]) -> list[dict]:
     """Build ``[{"start_s", "end_s"}, ...]`` sentence spans from transcript segments.
@@ -48,23 +106,40 @@ def build_sentence_index(segments: list[dict]) -> list[dict]:
             seg_start = seg.get("start")
             seg_end = seg.get("end")
             if seg_start is not None and seg_end is not None and seg_end > seg_start:
-                sentences.append({"start_s": float(seg_start), "end_s": float(seg_end)})
+                text = str(seg.get("text", "")).split()
+                sentences.append(
+                    {
+                        "start_s": float(seg_start),
+                        "end_s": float(seg_end),
+                        "first_word": text[0] if text else "",
+                    }
+                )
             continue
 
         open_start: float | None = None
+        open_word = ""
         last_end = 0.0
         for w in words:
             w_start = float(w.get("start", 0.0))
             w_end = float(w.get("end", w_start))
             if open_start is None:
                 open_start = w_start
+                # Issue 441: the opening token is carried so snap_start can
+                # reject a start that opens on a dependent clause. The index used
+                # to discard all text, which made any lexical check impossible.
+                open_word = str(w.get("word", ""))
             last_end = w_end
             if _is_sentence_end(w.get("word", "")):
-                sentences.append({"start_s": open_start, "end_s": w_end})
+                sentences.append(
+                    {"start_s": open_start, "end_s": w_end, "first_word": open_word}
+                )
                 open_start = None
+                open_word = ""
         # Utterance boundary closes an unterminated sentence (speaker trailed off).
         if open_start is not None:
-            sentences.append({"start_s": open_start, "end_s": last_end})
+            sentences.append(
+                {"start_s": open_start, "end_s": last_end, "first_word": open_word}
+            )
 
     sentences.sort(key=lambda s: s["start_s"])
     return sentences
@@ -107,7 +182,20 @@ def snap_start(
         return t
     idx = _containing_index(t, sentences)
     if idx is None:
-        return t  # already on a boundary or inside a pause — clean open
+        # Already on a boundary or inside a pause. That is a clean open ONLY if
+        # the sentence starting here can stand alone (Issue 441) — a Deepgram
+        # utterance boundary is a pause, not a grammatical break, so "because …"
+        # lands here and used to be returned untouched.
+        # Exact coincidence only. A start sitting in an inter-sentence PAUSE is a
+        # clean open and must stay untouched — widening this to the lead-in
+        # window would let a pause start claim the following sentence's opener.
+        at = next(
+            (i for i, s in enumerate(sentences) if abs(s["start_s"] - t) <= _BOUNDARY_EPSILON_S),
+            None,
+        )
+        if at is None or not is_weak_opener(sentences[at].get("first_word")):
+            return t
+        idx = at
 
     back_target = sentences[idx]["start_s"]
     fwd_target = sentences[idx + 1]["start_s"] if idx + 1 < len(sentences) else None
@@ -122,6 +210,19 @@ def snap_start(
         chosen, chosen_idx = float(fwd_target), idx + 1  # type: ignore[arg-type]
     else:
         chosen, chosen_idx = float(back_target), idx
+
+    # Issue 441: a sentence opening on a subordinator, a discourse marker or a
+    # dangling third-person referent depends on the sentence before it. Step back
+    # until the opener can stand alone, bounded by both the step count and the
+    # caller's time budget — a clip that opens mid-thought is worse than one that
+    # starts a beat early, but not worth walking arbitrarily far for.
+    for _ in range(_MAX_OPENER_STEPS):
+        if chosen_idx == 0 or not is_weak_opener(sentences[chosen_idx].get("first_word")):
+            break
+        prev_start = float(sentences[chosen_idx - 1]["start_s"])
+        if t - prev_start > max_snap_s:
+            break  # out of budget — keep the nearest sentence start
+        chosen, chosen_idx = prev_start, chosen_idx - 1
 
     # Lead-in breath, floored at the previous sentence's end. Overlapping
     # diarized utterances can put that end AFTER the chosen start — cap the

@@ -5,6 +5,67 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-07 — Issue 441: seconds, not ratios, for overlap; a narrow closed list for openers
+
+**Decision 1 — duplicate windows are caught in ABSOLUTE SECONDS.** `suppress_contained` gains a
+second, independent predicate: `_MAX_OVERLAP_S = 3.0`, roughly one spoken sentence. The existing
+`_CONTAINMENT_THRESHOLD` is untouched.
+
+**Why:** lowering the ratio was the obvious move and is wrong. It is pinned by
+`tests/test_merge.py`, and its rationale at `ranking.py` is deliberate — two equal-length windows
+surviving IoU-0.5 NMS reach at most IoMin ≈ 0.67, so 0.8 sits *above* that ceiling precisely so
+the pass never re-litigates what the signal-priority union kept. The live failures scored IoMin
+**0.419** (17.4 s shared) and **0.27** (9.1 s shared) — both below 0.67 — so any ratio catching
+them would also start dropping legitimate pairs. Seconds are immune to the length asymmetry that
+defeats every ratio, and they state the actual editorial rule: don't ship the same sentence twice.
+On the live set 3.0 s catches the 17.4/9.1/4.1/3.3 s pairs and leaves the 0.8 s snap artifact.
+
+**A pinned test was deliberately changed.** `test_partial_overlap_admitted_by_nms_is_kept`
+asserted that two 60 s windows sharing **40 s** must both survive. That is not a legitimate keep —
+it is two clips telling two-thirds of the same story, i.e. the defect. It is replaced by a pair:
+one asserting a 2 s overlap still survives (the ratio rationale it was really protecting), one
+asserting the 40 s case is now dropped.
+
+**Root cause worth recording:** all NMS runs *before* snapping. `snap_end` pushes an end forward
+up to 10 s to finish a sentence, which is what pushed rank 2's end past rank 6's start and
+produced the verbatim duplicated line — and nothing re-checked overlap afterwards. The new
+predicate runs post-snap, which is what closes it.
+
+**Decision 2 — clip openers are screened by a NARROW closed word list.** `build_sentence_index`
+now carries each span's first token (it previously discarded all text, making any lexical check
+impossible), and `snap_start` walks back off an opener that cannot stand alone — bounded by
+`_MAX_OPENER_STEPS = 3` and the existing `max_snap_s` budget. The walk-back lands on the
+*previous sentence's start*, so the main clause the dependent clause needs is inside the clip.
+
+**Scope was cut back from the plan after evidence.** A first list included coordinators
+(and / but / or / so / yet) and third-person pronouns and demonstratives. It broke two pinned snap
+cases and collapsed two distinct candidates onto one opening. "But here's the thing." is a punchy
+Short opening, "It's the weakest room on the roster" is fine, and **none of the live failures were
+coordinator- or pronoun-initial**. The shipped list is subordinating conjunctions plus discourse
+markers only. Distinguishing a genuinely dangling referent from an ordinary pronominal subject
+needs more than a word list; the one live pronoun case ("yeah, they've been awesome") is already
+caught by its discourse marker. One live failure is knowingly NOT covered: rank 5's "the Terry
+thing, no." is a fragment, not a closed grammatical class.
+
+**Also:** a start sitting in an inter-sentence PAUSE stays a clean open. An early implementation
+matched a following sentence within the 0.3 s lead-in window, which let a pause start claim the
+next sentence's opener and broke `test_snap_start_clean_boundary_unchanged`. The boundary check is
+now exact coincidence (`_BOUNDARY_EPSILON_S = 0.05`).
+
+**The eval was green while production failed.** `starts_on_sentence_start` cannot express this:
+Deepgram splits utterances on pauses, so "because they still don't know…" IS a sentence start.
+Two harness assertions were added — `max_pairwise_overlap_s` (containment) and
+`opens_on_content_word` (snap) — with fixtures `partial_overlap_suppressed` and
+`dependent_clause_open`, both verified failing with the fixes neutralised. `SCENARIO_FLOOR`
+21 → 23; the landing page's public count 22 → 24 (`test_eval_transparency` enforces the sync).
+
+**Left alone:** the LLM prompt at `analysis/video_context.py` already instructs the model
+correctly, and the observed failures are on `origin: "signal"` windows the prompt cannot reach —
+`merge.py` admits every signal candidate unconditionally. This fix is deterministic
+post-processing. `extract_candidates` is untouched.
+
+---
+
 ## 2026-08-07 — Issue 440: face_pan holds seats; concurrency separates a two-shot from a move
 
 **Decision:** the `face_pan` rung no longer follows the single largest face across a multi-seat

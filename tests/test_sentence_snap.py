@@ -75,13 +75,16 @@ def test_build_index_splits_on_terminal_punct():
 
 def test_build_index_wordless_segment_is_one_sentence():
     sentences = build_sentence_index([{"start": 10.0, "end": 20.0, "text": "hi"}])
-    assert sentences == [{"start_s": 10.0, "end_s": 20.0}]
+    # `first_word` carries the opening token so snap_start can reject a start
+    # that opens on a dependent clause (Issue 441); a wordless segment falls
+    # back to the first token of its text.
+    assert sentences == [{"start_s": 10.0, "end_s": 20.0, "first_word": "hi"}]
 
 
 def test_build_index_unterminated_sentence_closed_by_utterance_boundary():
     seg = _segment(0.0, 5.0, [("well", 0.0, 0.5), ("I", 0.6, 0.8), ("mean", 0.9, 5.0)])
     sentences = build_sentence_index([seg])
-    assert sentences == [{"start_s": 0.0, "end_s": 5.0}]
+    assert sentences == [{"start_s": 0.0, "end_s": 5.0, "first_word": "well"}]
 
 
 def test_snap_start_backward_beyond_legacy_cap_preserves_negation():
@@ -134,6 +137,72 @@ def test_snap_start_clean_boundary_unchanged():
     sentences = build_sentence_index(NEGATION_SEGMENTS)
     assert snap_start(71.5, sentences) == 71.5  # exactly on a sentence start
     assert snap_start(78.7, sentences) == 78.7  # inside the inter-sentence pause
+
+
+# ── Issue 441: a clip may not open on a dependent clause ─────────────────────
+
+# The live geometry from video 3b6992fe rank 2/3: rank 3 ends "…I worry about
+# this room some **because**" and rank 2 opens "**because** they still don't
+# know what Mikey is." Deepgram splits utterances on PAUSES, not grammar, so the
+# "because…" utterance is a first-class sentence start and snapping to it used
+# to be a no-op.
+DEPENDENT_OPEN_SEGMENTS = [
+    _segment(
+        14.0,
+        20.0,
+        [("I", 14.0, 14.3), ("worry", 14.4, 14.9), ("about", 15.0, 19.0), ("this.", 19.1, 20.0)],
+    ),
+    _segment(
+        20.5,
+        30.0,
+        [("because", 20.5, 21.0), ("they", 21.1, 21.4), ("moved.", 21.5, 30.0)],
+    ),
+]
+
+
+def test_snap_start_walks_back_off_a_subordinating_conjunction():
+    sentences = build_sentence_index(DEPENDENT_OPEN_SEGMENTS)
+    # A start landing exactly on the "because…" utterance boundary used to be
+    # returned untouched — it IS a sentence start, just not a usable one. The
+    # walk-back lands on the START of the previous sentence, so the main clause
+    # the "because" depends on is inside the clip.
+    assert snap_start(20.5, sentences) == 13.7  # 14.0 - 0.3 lead-in
+
+
+def test_snap_start_walks_back_off_a_discourse_marker():
+    segments = [
+        _segment(0.0, 9.0, [("The", 0.0, 0.3), ("room", 0.4, 8.0), ("improved.", 8.1, 9.0)]),
+        _segment(9.5, 18.0, [("Yeah,", 9.5, 9.9), ("they've", 10.0, 10.4), ("been.", 10.5, 18.0)]),
+    ]
+    sentences = build_sentence_index(segments)
+    assert snap_start(9.5, sentences) == 0.0  # back to the start of "The room improved."
+
+
+def test_snap_start_leaves_a_coordinator_alone():
+    """"But here's the thing." is a punchy opening, not a broken one — and none
+    of the live failures were coordinator-initial. Over-rejecting drags starts
+    earlier and can collapse two candidates onto one opening."""
+    sentences = build_sentence_index(NEGATION_SEGMENTS)
+    assert snap_start(79.0, sentences) == 79.0
+
+
+def test_snap_start_walk_back_respects_the_time_budget():
+    """A dependent opener more than max_snap_s from the previous sentence start
+    keeps the nearest sentence start rather than walking arbitrarily far."""
+    sentences = build_sentence_index(DEPENDENT_OPEN_SEGMENTS)
+    # Refused: only the 0.3 s lead-in breath is applied to the original start.
+    assert snap_start(20.5, sentences, max_snap_s=0.1) == 20.2
+
+
+def test_weak_opener_classification():
+    from clip_engine.sentence_snap import is_weak_opener
+
+    assert is_weak_opener("Because")
+    assert is_weak_opener("  yeah,  ")  # punctuation + case + whitespace normalized
+    assert is_weak_opener("When")
+    assert not is_weak_opener("But")
+    assert not is_weak_opener("Commanders")
+    assert not is_weak_opener(None)
 
 
 def test_snap_end_finishes_sentence_in_progress():

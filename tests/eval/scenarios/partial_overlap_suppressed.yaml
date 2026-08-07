@@ -1,0 +1,38 @@
+scenario: partial_overlap_suppressed
+kind: containment
+description: >
+  Issue 441, modeled on the live pair from video 3b6992fe: rank 2 (788.3-821.3)
+  and rank 6 (812.2-896.6) share 9.1 seconds, and rank 2's closing line IS rank
+  6's opening line verbatim ("I'm starting to feel like I wanna see Rahsao
+  Douglas and Trey Amos starting on the outside"). Neither window contains the
+  other, so the overlap coefficient is only 0.27 — far under the 0.8 containment
+  threshold, which is deliberately set above the 0.67 ceiling that two
+  equal-length IoU-0.5 NMS survivors reach. No ratio can catch this without
+  re-litigating what the signal-priority union intentionally kept, so the
+  absolute-seconds predicate is what must fire. The third window is disjoint and
+  must survive untouched. Principle: "One idea per Short"
+
+input:
+  candidates:
+    - setup_start_s: 812.2
+      start_s: 812.2
+      peak_s: 850.0
+      end_s: 896.6
+      score: 0.62
+    - setup_start_s: 788.3
+      start_s: 788.3
+      peak_s: 805.0
+      end_s: 821.3
+      score: 0.50
+    - setup_start_s: 200.0
+      start_s: 200.0
+      peak_s: 230.0
+      end_s: 260.0
+      score: 0.45
+
+expected:
+  survivors: 2
+  max_pairwise_overlap_s: 3.0
+  candidates:
+    - setup_start_s_min: 810.0
+      setup_start_s_max: 815.0

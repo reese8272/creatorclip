@@ -1,0 +1,53 @@
+scenario: dependent_clause_open
+kind: snap
+description: >
+  Issue 441, from video 3b6992fe: rank 3 ended "...I worry about this room some
+  because" and rank 2 opened "because they still don't know what Mikey is." The
+  engine split one sentence across two clips and the second opened on a bare
+  subordinating conjunction. Crucially this is NOT the Issue-428 mid-sentence
+  cut — Deepgram splits utterances on PAUSES rather than grammar, so the
+  "because..." utterance IS a first-class sentence start and the existing
+  starts_on_sentence_start assertion passes on it trivially. The opening TOKEN
+  is what fails: a clause introduced by "because" cannot stand alone, so the
+  open must walk back far enough to carry the main clause it depends on.
+  Principle: "Clean Context Boundary"
+
+input:
+  timeline:
+    version: 1
+    duration_s: 180.0
+    events:
+      - {type: silence,         start_s: 68.0, end_s: 72.0}
+      - {type: energy_spike,    start_s: 72.0, end_s: 88.0, value: 0.9}
+      - {type: retention_spike, start_s: 88.0, end_s: 90.0, value: 1.6}
+  segments:
+    - start: 64.0
+      end: 71.5
+      text: "I worry about this room some."
+      words:
+        - {word: "I",      start: 64.0, end: 64.3}
+        - {word: "worry",  start: 64.4, end: 64.9}
+        - {word: "about",  start: 65.0, end: 65.5}
+        - {word: "this",   start: 65.6, end: 66.0}
+        - {word: "room",   start: 66.1, end: 66.5}
+        - {word: "some.",  start: 66.6, end: 71.5}
+    - start: 72.0
+      end: 110.0
+      text: "because they still don't know what he is."
+      words:
+        - {word: "because", start: 72.0, end: 72.5}
+        - {word: "they",    start: 72.6, end: 72.9}
+        - {word: "still",   start: 73.0, end: 73.4}
+        - {word: "don't",   start: 73.5, end: 73.9}
+        - {word: "know",    start: 74.0, end: 74.4}
+        - {word: "what",    start: 74.5, end: 74.8}
+        - {word: "he",      start: 74.9, end: 75.1}
+        - {word: "is.",     start: 75.2, end: 110.0}
+
+expected:
+  min_candidates: 1
+  starts_on_sentence_start: true
+  opens_on_content_word: true
+  candidates:
+    - setup_start_s_min: 63.5
+      setup_start_s_max: 64.1

@@ -2446,12 +2446,40 @@ the setup-start check to reject windows opening on a subordinating conjunction, 
 marker ("yeah", "so"), or a pronoun whose referent lies outside the window. Widen the eval
 fixtures to the live failures before changing the ranker.
 
+**Status: DONE (2026-08-07)** — backend 2915/0, Layer 0 all green, eval 24 scenarios / 100%.
+Rulings in `docs/DECISIONS.md` 2026-08-07.
+
+**What changed**
+- `clip_engine/ranking.py` — `_MAX_OVERLAP_S = 3.0` as a **second, independent predicate** inside
+  the existing `suppress_contained` loop (and the `exclude_windows` filter). `_CONTAINMENT_THRESHOLD`
+  is untouched: it is pinned, and deliberately above the 0.67 IoMin ceiling, so no ratio could
+  catch the live pairs (IoMin 0.419 and 0.27) without dropping legitimate ones.
+- `clip_engine/sentence_snap.py` — `build_sentence_index` carries each span's first token (it
+  discarded all text, which is why no lexical check was possible); `snap_start` walks back off an
+  opener that cannot stand alone, landing on the previous sentence's **start** so the main clause
+  comes with it, bounded by 3 steps and the existing `max_snap_s`.
+- Eval — `max_pairwise_overlap_s` and `opens_on_content_word` assertions, fixtures
+  `partial_overlap_suppressed` and `dependent_clause_open`, `SCENARIO_FLOOR` 21 → 23, landing-page
+  count 22 → 24.
+
+**Scope cut back after evidence:** the opener list ships as subordinating conjunctions +
+discourse markers only. Including coordinators and pronouns broke two pinned snap cases and
+collapsed two candidates onto one opening, and **none of the live failures were coordinator- or
+pronoun-initial**. Rank 5's "the Terry thing, no." is knowingly not covered — it is a fragment,
+not a closed grammatical class.
+
+**A pinned test was deliberately changed:** `test_partial_overlap_admitted_by_nms_is_kept`
+asserted two 60 s windows sharing **40 s** must both survive. That is the defect, not a keep. It
+is replaced by a pair covering both sides of the new boundary.
+
 **Acceptance**
-- [ ] No two persisted clips for a video overlap by more than an agreed fraction of the shorter clip
-- [ ] A clip window may not open on a subordinating conjunction or an unresolved pronoun subject
-- [ ] New eval fixtures reproduce the rank2×rank6 partial overlap and the "because…" cold open, failing before the fix
-- [ ] `SCENARIO_FLOOR` raised to cover them
-- [ ] Live: next fresh upload shows no verbatim duplicated speech between clips
+- [x] Two clips may not share more than 3 s of speech; the lower-ranked one is dropped and ranks renumber densely (`test_partial_overlap_over_the_seconds_budget_is_dropped`)
+- [x] A partial overlap *under* the budget still survives — the NMS union is not re-litigated (`test_partial_overlap_under_the_seconds_budget_is_kept`)
+- [x] A clip window may not open on a subordinating conjunction or a discourse marker (`test_snap_start_walks_back_off_a_subordinating_conjunction`, `..._off_a_discourse_marker`)
+- [x] A coordinator-initial opening is left alone (`test_snap_start_leaves_a_coordinator_alone`), and a start in an inter-sentence pause stays a clean open (`test_snap_start_clean_boundary_unchanged`, pre-existing)
+- [x] New eval fixtures reproduce the rank2×rank6 partial overlap and the "because…" cold open — **both verified failing with the fixes neutralised**, then green
+- [x] `SCENARIO_FLOOR` 21 → 23; landing-page public count synced 22 → 24
+- [ ] Live: next fresh upload shows no verbatim duplicated speech between clips and no conjunction-initial opens — **cannot be verified on `3b6992fe`**, whose windows are already persisted; needs a new upload or a regeneration pass
 
 ---
 

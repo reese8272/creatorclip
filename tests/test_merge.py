@@ -400,15 +400,38 @@ def test_contained_duplicate_dropped_cross_origin() -> None:
     assert out[0]["rank"] == 1
 
 
-def test_partial_overlap_admitted_by_nms_is_kept() -> None:
-    """Two equal-length windows at IoU 0.5 reach IoMin ≈ 0.67 < 0.8 — the pass
-    never re-litigates what the signal-priority union deliberately kept."""
+def test_partial_overlap_under_the_seconds_budget_is_kept() -> None:
+    """The ratio pass still never re-litigates what the signal-priority union
+    deliberately kept: two equal-length windows at IoU 0.5 reach IoMin ≈ 0.67,
+    under the 0.8 threshold. With only a couple of seconds of shared speech the
+    absolute-seconds predicate does not fire either, so both survive."""
     from clip_engine.ranking import suppress_contained
 
     a = _signal_cand(0.0, 60.0, 30.0)
-    b = _signal_cand(20.0, 80.0, 50.0)  # 40 s overlap / 60 s shorter → 0.67
+    b = _signal_cand(58.0, 118.0, 90.0)  # 2 s shared — under _MAX_OVERLAP_S
     out = suppress_contained(_ranked([a, b], [0.8, 0.7]))
     assert len(out) == 2
+
+
+def test_partial_overlap_over_the_seconds_budget_is_dropped() -> None:
+    """Issue 441: 40 s of shared speech across two 60 s windows is two clips
+    telling two-thirds of the same story — the live failure was rank 2's closing
+    line being rank 6's opening line verbatim.
+
+    No ratio can catch this without collateral damage: IoMin here is 0.67,
+    BELOW the 0.8 containment threshold and at the exact ceiling the threshold
+    was set above on purpose. The absolute-seconds predicate is what fires, and
+    the lower-ranked window is the one dropped.
+    """
+    from clip_engine.ranking import suppress_contained, window_containment
+
+    a = _signal_cand(0.0, 60.0, 30.0)
+    b = _signal_cand(20.0, 80.0, 50.0)  # 40 s overlap / 60 s shorter → 0.67
+    assert window_containment(a, b) == pytest.approx(0.667, abs=0.01)
+    out = suppress_contained(_ranked([a, b], [0.8, 0.7]))
+    assert len(out) == 1
+    assert out[0]["setup_start_s"] == 0.0  # the higher-ranked window survives
+    assert out[0]["rank"] == 1
 
 
 def test_survivor_ranks_renumbered_dense() -> None:

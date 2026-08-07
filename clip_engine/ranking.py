@@ -51,6 +51,21 @@ def rank_candidates(candidates: list[dict]) -> list[dict]:
 # re-litigates what the signal-priority union deliberately kept.
 _CONTAINMENT_THRESHOLD = 0.8
 
+# Absolute seconds of shared speech two kept clips may carry (Issue 441).
+#
+# This is a SECOND, independent predicate — lowering _CONTAINMENT_THRESHOLD is
+# not an option. It is pinned by tests/test_merge.py and deliberately set above
+# the ≈0.67 IoMin ceiling that two equal-length IoU-0.5 NMS survivors reach, so
+# any ratio low enough to catch the live failures (IoMin 0.419 and 0.27) would
+# also start dropping pairs the signal-priority union intentionally kept.
+#
+# Seconds express the actual editorial rule — don't ship the same sentence
+# twice — and are immune to the length asymmetry that defeats every ratio. 3 s
+# is about one spoken sentence. On the live set it catches the 17.4 s, 9.1 s,
+# 4.1 s and 3.3 s pairs (including rank 2's closing line being rank 6's opening
+# line verbatim) and leaves the 0.8 s snap artifact alone.
+_MAX_OVERLAP_S = 3.0
+
 
 def window_containment(a: dict, b: dict) -> float:
     """Overlap coefficient of two candidates' [setup_start_s, end_s] windows:
@@ -63,6 +78,23 @@ def window_containment(a: dict, b: dict) -> float:
         return 0.0
     inter = max(0.0, min(a_end, b_end) - max(a_start, b_start))
     return inter / shorter
+
+
+def window_overlap_s(a: dict, b: dict) -> float:
+    """Seconds of shared speech between two candidates' windows (Issue 441)."""
+    inter = min(a["end_s"], b["end_s"]) - max(a["setup_start_s"], b["setup_start_s"])
+    return max(0.0, inter)
+
+
+def _is_duplicate_of(cand: dict, kept: dict, threshold: float) -> bool:
+    """Whether ``cand`` duplicates ``kept`` — by containment ratio OR by absolute
+    shared seconds. The two predicates catch different failures: containment
+    catches an engulfed window of any length, seconds catch a partial overlap
+    that no ratio can flag without re-litigating the NMS union."""
+    return (
+        window_containment(cand, kept) >= threshold
+        or window_overlap_s(cand, kept) >= _MAX_OVERLAP_S
+    )
 
 
 def suppress_contained(ranked: list[dict], threshold: float = _CONTAINMENT_THRESHOLD) -> list[dict]:
@@ -78,15 +110,16 @@ def suppress_contained(ranked: list[dict], threshold: float = _CONTAINMENT_THRES
     """
     kept: list[dict] = []
     for cand in ranked:
-        dup_of = next((k for k in kept if window_containment(cand, k) >= threshold), None)
+        dup_of = next((k for k in kept if _is_duplicate_of(cand, k, threshold)), None)
         if dup_of is not None:
             logger.info(
-                "containment pass dropped [%.1f, %.1f] (origin=%s) — %.0f%% inside "
-                "kept [%.1f, %.1f] (origin=%s)",
+                "containment pass dropped [%.1f, %.1f] (origin=%s) — %.0f%% inside / %.1fs "
+                "shared with kept [%.1f, %.1f] (origin=%s)",
                 cand["setup_start_s"],
                 cand["end_s"],
                 cand.get("origin", "signal"),
                 window_containment(cand, dup_of) * 100,
+                window_overlap_s(cand, dup_of),
                 dup_of["setup_start_s"],
                 dup_of["end_s"],
                 dup_of.get("origin", "signal"),
@@ -298,8 +331,11 @@ async def score_and_rank(
         ranked = [
             c
             for c in ranked
+            # Same two-predicate test as the containment pass (Issue 441) — a
+            # regenerated clip that shares 3 s of speech with an existing one is
+            # as duplicate as a contained one.
             if not any(
-                window_containment(c, w) >= _CONTAINMENT_THRESHOLD for w in exclude_windows
+                _is_duplicate_of(c, w, _CONTAINMENT_THRESHOLD) for w in exclude_windows
             )
         ]
         for i, c in enumerate(ranked):
