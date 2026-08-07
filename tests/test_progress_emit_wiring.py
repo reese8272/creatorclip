@@ -366,6 +366,60 @@ async def test_generate_clips_async_seeds_brand_kit_and_caps_top_n(mocker):
 
 
 @pytest.mark.asyncio
+async def test_generate_clips_async_seeds_style_on_every_clip_not_just_top_n(mocker):
+    """Issue 438: clips outside the auto-render slice must still get a style.
+
+    The brand kit used to be seeded inside the ``[:top_n]`` slice, so a clip
+    beyond AUTO_RENDER_TOP_N kept ``style_preset = None``. When such a clip was
+    later rendered by hand, ``render_clip_file`` took the ``if style_preset:``
+    branch at ``clip_engine/render.py:676`` and shipped it with no captions.
+    """
+    from config import settings
+    from worker import tasks
+
+    mocker.patch.object(settings, "AUTO_RENDER_CLIPS", True)
+    mocker.patch.object(settings, "AUTO_RENDER_TOP_N", 2)
+    kit = {"subtitle": "bold_pop", "captions_enabled": True}
+
+    c_rank1 = MagicMock(id=uuid.uuid4(), rank=1, style_preset=None)
+    c_rank2 = MagicMock(id=uuid.uuid4(), rank=2, style_preset=None)
+    c_rank9 = MagicMock(id=uuid.uuid4(), rank=9, style_preset=None)
+    clips = [c_rank1, c_rank2, c_rank9]
+    video_id, _ = _generate_clips_scaffold(mocker, clips=clips, brand_kit_style=kit)
+    delay_mock = mocker.patch("worker.tasks.render_video_clips.delay")
+
+    await tasks._generate_clips_async(video_id, str(uuid.uuid4()))
+
+    # Rendering is still capped at the top 2 …
+    enqueued = set(delay_mock.call_args.args[1])
+    assert enqueued == {str(c_rank1.id), str(c_rank2.id)}
+    # … but every persisted clip carries a style, including the one outside it.
+    assert c_rank9.style_preset == kit
+
+
+@pytest.mark.asyncio
+async def test_generate_clips_async_seeds_style_even_when_auto_render_off(mocker):
+    """Issue 438: style seeding is not conditional on AUTO_RENDER_CLIPS.
+
+    With auto-render disabled every clip is rendered by hand later, which is
+    exactly the path that produced a captionless clip.
+    """
+    from config import settings
+    from worker import tasks
+
+    mocker.patch.object(settings, "AUTO_RENDER_CLIPS", False)
+    kit = {"subtitle": "bold_pop", "captions_enabled": True}
+    clip = MagicMock(id=uuid.uuid4(), rank=1, style_preset=None)
+    video_id, _ = _generate_clips_scaffold(mocker, clips=[clip], brand_kit_style=kit)
+    delay_mock = mocker.patch("worker.tasks.render_video_clips.delay")
+
+    await tasks._generate_clips_async(video_id, str(uuid.uuid4()))
+
+    delay_mock.assert_not_called()
+    assert clip.style_preset == kit
+
+
+@pytest.mark.asyncio
 async def test_generate_clips_async_auto_render_enqueue_failure_logged(mocker):
     """A broker publish failure on the auto-render batch enqueue stays best-effort
     (no raise — clip generation succeeded and the terminal done already fired),

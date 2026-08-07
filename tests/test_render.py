@@ -666,6 +666,26 @@ def test_reframe_flag_on_passes_face_bottom_to_captions(tmp_path):
     assert captured["face_bottom_px"] == round((300 + 200 - 100) * 1920 / 900)
 
 
+def test_requested_captions_that_resolve_to_nothing_are_logged(tmp_path, caplog):
+    """Issue 438: a requested caption track that yields no file must not vanish silently.
+
+    `render_clip_file` drops the `subtitles=` filter when `build_ass_subtitles`
+    produces nothing, and still returns a successful render. That is how a
+    captionless clip reached a creator with `render_status = done` and no signal
+    anywhere. The render must still succeed — a captionless clip beats no clip —
+    but it has to say so.
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="clip_engine.render"):
+        vf = _render_vf(tmp_path, style_preset={"subtitle": "bold_pop"})
+
+    assert "subtitles=" not in vf, "precondition: no caption track was produced"
+    assert any(
+        "caption" in r.message.lower() for r in caplog.records if r.levelno >= logging.WARNING
+    ), "a requested-but-missing caption track must log a warning"
+
+
 # ── opt-in noise reduction (Issue 185) ────────────────────────────────────────
 
 

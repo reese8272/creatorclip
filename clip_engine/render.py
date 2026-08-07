@@ -714,7 +714,29 @@ def render_clip_file(
                 # in /tmp/ so colons in the path are not a real concern here.
                 vf_parts.append(f"subtitles={ass_path}:fontsdir={_FONTS_DIR}")
             else:
+                # Issue 438: the render still succeeds — a captionless clip beats
+                # no clip — but a requested caption track that produced nothing
+                # must not vanish without a trace. Usual causes: no word-level
+                # timings overlapping the window, or an empty transcript slice.
+                logger.warning(
+                    "captions requested (style=%s) but no caption track was produced "
+                    "for %s [%.1f-%.1f] — rendering WITHOUT captions",
+                    subtitle_key,
+                    out_path.name,
+                    start_s,
+                    end_s,
+                )
                 ass_path = None
+        elif subtitle_key is not None:
+            # A style key that is not in VALID_STYLES falls through the branch
+            # above and silently disables captions (Issue 438).
+            logger.warning(
+                "captions requested with unknown style %r for %s — rendering WITHOUT "
+                "captions (valid: %s)",
+                subtitle_key,
+                out_path.name,
+                sorted(_ANIMATED_CAPTION_STYLES),
+            )
 
     vf = ",".join(vf_parts)
 

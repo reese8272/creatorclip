@@ -373,6 +373,64 @@ def test_brand_kit_render_applies_kit_defaults(client):
     assert (clip.style_preset or {}).get("zoom_on_peak") is True
 
 
+def test_brand_kit_render_applies_kit_with_no_request_body(client):
+    """Issue 438: a BODILESS render request must still resolve the brand kit.
+
+    The plain "Render this clip" button and every retry send no body. The kit
+    lookup used to sit inside `if body is not None:`, so a clip persisted with
+    `style_preset = None` rendered with None — and `render_clip_file` gates the
+    whole caption branch on `if style_preset:`, so the clip shipped with no
+    captions and a `done` status. This is what happened to rank 13 of 3b6992fe.
+    """
+    from auth import get_current_creator
+    from billing.ledger import check_positive_balance
+    from db import get_session
+    from main import app
+    from models import Clip, Creator, CreatorStyle, RenderStatus
+
+    creator = MagicMock(spec=Creator)
+    creator.id = uuid.uuid4()
+    creator.minutes_balance = 100
+
+    clip = MagicMock(spec=Clip)
+    clip.id = uuid.uuid4()
+    clip.creator_id = creator.id
+    clip.render_status = RenderStatus.pending
+    clip.style_preset = None  # the clip was persisted outside the auto-render slice
+
+    kit_row = MagicMock(spec=CreatorStyle)
+    kit_row.style = {"subtitle": "bold_pop", "captions_enabled": True}
+
+    mock_kit_result = MagicMock()
+    mock_kit_result.scalar_one_or_none.return_value = kit_row
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[owned_result(clip), mock_kit_result])
+    session.commit = AsyncMock()
+
+    async def _fake_session():
+        yield session
+
+    app.dependency_overrides[get_current_creator] = _override_creator(creator)
+    app.dependency_overrides[get_session] = _fake_session
+    app.dependency_overrides[check_positive_balance] = AsyncMock(return_value=None)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        mock_task.delay.return_value = MagicMock(id="task-no-body")
+        try:
+            resp = client.post(f"/clips/{clip.id}/render", cookies={"session": "x"})
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 202, resp.text
+    assert (clip.style_preset or {}).get("subtitle") == "bold_pop"
+    assert (clip.style_preset or {}).get("captions_enabled") is True
+
+
 def test_brand_kit_render_request_body_overrides_kit(client):
     """A per-clip render body field overrides the brand-kit value for that field."""
     from auth import get_current_creator

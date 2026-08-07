@@ -871,29 +871,25 @@ async def render_clip(
     # Persist style choice before enqueuing so the worker task reads it fresh.
     # Issue 186: start from the creator's brand-kit defaults so omitted fields
     # fall back to the kit rather than None, then apply the per-clip overrides.
+    # Issue 438: resolve the kit whether or not a body was sent. This block used
+    # to be guarded by `if body is not None`, so a bodiless request — the plain
+    # "Render this clip" button and every retry — left a clip that was persisted
+    # without a preset at `style_preset = None`. `render_clip_file` gates its
+    # entire caption branch on `if style_preset:` and treats an absent caption
+    # track as normal, so the clip shipped silently captionless with a `done`
+    # status. A stored NULL means "unset, resolve now", never "captions off".
+    kit_result = await session.execute(
+        select(CreatorStyle).where(CreatorStyle.creator_id == creator.id)
+    )
+    kit_db_row: CreatorStyle | None = kit_result.scalar_one_or_none()
+    kit_style: dict = (kit_db_row.style or {}) if isinstance(kit_db_row, CreatorStyle) else {}
+    # Per-clip stored preset overrides the kit; the request body overrides both.
+    # Every RenderStyleIn field is optional and None means "keep existing", so
+    # exclude_none is exactly the set of fields the request asked to change.
+    merged: dict = {**kit_style, **(clip.style_preset or {})}
     if body is not None:
-        kit_result = await session.execute(
-            select(CreatorStyle).where(CreatorStyle.creator_id == creator.id)
-        )
-        kit_db_row: CreatorStyle | None = kit_result.scalar_one_or_none()
-        kit_style: dict = (kit_db_row.style or {}) if isinstance(kit_db_row, CreatorStyle) else {}
-        # Per-clip stored preset overrides the kit; the request body overrides both.
-        merged: dict = {**kit_style, **(clip.style_preset or {})}
-        if body.subtitle is not None:
-            merged["subtitle"] = body.subtitle
-        if body.background is not None:
-            merged["background"] = body.background
-        if body.captions_enabled is not None:
-            merged["captions_enabled"] = body.captions_enabled
-        if body.zoom_on_peak is not None:
-            merged["zoom_on_peak"] = body.zoom_on_peak
-        if body.denoise is not None:
-            merged["denoise"] = body.denoise
-        if body.aspect is not None:
-            merged["aspect"] = body.aspect
-        if body.caption_position is not None:
-            merged["caption_position"] = body.caption_position
-        clip.style_preset = merged or None
+        merged.update(body.model_dump(exclude_none=True))
+    clip.style_preset = merged or None
 
     # Issue 353: a render request on a `done` clip is an explicit re-render —
     # reset the render state HERE (the endpoint owns intent) so the worker's

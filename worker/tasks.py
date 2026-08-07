@@ -3526,15 +3526,34 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
 
             logger.info("Generated %d clips for video %s", len(clips), video_id)
 
+            # Seed EVERY persisted clip's render style from the creator's brand
+            # kit (Issue 438) — deliberately not scoped to the auto-render slice
+            # and not gated on AUTO_RENDER_CLIPS. A clip left with
+            # `style_preset = None` renders captionless whenever it is rendered
+            # later by hand, because `render_clip_file` gates the whole caption
+            # branch on `if style_preset:` (clip_engine/render.py:676) and treats
+            # an absent caption track as normal. That is what shipped a
+            # captionless clip on rank 13 of video 3b6992fe.
+            if clips:
+                kit_style = await _brand_kit_style(session, clip_creator_id)
+                seeded = False
+                for clip in clips:
+                    # Never clobber a style the creator already chose — only seed
+                    # when the clip has no preset yet.
+                    if kit_style and not clip.style_preset:
+                        clip.style_preset = kit_style
+                        seeded = True
+                if seeded:
+                    await session.commit()
+
             # Auto-render (auto-render): uploading the video already consented to —
             # and was charged — the minutes (deduct_for_video at ingest), so the
-            # Review queue should be watch-ready with zero manual steps. Seed each
-            # clip's render style from the creator's saved brand kit, then enqueue a
-            # render below. render_clip is idempotent (skips clips already done) and
-            # charges no additional minutes. AUTO_RENDER_TOP_N caps how many of the
-            # ranked clips render immediately (0 = all generated candidates).
+            # Review queue should be watch-ready with zero manual steps.
+            # render_clip is idempotent (skips clips already done) and charges no
+            # additional minutes. AUTO_RENDER_TOP_N caps how many of the ranked
+            # clips render immediately (0 = all generated candidates) — it caps
+            # RENDERING only, never styling.
             if settings.AUTO_RENDER_CLIPS and clips:
-                kit_style = await _brand_kit_style(session, clip_creator_id)
                 top_n = settings.AUTO_RENDER_TOP_N
                 # Only sort when we actually cap — the default (render all) path
                 # renders every clip regardless of order, so skip the sort.
@@ -3544,16 +3563,7 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                     )[:top_n]
                 else:
                     ordered = clips
-                seeded = False
-                for clip in ordered:
-                    # Never clobber a style the creator already chose — only seed
-                    # when the clip has no preset yet.
-                    if kit_style and not clip.style_preset:
-                        clip.style_preset = kit_style
-                        seeded = True
-                    auto_render_clip_ids.append(str(clip.id))
-                if seeded:
-                    await session.commit()
+                auto_render_clip_ids.extend(str(clip.id) for clip in ordered)
 
         # Batched auto-metadata (Issue 417): sibling task enqueued AFTER the
         # persist commit (the session block above closed = committed), parallel
