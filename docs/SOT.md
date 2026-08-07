@@ -297,7 +297,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── doctor.py               # Preflight secrets validator (presence/format/live, redacted) — deploy gate
 │   ├── rotate_token_key.py     # TOKEN_ENCRYPTION_KEY re-encryption (see docs/RUNBOOKS.md)
 │   ├── llm_e2e.py              # Live-API LLM verification harness (Issue 319); RUN_LLM_LIVE=1 guard
-│   └── live_smoke.py           # Live-in-isolation smoke harness (Issue 341, L22); RUN_LIVE_SMOKE=1 guard, --target/--only/--with-llm/--publish-live, synthetic canary
+│   ├── live_smoke.py           # Live-in-isolation smoke harness (Issue 341, L22); RUN_LIVE_SMOKE=1 guard, --target/--only/--with-llm/--publish-live, synthetic canary
+│   └── clip_audit.py           # Read-only post-render clip audit (2026-08-07). `manifest` runs IN the prod app container (pure SELECT + presign; sets the `app.creator_id` GUC per creator because every tenant table is FORCE RLS and the app role has no BYPASSRLS — `creators` is the RLS-exempt bootstrap). `inspect` runs LOCALLY off that JSON: downloads each clip, ffprobe + EBU R128 loudness, contact sheet per clip, before/after sheet per framing cut. Pipe it over stdin (`exec -T app python3.12 - --video <id>`) so running it needs no image rebuild
 │
 └── docs/
     ├── README.md              # ← START HERE: full documentation index (Issue 146)
