@@ -200,6 +200,91 @@ def detect_camera_region(
         return None
 
 
+VIDEO_REGION_VERSION = 1
+
+
+def detect_video_camera_region(
+    source_path: Path,
+    duration_s: float,
+    frame_w: int,
+    frame_h: int,
+    *,
+    sample_frames: int = 24,
+    **kwargs: object,
+) -> dict | None:
+    """Resolve the camera region ONCE for a whole video (Issue 439).
+
+    Same detector, sampled across the entire runtime instead of one clip window,
+    so every clip of a source shares one answer. Sampling wide is also what makes
+    an intermittent overlay harmless: a SUBSCRIBE animation that is on screen for
+    part of the video contributes far less temporal variance across 24 frames
+    spanning 27 minutes than across 10 frames inside the 84 seconds it happens to
+    cover — which is how one clip came to disagree with its siblings.
+
+    No ``face_box`` is passed: there is no single face for a whole video. The
+    per-clip face-sanity check still runs at render time against this rect, so a
+    bad video-level answer is caught there rather than trusted blindly.
+
+    Returns the storage shape for ``Video.camera_region_jsonb``, or ``None`` when
+    detection declines (same fail-open contract as ``detect_camera_region``).
+    """
+    if duration_s <= 0:
+        return None
+    region = detect_camera_region(
+        source_path,
+        0.0,
+        duration_s,
+        frame_w,
+        frame_h,
+        sample_frames=sample_frames,
+        **kwargs,  # type: ignore[arg-type]
+    )
+    if region is None:
+        return None
+    x, y, w, h = region
+    return {
+        "version": VIDEO_REGION_VERSION,
+        "x": x,
+        "y": y,
+        "width": w,
+        "height": h,
+        "frame": {"width": frame_w, "height": frame_h},
+        "sample_frames": sample_frames,
+    }
+
+
+def region_from_video_json(
+    stored: dict | None, frame_w: int, frame_h: int
+) -> tuple[int, int, int, int] | None:
+    """Unpack a stored video-level region, or ``None`` if it cannot be trusted.
+
+    Rejects a rect measured against different source dimensions — a re-upload can
+    change them, and cropping to a stale geometry is worse than re-detecting.
+    """
+    if not stored or stored.get("version") != VIDEO_REGION_VERSION:
+        return None
+    frame = stored.get("frame") or {}
+    if (frame.get("width"), frame.get("height")) != (frame_w, frame_h):
+        logger.info(
+            "camera_region: stored region was measured against %sx%s but the source is "
+            "%dx%d — re-detecting per clip",
+            frame.get("width"),
+            frame.get("height"),
+            frame_w,
+            frame_h,
+        )
+        return None
+    try:
+        return (
+            int(stored["x"]),
+            int(stored["y"]),
+            int(stored["width"]),
+            int(stored["height"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _sample_gray_frames(
     source_path: Path,
     start_s: float,

@@ -416,6 +416,30 @@ def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
 # values silently produce no captions, which matches their prior behaviour.
 _ANIMATED_CAPTION_STYLES = captions.VALID_STYLES
 
+
+def frame_dimensions(source_path: Path) -> tuple[int, int]:
+    """Public alias for the source frame-dimension probe.
+
+    Ingest needs the source dims to resolve the video-level camera region
+    (Issue 439) without reaching for a private name across package boundaries.
+    """
+    return _frame_dimensions(source_path)
+
+
+def _face_inside(
+    face_box: tuple[int, int, int, int] | None, region: tuple[int, int, int, int]
+) -> bool:
+    """Whether a detected face's center lies inside ``region``.
+
+    No face detected → True: absence of evidence is not evidence the region is
+    wrong, and the module's contract is to fail open (Issue 439).
+    """
+    if face_box is None:
+        return True
+    fx, fy, fw, fh = face_box
+    rx, ry, rw, rh = region
+    return rx <= fx + fw / 2 <= rx + rw and ry <= fy + fh / 2 <= ry + rh
+
 _BACKGROUND_STYLES: dict[str, str] = {
     "blur": "split[v][blur];[blur]scale={ow}:{oh},boxblur=luma_radius=20:luma_power=2[blurred];[blurred][v]overlay=(W-w)/2:(H-h)/2",
     "black": "",  # default — letterbox fills with black (ffmpeg default pad colour)
@@ -450,6 +474,7 @@ def render_clip_file(
     style_preset: dict | None = None,
     transcript_segments: list[dict] | None = None,
     peak_s: float | None = None,
+    video_camera_region: dict | None = None,
 ) -> dict | None:
     """
     Cut [start_s, end_s] from source, crop to 9:16 centered on detected face,
@@ -559,21 +584,38 @@ def render_clip_file(
     if _settings.CAMERA_REGION_DETECT_ENABLED:
         from clip_engine import camera_region as _camera_region
 
-        detected = _camera_region.detect_camera_region(
-            source_path,
-            start_s,
-            end_s,
-            frame_w,
-            frame_h,
-            sample_frames=_settings.CAMERA_REGION_SAMPLE_FRAMES,
-            motion_thresh=_settings.CAMERA_REGION_MOTION_THRESH,
-            min_area_frac=_settings.CAMERA_REGION_MIN_AREA_FRAC,
-            min_height_frac=_settings.CAMERA_REGION_MIN_HEIGHT_FRAC,
-            full_frame_frac=_settings.CAMERA_REGION_FULL_FRAME_FRAC,
-            pad_frac=_settings.CAMERA_REGION_PAD_FRAC,
-            face_box=face_box,
-            timeout_s=render_timeout_s,
+        # Prefer the video-level region resolved once at ingest (Issue 439) so
+        # clips of one source cannot disagree. It carries no face-sanity check of
+        # its own — there is no single face for a whole video — so validate it
+        # against THIS clip's face box and fall back to per-clip detection if the
+        # speaker is outside it.
+        detected = _camera_region.region_from_video_json(
+            video_camera_region, frame_w, frame_h
         )
+        if detected is not None and not _face_inside(face_box, detected):
+            logger.info(
+                "camera_region: video-level region %s does not contain this clip's face "
+                "box %s — re-detecting for this clip",
+                detected,
+                face_box,
+            )
+            detected = None
+        if detected is None:
+            detected = _camera_region.detect_camera_region(
+                source_path,
+                start_s,
+                end_s,
+                frame_w,
+                frame_h,
+                sample_frames=_settings.CAMERA_REGION_SAMPLE_FRAMES,
+                motion_thresh=_settings.CAMERA_REGION_MOTION_THRESH,
+                min_area_frac=_settings.CAMERA_REGION_MIN_AREA_FRAC,
+                min_height_frac=_settings.CAMERA_REGION_MIN_HEIGHT_FRAC,
+                full_frame_frac=_settings.CAMERA_REGION_FULL_FRAME_FRAC,
+                pad_frac=_settings.CAMERA_REGION_PAD_FRAC,
+                face_box=face_box,
+                timeout_s=render_timeout_s,
+            )
         if detected is not None:
             region_x, region_y, region_w, region_h = detected
             # All downstream geometry switches to region space.

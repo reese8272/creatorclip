@@ -442,7 +442,7 @@ def test_render_cleaned_clip_file_chains_loudnorm_into_graph(tmp_path):
 _PUNCH_MARKER = "max(0\\,1-abs(t-"
 
 
-def _render_vf(tmp_path, *, style_preset=None, peak_s=None) -> str:
+def _render_vf(tmp_path, *, style_preset=None, peak_s=None, video_camera_region=None) -> str:
     """Render with mocked ffmpeg/cv2 and return the -vf filter string."""
     src = tmp_path / "v.mp4"
     src.touch()
@@ -463,7 +463,13 @@ def _render_vf(tmp_path, *, style_preset=None, peak_s=None) -> str:
     ):
         mock_cc.return_value.detectMultiScale.return_value = []
         render_clip_file(
-            src, start_s=10.0, end_s=70.0, out_path=out, style_preset=style_preset, peak_s=peak_s
+            src,
+            start_s=10.0,
+            end_s=70.0,
+            out_path=out,
+            style_preset=style_preset,
+            peak_s=peak_s,
+            video_camera_region=video_camera_region,
         )
     render_cmd = next((c for c in captured if "-vf" in c), None)
     assert render_cmd is not None
@@ -530,6 +536,62 @@ def _render_vf_with_region(tmp_path, *, region, flag=True, reframe=False) -> tup
         else:
             vf = _render_vf(tmp_path)
     return vf, compute_kwargs
+
+
+def _render_vf_with_video_region(tmp_path, *, stored, per_clip=None, face=None):
+    """Render with a stored video-level region; returns ``(vf, detect_calls)``."""
+    from config import settings as _settings
+
+    calls: list = []
+
+    def _detect(*args, **kwargs):
+        calls.append(kwargs)
+        return per_clip
+
+    with (
+        patch.object(_settings, "CAMERA_REGION_DETECT_ENABLED", True),
+        patch.object(_settings, "ACTIVE_SPEAKER_REFRAME_ENABLED", False),
+        patch("clip_engine.camera_region.detect_camera_region", side_effect=_detect),
+        patch("clip_engine.render._detect_face_box", return_value=face),
+    ):
+        vf = _render_vf(tmp_path, video_camera_region=stored)
+    return vf, calls
+
+
+_STORED_REGION = {
+    "version": 1,
+    "x": 200,
+    "y": 100,
+    "width": 1400,
+    "height": 900,
+    "frame": {"width": 1920, "height": 1080},
+    "sample_frames": 24,
+}
+
+
+def test_video_level_region_is_preferred_over_per_clip_detection(tmp_path):
+    """Issue 439 Stage 2: the stored rect wins and per-clip detection never runs,
+    which is what makes clips of one source agree by construction."""
+    vf, calls = _render_vf_with_video_region(
+        tmp_path, stored=_STORED_REGION, face=(800, 400, 200, 200)
+    )
+    assert "crop=1400:900:200:100" in vf
+    assert calls == [], "per-clip detection must not run when a video region is stored"
+
+
+def test_video_level_region_falls_back_when_the_face_is_outside_it(tmp_path):
+    """The video-level rect carries no face-sanity check of its own, so a clip
+    whose speaker sits outside it re-detects rather than cropping them away."""
+    _vf, calls = _render_vf_with_video_region(
+        tmp_path, stored=_STORED_REGION, per_clip=None, face=(1850, 1000, 60, 60)
+    )
+    assert len(calls) == 1, "a face outside the stored region must trigger per-clip detection"
+
+
+def test_absent_video_region_still_detects_per_clip(tmp_path):
+    """Videos ingested before migration 0056 keep the pre-439 behaviour."""
+    _vf, calls = _render_vf_with_video_region(tmp_path, stored=None, per_clip=None)
+    assert len(calls) == 1
 
 
 def test_camera_region_prepends_pre_crop_and_rescopes_geometry(tmp_path):

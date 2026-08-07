@@ -103,6 +103,68 @@ def test_detects_inner_camera_region():
     assert 700 <= rh <= 880
 
 
+# ── video-level region (Issue 439 Stage 2) ───────────────────────────────────
+
+
+def test_video_region_is_shared_by_every_clip_of_one_source():
+    """One rect for the whole video is what stops clips from disagreeing.
+
+    Modelled on the live failure: several clip windows detect cleanly and one is
+    poisoned by an overlay. Resolved once at video level, every clip reads the
+    same rect, so the poisoned window cannot produce its own answer.
+    """
+    from clip_engine.camera_region import detect_video_camera_region, region_from_video_json
+
+    camera = (slice(40, 200), slice(20, 460))
+    stack = _stack_bands([camera])
+    with patch("clip_engine.camera_region._sample_gray_frames", return_value=stack):
+        stored = detect_video_camera_region(_SRC, 1617.0, _FRAME_W, _FRAME_H)
+
+    assert stored is not None
+    assert stored["frame"] == {"width": _FRAME_W, "height": _FRAME_H}
+    # Every clip unpacks the identical rect.
+    rects = {region_from_video_json(stored, _FRAME_W, _FRAME_H) for _ in range(5)}
+    assert len(rects) == 1
+    assert rects.pop() is not None
+
+
+def test_video_region_rejected_when_source_dimensions_changed():
+    """A rect measured against other dimensions must not be trusted — a re-upload
+    can change them, and cropping to stale geometry is worse than re-detecting."""
+    from clip_engine.camera_region import region_from_video_json
+
+    stored = {
+        "version": 1,
+        "x": 100,
+        "y": 200,
+        "width": 1400,
+        "height": 600,
+        "frame": {"width": 1920, "height": 1080},
+        "sample_frames": 24,
+    }
+    assert region_from_video_json(stored, 1920, 1080) == (100, 200, 1400, 600)
+    assert region_from_video_json(stored, 1280, 720) is None
+    assert region_from_video_json(None, 1920, 1080) is None
+    assert region_from_video_json({"version": 99}, 1920, 1080) is None
+
+
+def test_zero_duration_video_has_no_region():
+    from clip_engine.camera_region import detect_video_camera_region
+
+    assert detect_video_camera_region(_SRC, 0.0, _FRAME_W, _FRAME_H) is None
+
+
+def test_face_inside_guards_the_video_level_region():
+    """The video-level rect carries no face check of its own, so the render path
+    validates it per clip. No face detected → trusted (fail-open contract)."""
+    from clip_engine.render import _face_inside
+
+    region = (100, 200, 1400, 600)
+    assert _face_inside((800, 400, 200, 200), region) is True
+    assert _face_inside((1800, 900, 100, 100), region) is False
+    assert _face_inside(None, region) is True
+
+
 def test_full_frame_motion_returns_none():
     region = _detect(_stack((slice(0, _AH), slice(0, _AW))))
     assert region is None  # ≥ full_frame_frac ⇒ no chrome ⇒ keep full frame

@@ -350,6 +350,14 @@ class Video(Base):
     # loudness curve and reconstructs no speech or music. See docs/COMPLIANCE.md.
     # NULL = no peaks; the UI draws a labelled flat track, never fake amplitude.
     peaks_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Camera region resolved ONCE for the whole video (Issue 439, migration 0056):
+    # {version, x, y, width, height, frame:{width,height}, sample_frames}. Clips of
+    # one source used to detect this independently and disagree — one clip absorbed
+    # the source's SUBSCRIBE/socials overlay and shipped it burned in. A cache of a
+    # deterministic measurement, never creator-authored, so the backfill task may
+    # recompute it freely. NULL = unresolved (older video, detection declined, or
+    # the flag was off at ingest) → the render path falls back to per-clip detection.
+    camera_region_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     origin: Mapped[VideoOrigin] = mapped_column(
         sa.Enum(VideoOrigin, name="video_origin_enum"),
         nullable=False,

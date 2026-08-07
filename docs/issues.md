@@ -2313,13 +2313,44 @@ match the existing floor. Stage 2 — resolve the region **once per video** duri
 the source is already on disk, store it, and have the render path prefer it, so clips of one
 source can no longer disagree.
 
+**Status: DONE (2026-08-07)** — backend 2904/0, Layer 0 all green. Coverage 84.29 → 83.98:
+the backfill task is an ffmpeg/R2 I/O shell, covered structurally by
+`tests/test_camera_region_ingest_safety.py` in the same idiom as
+`tests/test_poster_ingest_safety.py`. Module floors unmoved (`clip_engine` 92.28 vs 91.0).
+
+**What changed — Stage 1 (detector)**
+- `clip_engine/camera_region.py` — the region is anchored on the largest blob's bounding box, and
+  a secondary blob is unioned in only if it clears the (now-named) `_SECONDARY_AREA_FRAC` **and**
+  shares ≥`_MIN_VERTICAL_OVERLAP_FRAC` (0.5) of its vertical span with the primary. Excluded
+  blobs are logged with the reason.
+
+**What changed — Stage 2 (video-level consensus)**
+- Migration `0056` + `Video.camera_region_jsonb` — the rect resolved once per video, stored with
+  the source dimensions it was measured against.
+- `detect_video_camera_region` samples 24 frames across the whole runtime. Sampling wide is
+  itself part of the fix: an overlay on screen for part of a video contributes far less temporal
+  variance across 24 frames spanning 27 minutes than across 10 frames inside the 84 seconds it
+  happens to cover.
+- Resolved during ingest inside the existing `alocal_path` block (the source is already local —
+  a separate task would pay a second full download), with the poster's never-fails-ingest
+  posture: `ingest_video` is a `RefundOnFailureTask`, so a propagating error would retry the
+  ingest and then refund minutes for a transcription that succeeded.
+- `render_clip_file` prefers the stored rect and falls back to per-clip detection when it is
+  absent, when the source dimensions no longer match, or when **this clip's** face box sits
+  outside it — the video-level rect carries no face-sanity check of its own.
+- `backfill_video_camera_regions` Beat task, hourly, batch 10 (vs the poster sweep's 25 — this
+  pass decodes 24 frames per video rather than one).
+
 **Acceptance**
-- [ ] An animated overlay strip below the camera band is excluded from the region, not unioned into it
-- [ ] A region materially taller than the camera band is rejected by an explicit ceiling
-- [ ] Region is resolved per video, stored, and preferred by the render path (per-clip detection remains the fallback for older videos)
-- [ ] Unit test: a two-band synthetic stack (camera band + intermittent bottom strip) returns only the camera band
-- [ ] Unit test: N per-clip stacks, one poisoned, reconcile to the clean siblings' rect
-- [ ] Live: re-render rank 6 of `3b6992fe` — SUBSCRIBE button, socials strip and superchat all gone
+- [x] An animated overlay strip below the camera band is excluded, not unioned in (`test_animated_overlay_strip_below_the_camera_is_excluded`, demonstrated failing first at bottom edge 1079 vs the camera band's 800)
+- [x] The side-by-side two-camera union the rule exists for still works (`test_side_by_side_second_camera_is_still_unioned`, green before and after)
+- [x] Region is resolved per video, stored, and preferred by the render path; per-clip detection remains the fallback for older videos (`test_video_level_region_is_preferred_over_per_clip_detection`, `test_absent_video_region_still_detects_per_clip`)
+- [x] A clip whose speaker falls outside the stored rect re-detects rather than cropping them away (`test_video_level_region_falls_back_when_the_face_is_outside_it`)
+- [x] A rect measured against different source dimensions is distrusted (`test_video_region_rejected_when_source_dimensions_changed`)
+- [x] Every clip of one source unpacks an identical rect (`test_video_region_is_shared_by_every_clip_of_one_source`)
+- [x] Ingest and backfill safety contracts pinned (`tests/test_camera_region_ingest_safety.py`)
+- [~] **A height ceiling was NOT added** — see `docs/DECISIONS.md` 2026-08-07. Building it showed the instrument cannot work: `test_detects_inner_camera_region` asserts a legitimate 0.648–0.815 height fraction and the defective region was 0.694, inside that band. Any ceiling catching the real failure would reject correct regions
+- [ ] Live: re-render rank 6 of `3b6992fe` — SUBSCRIBE button, socials strip and superchat all gone (needs deploy + migration)
 
 ### Issue 440: `face_pan` fallback degenerates into repeated full-width sweeps — the virtual tripod only holds in `speaker_cut` mode
 

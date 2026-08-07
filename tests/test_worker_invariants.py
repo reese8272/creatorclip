@@ -183,6 +183,10 @@ _ADMIN_SESSION_ALLOWLIST = frozenset(
         # Beat READ to find videos still missing a waveform, with every WRITE
         # reopening db.tenant_session(creator_id).
         "_backfill_video_peaks_async",
+        # Issue 439 — identical posture again: a cross-tenant Beat READ to find
+        # videos whose camera region has never been resolved, with every WRITE
+        # reopening db.tenant_session(creator_id).
+        "_backfill_video_camera_regions_async",
         # Spans RLS-exempt notification tables (preferences / deliveries carry
         # no tenant policy); per-creator isolation via explicit predicates.
         "_send_notification_async",

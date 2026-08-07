@@ -1291,6 +1291,19 @@ def backfill_video_peaks() -> None:
     run_async(_backfill_video_peaks_async())
 
 
+@celery.task(name="worker.tasks.backfill_video_camera_regions")
+def backfill_video_camera_regions() -> None:
+    """Celery Beat task: resolve the video-level camera region (Issue 439).
+
+    Newest-first, small batches. Self-terminating — once the eligible set is
+    drained this is one cheap query per pass, and the set only grows from
+    ingest, which now resolves its own region. Bounded like the peaks backfill:
+    detection needs the source, which is purged at SOURCE_MEDIA_RETENTION_HOURS,
+    so older videos stop matching and keep falling back to per-clip detection.
+    """
+    run_async(_backfill_video_camera_regions_async())
+
+
 @celery.task(name="worker.tasks.purge_stale_youtube_analytics")
 def purge_stale_youtube_analytics() -> None:
     """Wave-4 Fix 3 (Issue 75b) — Celery Beat task.
@@ -2019,6 +2032,43 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                 logger.warning("poster extraction failed for video %s: %s", video_id, exc)
                 poster_uri = None
 
+            # Camera region for the WHOLE video (Issue 439) — resolved here for
+            # the same reason as the poster: `alocal_path` has already
+            # materialised the source. Clips used to detect this independently
+            # and disagree; one clip absorbed the source's SUBSCRIBE/socials
+            # overlay and shipped it burned into the bottom third.
+            #
+            # NEVER FAILS INGEST — same RefundOnFailureTask reasoning as above:
+            # a propagating error would retry the whole ingest and then refund a
+            # transcription that succeeded. NULL simply means the render path
+            # falls back to per-clip detection, which is the pre-439 behaviour.
+            from config import settings as _cfg
+
+            camera_region_json: dict | None = None
+            if _cfg.CAMERA_REGION_DETECT_ENABLED:
+                try:
+                    from clip_engine.camera_region import detect_video_camera_region
+                    from clip_engine.render import frame_dimensions
+
+                    frame_w, frame_h = await asyncio.to_thread(frame_dimensions, src)
+                    camera_region_json = await asyncio.to_thread(
+                        detect_video_camera_region,
+                        src,
+                        duration_s or 0.0,
+                        frame_w,
+                        frame_h,
+                        motion_thresh=_cfg.CAMERA_REGION_MOTION_THRESH,
+                        min_area_frac=_cfg.CAMERA_REGION_MIN_AREA_FRAC,
+                        min_height_frac=_cfg.CAMERA_REGION_MIN_HEIGHT_FRAC,
+                        full_frame_frac=_cfg.CAMERA_REGION_FULL_FRAME_FRAC,
+                        pad_frac=_cfg.CAMERA_REGION_PAD_FRAC,
+                    )
+                except Exception as exc:  # noqa: BLE001 — see the note above
+                    logger.warning(
+                        "camera-region detection failed for video %s: %s", video_id, exc
+                    )
+                    camera_region_json = None
+
         async with db.tenant_session(creator_id) as session:
             video = await session.get(Video, uuid.UUID(video_id))
             if video:
@@ -2034,6 +2084,10 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                 # waveform an earlier run already produced.
                 if peaks_uri:
                     video.peaks_uri = peaks_uri
+                # Same guard (Issue 439): a re-ingest whose detection declined
+                # must not discard a region an earlier run resolved.
+                if camera_region_json:
+                    video.camera_region_jsonb = camera_region_json
                 if duration_s and not video.duration_s:
                     # Direct-to-R2 uploads (Issue 395) register with duration_s=None
                     # and a provisional kind — the local probe is the authority for
@@ -2299,6 +2353,9 @@ class _ClipRenderPlan:
     clip_duration_s: float
     style_preset: dict | None
     transcript_segments: list[dict] | None
+    # Video-level camera region (Issue 439) — resolved once at ingest so clips of
+    # one source cannot disagree. None → the render falls back to per-clip detection.
+    camera_region: dict | None = None
 
 
 async def _load_clip_render_plan(clip_id: str, creator_id: str) -> _ClipRenderPlan | None:
@@ -2374,6 +2431,7 @@ async def _load_clip_render_plan(clip_id: str, creator_id: str) -> _ClipRenderPl
             clip_duration_s=end_s - (setup_start_s if setup_start_s is not None else start_s),
             style_preset=style_preset,
             transcript_segments=transcript_segments,
+            camera_region=video.camera_region_jsonb,
         )
 
 
@@ -2476,6 +2534,7 @@ async def _encode_and_upload_clip(
             style_preset=plan.style_preset,
             transcript_segments=plan.transcript_segments,
             peak_s=plan.peak_s,
+            video_camera_region=plan.camera_region,
         )
         await aemit(clip_id, "step", label="upload_r2", stage="render")
         render_uri = await aupload_file(out_path, f"clips/{clip_id}.mp4")
@@ -3737,6 +3796,99 @@ async def _backfill_video_posters_async() -> None:
                 await write.commit()
 
     logger.info("poster backfill: processed %d video(s)", done)
+
+
+# Smaller batch than the poster sweep: this pass decodes 24 frames per video
+# rather than one, so the same egress buys proportionally more CPU.
+_CAMERA_REGION_BACKFILL_BATCH = 10
+
+
+async def _backfill_video_camera_regions_async() -> None:
+    from sqlalchemy import and_, select
+
+    from clip_engine.camera_region import detect_video_camera_region
+    from clip_engine.render import frame_dimensions
+    from config import settings
+    from worker.storage import alocal_path
+
+    if not settings.CAMERA_REGION_DETECT_ENABLED:
+        return
+
+    redis = _worker_redis()
+
+    # AdminSessionLocal: a genuine cross-tenant sweep, same posture as the
+    # poster/peaks backfills above.
+    async with db.AdminSessionLocal() as session:
+        if not await _try_advisory_lock(session, "backfill_video_camera_regions"):
+            logger.info("advisory lock held — skipping backfill_video_camera_regions")
+            return
+        try:
+            # A purged source nulls source_uri, so those rows never match and
+            # simply keep falling back to per-clip detection at render time.
+            result = await session.execute(
+                select(Video.id, Video.creator_id, Video.source_uri, Video.duration_s)
+                .where(
+                    and_(
+                        Video.camera_region_jsonb.is_(None),
+                        Video.source_uri.is_not(None),
+                    )
+                )
+                .order_by(Video.created_at.desc())
+                .limit(_CAMERA_REGION_BACKFILL_BATCH * 2)
+            )
+            candidates = result.all()
+        finally:
+            await _rollback_then_unlock(session, "backfill_video_camera_regions")
+
+    if not candidates:
+        return
+
+    done = 0
+    for video_id, creator_id, source_uri, duration_s in candidates:
+        if done >= _CAMERA_REGION_BACKFILL_BATCH:
+            break
+        marker = f"camera_region_backfill_failed:{video_id}"
+        skip = False
+        # Egress optimisation, never a correctness gate — an unreachable Redis
+        # just means the row is retried next pass.
+        with contextlib.suppress(Exception):
+            skip = bool(await redis.get(marker))
+        if skip:
+            continue
+        region_json: dict | None = None
+        try:
+            async with alocal_path(source_uri) as src:
+                frame_w, frame_h = await asyncio.to_thread(frame_dimensions, src)
+                region_json = await asyncio.to_thread(
+                    detect_video_camera_region,
+                    src,
+                    duration_s or 0.0,
+                    frame_w,
+                    frame_h,
+                    motion_thresh=settings.CAMERA_REGION_MOTION_THRESH,
+                    min_area_frac=settings.CAMERA_REGION_MIN_AREA_FRAC,
+                    min_height_frac=settings.CAMERA_REGION_MIN_HEIGHT_FRAC,
+                    full_frame_frac=settings.CAMERA_REGION_FULL_FRAME_FRAC,
+                    pad_frac=settings.CAMERA_REGION_PAD_FRAC,
+                )
+        except Exception as exc:  # noqa: BLE001 — one bad source must not end the batch
+            logger.warning("camera-region backfill failed for video %s: %s", video_id, exc)
+            region_json = None
+
+        done += 1
+        if not region_json:
+            # A source with no detectable chrome legitimately returns None. The
+            # marker keeps it from being re-downloaded every pass forever.
+            with contextlib.suppress(Exception):
+                await redis.set(marker, "1", ex=_POSTER_FAIL_TTL_S)
+            continue
+        async with db.tenant_session(str(creator_id)) as write:
+            video = await write.get(Video, video_id)
+            if video and video.camera_region_jsonb is None:
+                video.camera_region_jsonb = region_json
+                await write.commit()
+
+    logger.info("camera-region backfill: processed %d video(s)", done)
 
 
 # Same egress throttle and failure-marker doctrine as the poster backfill above.
