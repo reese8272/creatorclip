@@ -5,6 +5,50 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-07 — Issue 440: face_pan holds seats; concurrency separates a two-shot from a move
+
+**Decision:** the `face_pan` rung no longer follows the single largest face across a multi-seat
+layout. Seats are derived from the `FaceTrack`s already built for the speaker-cut rung; seats
+closer together than the crop width collapse into one framing. On a genuine two-shot the framing
+**holds the dominant seat for each shot** and changes only at a source shot boundary. The
+deadband for the surviving pan path now scales to the **pan space** (`frame_width - crop_w`)
+rather than the crop width.
+
+**Why:** `REFRAME_PAN_DEADBAND_FRAC * crop_w` gave ~46 px against ~940 px of travel — a 20×
+mismatch, so any attention change committed to a full-width glide. Live on rank 7 of `3b6992fe`
+that produced 343 keyframes in 7 monotonic runs of ±900 px over 42.6 s, with sampled frames
+resting on the empty background *between* the two speakers. Google's AutoFlip states the
+governing rule: when required camera motion exceeds a threshold, cut rather than pan.
+
+**Deliberately NOT following the conversation on this rung.** The obvious next step — cut to
+whoever is speaking — was built and rejected by its own test: with a dwell of
+`REFRAME_CUT_MIN_TURN_S` the framing still flipped five times in ten seconds. This rung is
+reached *precisely because* speaker mapping fell below `REFRAME_MIN_MAPPING_CONFIDENCE`, and the
+only remaining signal (which face is largest) flips as speakers lean and turn. Cutting on that
+noise trades a sweeping camera for a twitching one. When diarization is trustworthy the
+`speaker_cut` rung already cuts on real turns; when it is not, a still frame on the wrong person
+is far cheaper than a cut to the wrong person — and stillness is what the creator asked for
+("I love the cropping being still", 2026-08-05).
+
+**Concurrency, not separation, is the discriminator.** A first implementation treated any two
+well-separated tracks as a two-shot, which broke `test_sustained_move_earns_glide_sendcmd_lines`:
+one subject who relocates from x=300 to x=1500 also produces two tracks, and holding the
+"dominant" one would frame empty space for the part of the clip before the move. Seats now
+qualify as a two-shot only when **occupied simultaneously** (some sample carries ≥2 faces at
+distinct seats). Sequential positions are one subject moving, and stay with the pan planner.
+
+**No traversal-budget constant was added.** The plan called for one; with the deadband corrected
+to the pan space and multi-seat layouts no longer panning at all, there is no evidence left that
+needs it, and LEFT_OFF's standing rule is to tune these from evidence rather than vibes.
+
+**Source/evidence:** live track statistics in `docs/issues.md` § Issue 440; new test
+`test_two_shot_face_pan_holds_seats_instead_of_sweeping` (demonstrated failing first at **93
+keyframes for a 10 s two-shot**, then 7 with cut-on-noise, then a clean hold), which measures via
+the same `track_stats` the live audit uses so the test and the audit share one definition of
+jitter. AutoFlip: https://ai.googleblog.com/2020/02/autoflip-open-source-framework-for.html
+
+---
+
 ## 2026-08-07 — Issue 439: vertical-overlap union rule, and NO height ceiling
 
 **Decision:** a secondary motion blob joins the camera region only if it clears the existing

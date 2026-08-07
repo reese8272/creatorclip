@@ -2380,12 +2380,34 @@ the crop width; and/or budget sweeps per unit time; and/or — when mapping conf
 wide multi-person shot — hold a static two-shot instead of panning, which is what the creator
 asked for in their own words on 2026-08-05 ("I love the cropping being still").
 
+**Status: DONE (2026-08-07)** — backend 2905/0, Layer 0 all green, eval harness 59/59 unchanged.
+Rulings in `docs/DECISIONS.md` 2026-08-07.
+
+**What changed** (`clip_engine/reframe.py`)
+- New `_seat_hold_plan`: seats come from the `FaceTrack`s already built for the speaker-cut rung
+  (no new clustering); seats closer together than the crop width collapse into one framing. On a
+  genuine two-shot the framing **holds the dominant seat per shot** and moves only at a source
+  shot boundary.
+- **Concurrency is the discriminator.** Seats qualify as a two-shot only when occupied
+  *simultaneously*. Two well-separated tracks that never co-occur are one subject who relocated —
+  a real camera move that stays with the pan planner. Getting this wrong is what broke
+  `test_sustained_move_earns_glide_sendcmd_lines` in the first attempt.
+- The surviving pan path's deadband now scales to the **pan space** (`frame_width - crop_w`),
+  not the crop width — the 20× mismatch that let any attention change commit to a full-width glide.
+
+**Deliberately not done:** cutting to whoever is speaking on this rung. It was built and rejected
+by its own test — the framing still flipped five times in ten seconds, because this rung is
+reached precisely when speaker mapping is untrustworthy and the only signal left (largest face)
+flips as speakers lean. See DECISIONS. No traversal-budget constant was added either: with the
+deadband corrected and multi-seat layouts no longer panning, nothing is left that needs it.
+
 **Acceptance**
-- [ ] No rendered clip pans across more than a bounded fraction of the pan space per unit time
-- [ ] A crop window never rests on a region containing no detected face for more than N frames
-- [ ] Low mapping confidence on a wide shot prefers a static hold over a full-width glide
-- [ ] Eval fixture: a two-person wide shot with sub-floor mapping confidence produces a bounded-motion track
-- [ ] Live: re-render ranks 2 and 7 of `3b6992fe` and confirm no empty-background frames
+- [x] A wide two-shot on the `face_pan` rung produces a bounded-motion track — ≤1 direction flip and ≤8 keyframes over 10 s (`test_two_shot_face_pan_holds_seats_instead_of_sweeping`, demonstrated failing first at **93 keyframes**)
+- [x] The crop never comes to rest between seats, on empty background (same test asserts every keyframe centre lands within 25% of the pan space of a seat)
+- [x] Low mapping confidence on a wide shot prefers a hold over a full-width glide
+- [x] A single subject who genuinely relocates still earns one monotonic glide — the two pre-existing tests that pinned this (`test_sustained_move_earns_glide_sendcmd_lines`, `test_x_in_script_is_within_frame`) pass unchanged rather than being rewritten
+- [x] The `speaker_cut` rung is untouched (`test_speaker_cut_mode_end_to_end` still 2 keyframes for a 1-cut clip)
+- [ ] Live: re-render ranks 2 and 7 of `3b6992fe` and confirm no empty-background frames (needs deploy)
 
 ### Issue 441: Primary clip generation emits overlapping windows and mid-sentence cold opens
 

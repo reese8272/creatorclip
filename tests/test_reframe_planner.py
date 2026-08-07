@@ -440,6 +440,71 @@ class TestComputeDynamicCrop:
         # clip is exactly 2 keyframes, not one per 5 Hz sample.
         assert len(result.track_json["keyframes"]) == 2
 
+    def test_two_shot_face_pan_holds_seats_instead_of_sweeping(self, tmp_path) -> None:
+        """Issue 440: face_pan on a wide two-shot must CUT between seats, never
+        whip the crop across the whole pan space.
+
+        Reproduces the live failure on rank 7 of video 3b6992fe: two speakers
+        ~900px apart in region space with a ~309px crop, mapping confidence below
+        the floor so the ladder falls to face_pan. The largest face alternates as
+        speakers lean and turn, and the old planner glided the full width every
+        time — 343 keyframes forming 7 monotonic runs of +/-900px in 42.6s, with
+        sampled frames landing on empty background between the two seats.
+
+        The bound is the one Google's AutoFlip states: when required camera
+        motion exceeds a threshold, cut instead of panning.
+        """
+        import sys
+        from pathlib import Path as _Path
+
+        sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+        from scripts.clip_audit import track_stats
+
+        # Region-scale geometry: 1200-wide pan space, 309px crop (9:16 of a 551px
+        # camera band) — NOT the 1920/607 the other pan tests use.
+        seat_a, seat_b = 250.0, 1150.0
+
+        def _alternating(frame, detector, ts):
+            """Largest face flips between the two seats every ~1.5s."""
+            a_big = int(ts / 1.5) % 2 == 0
+            return sorted(
+                [
+                    FaceObs(t=ts, cx=seat_a, cy=300.0, w=120.0 if a_big else 90.0, h=120.0),
+                    FaceObs(t=ts, cx=seat_b, cy=300.0, w=90.0 if a_big else 120.0, h=120.0),
+                ],
+                key=lambda o: o.w * o.h,
+                reverse=True,
+            )
+
+        result = self._run(
+            tmp_path,
+            transcript=None,  # no diarization → face_pan rung
+            obs=_alternating,
+            frame_width=1200,
+            frame_height=551,
+            crop_w=309,
+        )
+        assert result.mode == "face_pan"
+        stats = track_stats(result.track_json)
+        pan_space = 1200 - 309
+
+        # The crop must not traverse the pan space repeatedly. Seven sweeps was
+        # the live failure; holding two seats over a 10s window is at most a
+        # couple of changes.
+        assert stats["direction_flips"] <= 1, (
+            f"crop see-saws across the pan space: {stats['direction_flips']} direction flips, "
+            f"{stats['keyframes']} keyframes"
+        )
+        assert stats["keyframes"] <= 8, (
+            f"virtual tripod broken: {stats['keyframes']} keyframes for a 10s two-shot"
+        )
+        # And it must never come to rest between the seats, on empty background.
+        for kf in result.track_json["keyframes"]:
+            center = kf["x"] + 309 / 2
+            assert min(abs(center - seat_a), abs(center - seat_b)) <= pan_space * 0.25, (
+                f"crop centre {center:.0f} rests on neither seat ({seat_a}, {seat_b})"
+            )
+
     def test_cuts_flag_off_caps_at_face_pan(self, tmp_path) -> None:
         result = self._run(tmp_path, transcript=_dialogue_segments(), cuts_enabled=False)
         assert result.mode == "face_pan"

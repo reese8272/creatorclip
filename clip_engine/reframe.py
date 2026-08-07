@@ -877,6 +877,89 @@ def _hold_points_from_segments(
     return out
 
 
+def _seat_hold_plan(
+    obs_frames: list[tuple[float, list[_sm.FaceObs]]],
+    tracks: list[_sm.FaceTrack],
+    shot_changes: list[float],
+    start_s: float,
+    end_s: float,
+    crop_w: int,
+) -> tuple[list[CropCut], list[CropCenterPoint]] | None:
+    """Cut between discrete face "seats" instead of panning between them (Issue 440).
+
+    ``face_pan`` used to follow the single largest detected face. On a wide
+    two-shot "largest" flips as speakers lean and turn, so the planner glided the
+    crop across the entire pan space and back — measured live at 343 keyframes in
+    7 monotonic runs of ±900 px over 42.6 s, with intermediate frames resting on
+    the empty background *between* the two speakers.
+
+    Seats are the stable face tracks already built for the speaker-cut rung, so
+    no new clustering is needed. Two seats closer together than the crop width
+    are one framing, not two — those fall through to the pan planner.
+
+    On a real multi-seat layout the framing HOLDS THE DOMINANT SEAT for each
+    shot and changes only at a source shot boundary. It deliberately does not
+    try to follow the conversation: this rung is reached precisely when speaker
+    mapping was too weak to trust (``REFRAME_MIN_MAPPING_CONFIDENCE``), and the
+    only signal left — which face is largest — flips as speakers lean and turn.
+    Cutting on that noise trades a sweeping camera for a twitching one. When the
+    diarization IS trustworthy the ``speaker_cut`` rung already cuts on real
+    turns; when it is not, a still frame on the wrong person is far cheaper than
+    a cut to the wrong person, and stillness is what the creator asked for.
+
+    Returns ``(cuts, hold_points)``, or ``None`` when this is not a multi-seat
+    layout and the caller should fall back to ``plan_pan_holds``.
+    """
+    from collections import Counter
+
+    if len(tracks) < 2:
+        return None
+
+    # Collapse seats that fit inside one crop — they are a single framing.
+    seats: list[float] = []
+    for cx in sorted(t.median_cx() for t in tracks):
+        if not seats or cx - seats[-1] > crop_w:
+            seats.append(cx)
+    if len(seats) < 2:
+        return None
+
+    def _nearest_seat(cx: float) -> int:
+        return min(range(len(seats)), key=lambda i: abs(seats[i] - cx))
+
+    # Seats must be occupied SIMULTANEOUSLY to be a two-shot. Two well-separated
+    # tracks that never co-occur are one subject who relocated — that is a real
+    # camera move and belongs to the pan planner, which glides to the new
+    # position. Holding a "dominant" seat there would frame empty space for the
+    # part of the clip before the move.
+    if not any(
+        len({_nearest_seat(o.cx) for o in obs}) >= 2 for _ts, obs in obs_frames if len(obs) >= 2
+    ):
+        return None
+
+    # One hold per shot: the seat that owns the most samples in that span. A
+    # source shot change is the only thing that may move the framing.
+    boundaries = sorted({start_s, *[t for t in shot_changes if start_s < t < end_s], end_s})
+    points: list[CropCenterPoint] = []
+    cuts: list[CropCut] = []
+    for span_start, span_end in zip(boundaries, boundaries[1:], strict=False):
+        counts = Counter(
+            _nearest_seat(obs[0].cx)
+            for ts, obs in obs_frames
+            if obs and span_start <= ts < span_end
+        )
+        if not counts:
+            continue
+        x = int(round(seats[counts.most_common(1)[0][0]]))
+        if not points:
+            points.append(CropCenterPoint(start_s, x))
+        elif x != points[-1].center_x:
+            points.append(CropCenterPoint(span_start, x))
+            cuts.append(CropCut(t=span_start, speaker=None, from_track=None, to_track=None))
+    if not points:
+        return None
+    return cuts, points
+
+
 def _raw_track_largest_face(
     obs_frames: list[tuple[float, list[_sm.FaceObs]]],
     frame_w: int,
@@ -1101,24 +1184,45 @@ def compute_dynamic_crop(
             )
             planned = _hold_points_from_segments(plan_segments, tracks, frame_width)
         elif mode == "face_pan":
-            # Pan rung — largest face, held on a virtual tripod: deadband +
-            # sustained-deviation retarget glides; mandatory cuts at source
-            # shot changes (never pan across a source cut).
-            raw = _raw_track_largest_face(obs_frames, frame_width)
-            cuts = [
-                CropCut(t=t, speaker=None, from_track=None, to_track=None)
-                for t in shot_changes
-                if start_s < t < end_s
-            ]
-            planned = plan_pan_holds(
-                raw,
-                [c.t for c in cuts],
-                sample_fps=sample_fps,
-                deadband_px=settings.REFRAME_PAN_DEADBAND_FRAC * crop_w,
-                retarget_s=settings.REFRAME_PAN_RETARGET_S,
-                glide_px_per_s=settings.REFRAME_PAN_GLIDE_PX_PER_S,
-                glide_sample_fps=settings.REFRAME_GLIDE_SAMPLE_FPS,
+            # Multi-seat layouts CUT between seats (Issue 440) — panning across a
+            # wide two-shot whips the crop over the empty background between the
+            # speakers. Falls through to the pan planner when every face fits in
+            # one framing, i.e. a genuine single subject drifting.
+            seat_plan = _seat_hold_plan(
+                obs_frames,
+                tracks,
+                shot_changes,
+                start_s,
+                end_s,
+                crop_w,
             )
+            if seat_plan is not None:
+                cuts, planned = seat_plan
+            else:
+                # Pan rung — largest face, held on a virtual tripod: deadband +
+                # sustained-deviation retarget glides; mandatory cuts at source
+                # shot changes (never pan across a source cut).
+                raw = _raw_track_largest_face(obs_frames, frame_width)
+                cuts = [
+                    CropCut(t=t, speaker=None, from_track=None, to_track=None)
+                    for t in shot_changes
+                    if start_s < t < end_s
+                ]
+                planned = plan_pan_holds(
+                    raw,
+                    [c.t for c in cuts],
+                    sample_fps=sample_fps,
+                    # Issue 440: the deadband scales to the PAN SPACE, not the crop
+                    # width. At crop_w it was ~46px against ~940px of travel — a
+                    # 20x mismatch that let any attention change commit to a
+                    # full-width glide.
+                    deadband_px=(
+                        settings.REFRAME_PAN_DEADBAND_FRAC * max(1, frame_width - crop_w)
+                    ),
+                    retarget_s=settings.REFRAME_PAN_RETARGET_S,
+                    glide_px_per_s=settings.REFRAME_PAN_GLIDE_PX_PER_S,
+                    glide_sample_fps=settings.REFRAME_GLIDE_SAMPLE_FPS,
+                )
         else:  # static
             mid = start_s + duration / 2.0
             planned = [CropCenterPoint(mid, frame_width // 2, is_fallback=True)]
