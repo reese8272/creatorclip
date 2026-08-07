@@ -1,8 +1,8 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-06 (post-437 ship) · **Branch:** `main` @ `8a4c052` · **working tree
-CLEAN**, in sync with `origin/main` (0 ahead / 0 behind) · deploy chains green (`gh run list`
-verified: Docker publish ✓ 1m53s → Deploy to production ✓ 1m38s).
+**Last updated:** 2026-08-07 (Issues 438-441 built) · **Branch:** `main` @ `b5088ba` · **working
+tree CLEAN**, **7 commits AHEAD of `origin/main` — NOT PUSHED, NOT DEPLOYED** (`79b9e63..b5088ba`).
+The last deployed commit is `8a4c052`.
 **Prod:** `https://autoclip.studio` healthy (200) — the whole recent stack is LIVE and
 live-verified on real footage: speaker cuts (422) · serial render queue (432) · region-aware
 reframe + chrome removal (433) · generate-more (431) · Review audio toggle (434) · video
@@ -55,23 +55,23 @@ and no coordinators or pronouns in the weak-opener list (they broke pinned snap 
    and no conjunction-initial opens. Also worth watching on that upload: the video-level camera
    region is now resolved at ingest, so check `videos.camera_region_jsonb` is populated and that
    every clip's `reframe_track_jsonb.region` matches it.
-2. **Still owed on 437:** the *failure*-path browser drill — Review → devtools request-blocking
+3. **Still owed on 437:** the *failure*-path browser drill — Review → devtools request-blocking
    on `**/clips/*/feedback` → **Keep** → pick a **tag** → **Submit**. Expect a **red, persistent**
    *"Couldn't reach the server — nothing was saved"*, panel **still open**, tag **still
    selected**. The success path is already DB-verified. Using a tag (not the free-text note)
    would also close the untested `feedback_tags` persistence gap in `docs/OFF_COURSE_BUGS.md`.
-3. **Consider chasing the 502 root cause** (nothing has ruled anything out yet). Start:
+4. **Consider chasing the 502 root cause** (nothing has ruled anything out yet). Start:
    `ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml logs --since 24h app worker | tail -200'`
    plus `journalctl -b -1 | tail` for a clean `systemd-poweroff`, and `dmesg -T | grep -i oom`.
    **Check with the owner first** — they sometimes power the droplet off intentionally.
-3. **Offered, awaiting the user's word:** re-render ranks 3–8 of `b8505eb7` (they still carry
+5. **Offered, awaiting the user's word:** re-render ranks 3–8 of `b8505eb7` (they still carry
    pre-436 jittery/banner renders). Drill: reset `render_status='pending'` per clip id, then
    `docker compose exec -T worker celery -A worker.celery_app call worker.tasks.render_clip --args '["<id>"]'`
    — they queue serially on the render-worker.
-4. **Watch for:** Opus 5 cache HITS (`cache_read_input_tokens > 0` on 2nd+ scoring calls) ·
+6. **Watch for:** Opus 5 cache HITS (`cache_read_input_tokens > 0` on 2nd+ scoring calls) ·
    tripod knobs on other layouts (`REFRAME_PAN_DEADBAND_FRAC=0.15`, `RETARGET_S=1.0` —
    tune from evidence, not vibes) · reframe confidence floor 0.2 behavior on new layouts.
-5. **Parked:** Issue-395 live drills (>2 GB, reload-resume, session-expiry) · operator
+7. **Parked:** Issue-395 live drills (>2 GB, reload-resume, session-expiry) · operator
    punch-list (`docs/GO_LIVE.md`): #29 OAuth verification · #26/#28 friend beta · #282 uptime
    monitor · #255 key escrow.
 
@@ -83,7 +83,7 @@ redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
 # backend:  .venv/bin/python -m pytest -m "not integration" -p no:langsmith -q
 # frontend: run from frontend/ (root npx = cached-Playwright ERR_INTERNAL_ASSERTION)
 # Layer 0:  .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py
-# eval:     any clip_engine/ change → tests/test_clip_engine.py gates it (SCENARIO_FLOOR=21)
+# eval:     any clip_engine/ change → tests/test_clip_engine.py gates it (SCENARIO_FLOOR=23)
 ```
 
 ---
