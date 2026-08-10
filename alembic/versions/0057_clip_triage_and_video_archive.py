@@ -54,7 +54,10 @@ Templates A + Rule 4 (docs/MIGRATIONS.md). NOTE: Rule 4's snippet uses
 `UPDATE … LIMIT`, which is not valid PostgreSQL (UPDATE has no LIMIT clause);
 this migration is the first batched backfill in the repo, so the rule had never
 been exercised. Logged in docs/OFF_COURSE_BUGS.md. The correct form is the CTE
-below. Alembic wraps the whole migration in ONE transaction (alembic/env.py), so
+below, and the backfill has an OFFLINE branch: `alembic upgrade --sql` (which the
+CI migration-lint job runs) has no connection, so `execute()` returns None and a
+row-count loop crashes on `.rowcount`. Any data-migration needs that guard.
+Alembic wraps the whole migration in ONE transaction (alembic/env.py), so
 batching bounds each statement's row count and lock set — keeping every statement
 under the connect-time `statement_timeout` — but does not split the WAL burst.
 At v1 scope (≤100-user beta) that is correct and simplest; past ~1M clips this
@@ -64,7 +67,7 @@ loop belongs in a one-shot Celery task under an advisory lock instead.
 import sqlalchemy as sa
 from sqlalchemy import text
 
-from alembic import op
+from alembic import context, op
 
 revision = "0057"
 down_revision = "0056"
@@ -107,6 +110,24 @@ _BACKFILL_SQL = text(
     """
 )
 
+# Same derivation, no LIMIT — used only for offline (`--sql`) rendering, where
+# there is no connection to count rows against and therefore no way to loop.
+_BACKFILL_SQL_ALL = """
+    WITH latest AS (
+        SELECT DISTINCT ON (f.clip_id) f.clip_id, f.action
+        FROM clip_feedback f
+        ORDER BY f.clip_id, f.created_at DESC, f.id DESC
+    )
+    UPDATE clips c
+    SET triage = (
+        CASE WHEN l.action = 'downvote' THEN 'dropped' ELSE 'kept' END
+    )::clip_triage_enum
+    FROM latest l
+    WHERE c.id = l.clip_id
+      AND c.triage = 'pending'
+      AND l.action IN ('upvote', 'trim', 'format', 'downvote')
+"""
+
 
 def upgrade() -> None:
     triage = sa.Enum(*_ENUM_VALUES, name=_ENUM_NAME)
@@ -117,6 +138,16 @@ def upgrade() -> None:
         sa.Column("triage", triage, nullable=False, server_default="pending"),
     )
     op.add_column("videos", sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True))
+
+    if context.is_offline_mode():
+        # `alembic upgrade --sql` has no connection: execute() returns None, so
+        # a row-count loop cannot work (and crashes on `.rowcount`). The CI
+        # migration-lint job renders exactly this way, which is how it was
+        # caught. Emit the equivalent UNBOUNDED statement instead — it is the
+        # correct SQL for a human applying the script by hand, just without the
+        # lock-friendly batching, which offline rendering cannot express.
+        op.execute(_BACKFILL_SQL_ALL)
+        return
 
     # Bounded batches. Terminates because every iteration moves rows off
     # 'pending', shrinking the candidate set; clips whose latest action is
