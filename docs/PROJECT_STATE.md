@@ -4,6 +4,66 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-10 (latest) — Fresh-upload audit: 438/440/443 VERIFIED, 441 half-failed, two new issues
+
+**Video `7e988321-2265-4e22-85bd-0e9ffd583f84`** ("2026-08-05 07-59-55", Backboard Media, 12 clips /
+8 auto-rendered). **This is the same source recording as the 2026-08-07 baseline** —
+`duration_s = 1617.216667` on `7e988321`, `3b6992fe` and `b8505eb7` alike — so the comparison is a
+true A/B: identical input, new engine. Every difference below is attributable to the fixes.
+
+**Delivery, unchanged and flawless.** All 8 renders 1080×1920 h264/aac stereo 60 fps; duration
+matches `end_s − COALESCE(setup_start_s, start_s)` to **±0.010 s**; integrated loudness −13.90 to
+−14.00 LUFS against the `I=-14` target; true peaks **−5.1 to −5.6 dBFS** (clean headroom — and the
+first audit ever to actually measure peak, see below).
+
+**VERIFIED — Live boxes closed:**
+- **438 (seeding half)** — `style_preset` non-NULL on **all 12** clips including ranks 9–12 beyond
+  `AUTO_RENDER_TOP_N`. On the same source, the baseline had ranks 9–14 NULL and shipped rank 13
+  captionless. *The bodiless-render half stays open — it needs a UI click.*
+- **440** — the one `face_pan` clip (rank 1) holds at **1 keyframe / 0 flips / 0.0 moves per s**
+  over 34.6 s. The baseline's rank 7, same source, was **343 keyframes / 7.6 moves per s**. All 8
+  clips: 1–4 keyframes, ≤2 flips, 0.023–0.047 moves/s. Cut sheets show instant switches, no frame
+  resting between seats.
+- **441 (overlap half)** — **maximum pairwise overlap across all 12 clips is 0.00 s** against the
+  3.0 s budget; no verbatim duplication. The baseline had five overlapping pairs, largest 17.4 s.
+- **443 / 439 (static chrome)** — `camera_region_jsonb` = `(169, 326, 1704, 551)`, height fraction
+  **0.5102** vs the 0.701 the old single-window premise produced **on this same recording**.
+  Consensus passed: 9 windows attempted, 9 detected, **8 agreeing**. A source frame with the rect
+  overlaid shows it excluding SUBSCRIBE, the `@WSHCARTER` socials strip and the logos. A 2 Hz scan
+  of the bottom 200 px of every clip found no static chrome.
+
+**FAILED — and filed:**
+- **441 (cold-open half) → Issue 449.** Rank 4 opens audibly on **"Yeah."**, a token
+  `is_weak_opener` returns `True` for. `snap_start` never reached its walk-back: the start
+  `1306.43` sat in the pause `[1306.27, 1306.51]`, **0.08 s** before the sentence and outside
+  `_BOUNDARY_EPSILON_S = 0.05`, so the pause branch returned it untouched. Reproduced against the
+  video's own transcript: `snap_start(1306.43) → 1306.43` but `snap_start(1306.48) → 1301.87`. Not
+  a budget limit — the walk-back cost 4.56 s against a 10.0 s budget.
+- **New defect → Issue 448.** Rank 3 carries a full-width cyan superchat banner
+  (`@Drew-l6j $1.99`) for its **final 11.5 s**. **Not a 439/443 regression** — the region is
+  correct; the superchat is drawn *inside* it by the streaming software. The region is resolved
+  once per video and static in time, and 443's median exists precisely to discard transient
+  outliers, so nothing in the current design can see it. Needs a temporal approach, not a
+  geometric one. **The source expires 2026-08-13 19:23 UTC**, after which this exact case is
+  unreproducible.
+
+**Two off-course finds** (`docs/OFF_COURSE_BUGS.md`): `scripts/clip_audit.py::_loudness` never
+enabled `peak=true`, so it parsed for a True-peak block ffmpeg was never asked to emit — **no
+audit, including the 2026-08-07 baseline, has ever had peak data** (fixed). And
+`build_sentence_index` trusts Deepgram utterance boundaries as grammatical ones: rank 9 opens on
+`"feel like Percy Butler is a starting free anything"` immediately after `"don't"`, **inverting the
+speaker's meaning** — no closed word class catches it, so it is logged rather than folded into 449.
+
+**Still open on this upload — both need the creator, and both die at the 72 h deadline
+(2026-08-13 19:23 UTC):** 438's bodiless render of a rank 9–12 clip, and 444's repeated-`PUT`
+idempotency check (all 12 clips are `triage = pending` with zero `clip_feedback` rows today).
+
+**Tooling:** `scripts/clip_audit.py` now reports `camera_region_jsonb` with a derived
+`height_frac`, the `ingest_done_at` + 72 h source-expiry deadline, `clips.triage`, and a per-clip
+feedback rollup. Backend **2941/0** (baseline 2938 + 3 new tests).
+
+---
+
 ## 2026-08-10 (later still) — Lane L27 opened; Issue 444 CLOSED: clips have a triage state
 
 **New lane L27 — Clip triage & upload management (Issues 444–447)**, filed 2026-08-10 after the

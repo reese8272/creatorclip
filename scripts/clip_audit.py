@@ -38,6 +38,7 @@ import os
 import subprocess
 import sys
 import urllib.request
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,44 @@ def _segment_text(segments: list[dict[str, Any]], start_s: float, end_s: float) 
 LEAD_IN_S = 30.0
 LEAD_OUT_S = 15.0
 
+# `SOURCE_MEDIA_RETENTION_HOURS` on the VM. The clock starts at `ingest_done_at`,
+# not at upload, and once it expires no clip can be re-rendered — which is what
+# ended the two previous verification attempts before they started.
+SOURCE_RETENTION_HOURS = 72
+
+
+def region_stats(region: dict[str, Any] | None) -> dict[str, Any]:
+    """Summarize a stored ``videos.camera_region_jsonb`` document.
+
+    The v2 shape (``clip_engine/camera_region.py``) is the consensus rect plus
+    its provenance: ``{version, x, y, width, height, frame:{width,height},
+    sample_frames, windows, windows_detected, windows_agreeing, window_span_s}``.
+    ``height_frac`` is the number the audit actually judges — ~0.51 is the
+    healthy region, ~0.70 is the defect Issue 439 filed and Issue 443 rebuilt
+    the measurement to avoid.
+
+    A stored ``None`` is **not** a failure: it means a consensus gate declined
+    and the render fell back to per-clip detection, which is the working path.
+    """
+    if not region:
+        return {"present": False, "note": "no stored region — render falls back to per-clip"}
+
+    frame = region.get("frame") or {}
+    frame_h = float(frame.get("height") or 0.0)
+    height = float(region.get("height") or 0.0)
+    return {
+        "present": True,
+        "version": region.get("version"),
+        "rect": [region.get("x"), region.get("y"), region.get("width"), region.get("height")],
+        "frame": [frame.get("width"), frame.get("height")],
+        "height_frac": round(height / frame_h, 4) if frame_h else None,
+        "windows": region.get("windows"),
+        "windows_detected": region.get("windows_detected"),
+        "windows_agreeing": region.get("windows_agreeing"),
+        "window_span_s": region.get("window_span_s"),
+        "sample_frames": region.get("sample_frames"),
+    }
+
 
 def _normalize(url: str) -> str:
     """psycopg wants a plain postgresql:// URL with no SQLAlchemy driver suffix."""
@@ -124,6 +163,13 @@ def _rows(cur: Any, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
     cur.execute(sql, params)
     cols = [d.name for d in cur.description]
     return [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
+
+
+def _expiry(ingest_done_at: Any) -> str | None:
+    """When the source media purges — the deadline for any re-render drill."""
+    if not ingest_done_at:
+        return None
+    return str(ingest_done_at + timedelta(hours=SOURCE_RETENTION_HOURS))
 
 
 def _presign(uri: str | None, filename: str) -> str | None:
@@ -174,7 +220,8 @@ def cmd_manifest(args: argparse.Namespace) -> None:
         video = _rows(
             cur,
             """SELECT id, title, duration_s, source_uri, poster_uri, ingest_status,
-                      origin, created_at FROM videos WHERE id = %s""",
+                      origin, created_at, ingest_done_at, archived_at, camera_region_jsonb
+               FROM videos WHERE id = %s""",
             (video_id,),
         )
         if not video:
@@ -186,7 +233,7 @@ def cmd_manifest(args: argparse.Namespace) -> None:
             """SELECT id, rank, setup_start_s, start_s, end_s, peak_s, score, dna_match,
                       render_status, render_uri, cleaned_render_uri, poster_uri,
                       applied_title, suggested_title, suggested_hook, style_preset,
-                      signals_jsonb, reframe_track_jsonb, created_at
+                      signals_jsonb, reframe_track_jsonb, triage, created_at
                FROM clips WHERE video_id = %s ORDER BY rank NULLS LAST, created_at""",
             (video_id,),
         )
@@ -217,6 +264,7 @@ def cmd_manifest(args: argparse.Namespace) -> None:
                     "score": c["score"],
                     "dna_match": c["dna_match"],
                     "render_status": c["render_status"],
+                    "triage": c["triage"],
                     "render_uri": c["render_uri"],
                     "cleaned_render_uri": c["cleaned_render_uri"],
                     "poster_uri": c["poster_uri"],
@@ -247,16 +295,35 @@ def cmd_manifest(args: argparse.Namespace) -> None:
                 "ingest_status": str(vid["ingest_status"]),
                 "origin": str(vid["origin"]),
                 "created_at": str(vid["created_at"]),
+                "ingest_done_at": str(vid["ingest_done_at"]),
+                "source_expires_at": _expiry(vid["ingest_done_at"]),
+                "archived_at": str(vid["archived_at"]) if vid["archived_at"] else None,
                 "source_present": bool(vid["source_uri"]),
                 "source_url": _presign(vid["source_uri"], "source.mp4"),
+                "camera_region": region_stats(vid["camera_region_jsonb"]),
             },
             "transcript_source": transcript[0]["source"] if transcript else None,
             "transcript_segments": len(segments),
             "clips": out_clips,
+            # Scoped to THIS video. Issue 444's live check is "one pile move ->
+            # exactly one derived row", which a creator-wide tail cannot show.
             "feedback": _rows(
                 cur,
-                """SELECT id, clip_id, action, feedback_tags, feedback_note, created_at
-                   FROM clip_feedback ORDER BY created_at DESC LIMIT 25""",
+                """SELECT f.id, f.clip_id, c.rank, f.action, f.feedback_tags,
+                          f.feedback_note, f.created_at
+                   FROM clip_feedback f JOIN clips c ON c.id = f.clip_id
+                   WHERE c.video_id = %s ORDER BY f.created_at DESC""",
+                (video_id,),
+            ),
+            "feedback_per_clip": _rows(
+                cur,
+                """SELECT c.rank, f.clip_id, COUNT(*) AS row_count,
+                          COUNT(DISTINCT f.action) AS distinct_actions,
+                          MAX(f.created_at) AS latest
+                   FROM clip_feedback f JOIN clips c ON c.id = f.clip_id
+                   WHERE c.video_id = %s
+                   GROUP BY c.rank, f.clip_id ORDER BY c.rank NULLS LAST""",
+                (video_id,),
             ),
             "preference_models": _rows(
                 cur,
@@ -312,7 +379,12 @@ def _probe(path: Path) -> dict[str, Any]:
 
 
 def _loudness(path: Path) -> dict[str, Any]:
-    """Integrated loudness of the delivered file (render targets I=-14 LUFS)."""
+    """Integrated loudness of the delivered file (render targets I=-14 LUFS).
+
+    ``peak=true`` is load-bearing: without it ebur128 emits no "True peak"
+    block at all, so the parser below silently reported no peak rather than a
+    bad one — a clipped delivery would have looked identical to a clean one.
+    """
     proc = _run(
         [
             "ffmpeg",
@@ -320,7 +392,7 @@ def _loudness(path: Path) -> dict[str, Any]:
             "-i",
             str(path),
             "-af",
-            "ebur128=framelog=verbose",
+            "ebur128=framelog=verbose:peak=true",
             "-f",
             "null",
             "-",

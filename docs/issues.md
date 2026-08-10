@@ -2259,7 +2259,8 @@ requested-but-unbuildable caption track a loud failure rather than a silent omis
 - [x] `style_preset` is non-NULL for every clip a generation pass persists, including clips beyond `AUTO_RENDER_TOP_N` and when `AUTO_RENDER_CLIPS` is off (two tests in `test_progress_emit_wiring.py`, both demonstrated failing first)
 - [x] A requested caption track that resolves to nothing logs a warning (`test_requested_captions_that_resolve_to_nothing_are_logged`, demonstrated failing first)
 - [ ] Surface the captionless state in the clip's render metadata, not only the worker log — **not done**, deliberately deferred: it needs a field on the clip row and a UI affordance, which is its own issue. The warning is the interim signal
-- [ ] Live: **cannot be verified on `3b6992fe`** — its source media was purged 2026-08-08 (72 h retention), so no clip of it can be re-rendered. Verify on the next fresh upload: render a clip BEYOND rank 8 via the UI button (the bodiless `POST` is the only path that exercises the fix) and confirm captions
+- [x] Live (seeding half): **VERIFIED 2026-08-10 on video `7e988321`** — `style_preset` is non-NULL on **all 12** persisted clips, including ranks 9–12 which sit beyond `AUTO_RENDER_TOP_N = 8`. On the baseline video, from the same source recording, ranks 9–14 were all NULL and rank 13 shipped captionless. Burned-in captions confirmed visually on all 8 rendered clips' contact sheets
+- [ ] Live (bodiless-render half): **STILL OPEN** — needs a clip beyond rank 8 rendered via the UI "Render this clip" button, since that bodiless `POST` is the only path exercising the endpoint's brand-kit resolve. Ranks 9–12 of `7e988321` are `render_status = pending` and are the material. **Deadline 2026-08-13 19:23 UTC** (`ingest_done_at` + 72 h), after which the source purges and this is unverifiable for a third time
 
 ### Issue 439: Camera-region detection unions animated overlays into the region — a whole clip shipped with the SUBSCRIBE/socials overlay burned in
 
@@ -2352,7 +2353,7 @@ the backfill task is an ffmpeg/R2 I/O shell, covered structurally by
 - [x] Every clip of one source unpacks an identical rect (`test_video_region_is_shared_by_every_clip_of_one_source`)
 - [x] Ingest and backfill safety contracts pinned (`tests/test_camera_region_ingest_safety.py`)
 - [~] **A height ceiling was NOT added** — see `docs/DECISIONS.md` 2026-08-07. Building it showed the instrument cannot work: `test_detects_inner_camera_region` asserts a legitimate 0.648–0.815 height fraction and the defective region was 0.694, inside that band. Any ceiling catching the real failure would reject correct regions
-- [ ] Live: **cannot be verified on `3b6992fe`** (source purged 2026-08-08). Verify on the next fresh upload. Issue 443 has landed, so Stage 2 now stores a consensus rect (or declines) instead of the ~0.70 region that would have reintroduced this defect across every clip
+- [x] Live: **VERIFIED 2026-08-10 on video `7e988321`** for the static chrome it was filed against. `videos.camera_region_jsonb` = `(169, 326, 1704, 551)` on a 1920×1080 frame — height fraction **0.5102**, against the ~0.51 target and NOT the 0.694 defect. Provenance present and healthy: `version 2`, `windows 9`, `windows_detected 9`, `windows_agreeing 8`, `window_span_s 60.0`, `sample_frames 10` (so Issue 443's consensus gate passed rather than declining). A source frame with the rect overlaid shows it excluding the SUBSCRIBE button, the `@WSHCARTER` socials strip, the WSH Carter logo and the top player graphic. All 8 rendered clips carry `chrome_removed = true`; a 2 Hz scan of the bottom 200 px found **no static chrome in any of them**. ⚠️ A *transient* superchat overlay drawn INSIDE this correct region still reaches the render — filed as **Issue 448**, a different mechanism, not a regression of this one
 
 ### Issue 440: `face_pan` fallback degenerates into repeated full-width sweeps — the virtual tripod only holds in `speaker_cut` mode
 
@@ -2409,7 +2410,7 @@ deadband corrected and multi-seat layouts no longer panning, nothing is left tha
 - [x] Low mapping confidence on a wide shot prefers a hold over a full-width glide
 - [x] A single subject who genuinely relocates still earns one monotonic glide — the two pre-existing tests that pinned this (`test_sustained_move_earns_glide_sendcmd_lines`, `test_x_in_script_is_within_frame`) pass unchanged rather than being rewritten
 - [x] The `speaker_cut` rung is untouched (`test_speaker_cut_mode_end_to_end` still 2 keyframes for a 1-cut clip)
-- [ ] Live: **cannot be verified on `3b6992fe`** (source purged 2026-08-08). Verify on the next fresh upload — any `face_pan` clip must show few keyframes, ≤1 direction flip, and no frame resting on empty background
+- [x] Live: **VERIFIED 2026-08-10 on video `7e988321`** — the same source recording as the baseline (`duration_s = 1617.216667` on both), so this is a true A/B. The one `face_pan` clip (rank 1) shows **1 keyframe, 0 direction flips, 0.0 visible moves/s** over 34.6 s — a complete hold. The baseline's failures on this identical source were rank 7 at **343 keyframes / 7 runs of ±900 px / 7.6 moves/s** and rank 2 resting on empty background. Across all 8 rendered clips: 1–4 keyframes, ≤2 direction flips, 0.023–0.047 moves/s, and the cut sheets (±0.2 s around every cut) show instant speaker-to-speaker switches with both subjects centred — no frame rests between seats
 
 ### Issue 441: Primary clip generation emits overlapping windows and mid-sentence cold opens
 
@@ -2481,7 +2482,8 @@ is replaced by a pair covering both sides of the new boundary.
 - [x] A coordinator-initial opening is left alone (`test_snap_start_leaves_a_coordinator_alone`), and a start in an inter-sentence pause stays a clean open (`test_snap_start_clean_boundary_unchanged`, pre-existing)
 - [x] New eval fixtures reproduce the rank2×rank6 partial overlap and the "because…" cold open — **both verified failing with the fixes neutralised**, then green
 - [x] `SCENARIO_FLOOR` 21 → 23; landing-page public count synced 22 → 24
-- [ ] Live: next fresh upload shows no verbatim duplicated speech between clips and no conjunction-initial opens — **cannot be verified on `3b6992fe`**, whose windows are already persisted; needs a new upload or a regeneration pass
+- [x] Live (overlap half): **VERIFIED 2026-08-10 on video `7e988321`** — **maximum pairwise overlap across all 12 clips is 0.00 s**, against the 3.0 s budget. No verbatim duplicated speech between any pair. The baseline, from the same source recording, had five overlapping pairs (largest 17.4 s = 41% of rank 7) and verbatim duplication between ranks 2 and 6
+- [ ] Live (cold-open half): **FAILED — see Issue 449.** Rank 4 opens audibly on **"Yeah."**, which `is_weak_opener` classifies `True`. `snap_start` never reached its walk-back: the start `1306.43` sat in the inter-sentence pause `[1306.27, 1306.51]`, 0.08 s before the sentence and outside `_BOUNDARY_EPSILON_S = 0.05`, so the pause branch returned it untouched. Not a budget limit — the walk-back would have cost 4.56 s against a 10.0 s budget. Ranks 6 (`"Like,"`) and 12 (`"maybe"`) open on hedges outside the shipped list, and rank 7 (`"the Terry thing, no."`) is the fragment 441 knowingly scoped out
 
 ### Issue 442: `style_preset["background"]` is accepted, persisted, and never applied
 
@@ -2555,7 +2557,7 @@ three rulings (IoU over height-MAD, no gate re-validation, version-scoped marker
 - [x] A rect that deviates materially from the per-clip detections is not stored at all — declining is correct, and the render already falls back (`test_consensus_declines_when_the_windows_disagree`, `test_consensus_declines_below_the_survivor_quorum`)
 - [x] No detection may span the whole runtime — the root cause, pinned (`test_video_region_never_runs_one_detection_over_the_whole_runtime`, demonstrated failing at `1617.0 <= 60.0`)
 - [x] The failure marker is not left suppressing retries after a code fix (this cost a full cycle to notice) — the marker key is now scoped to `VIDEO_REGION_VERSION`, so a detector fix invalidates the markers its own bug wrote (`test_backfill_marker_is_scoped_to_the_detector_version`). Bumping 1 → 2 also orphans the two markers currently set on prod, with no manual Redis operation
-- [ ] Live: the video-level rect lands near the healthy per-clip height fraction (~0.51), not ~0.70, and a rendered clip shows no overlay. **Re-scoped from `3b6992fe` to the next fresh upload** — that video's source was purged 2026-08-08 (`source_uri IS NULL`), so there is nothing left to backfill or re-render. Check `videos.camera_region_jsonb` for the height fraction plus the new `windows` / `windows_detected` / `windows_agreeing` provenance. A NULL column is **not** a failure: it means a gate declined and the render fell back to per-clip detection, which is the working path — the decline log line names which gate fired
+- [x] Live: **VERIFIED 2026-08-10 on video `7e988321`.** The rect is `(169, 326, 1704, 551)` on a 1920×1080 frame — height fraction **0.5102**, i.e. the healthy ~0.51 and not the 0.694/0.701 defect. The consensus gate **passed rather than declining**: `version 2`, `windows 9`, `windows_detected 9`, `windows_agreeing 8`, `window_span_s 60.0`, `sample_frames 10`. Decisive because this upload is the SAME source recording that produced the 0.701 measurement under the old single-window premise (`duration_s = 1617.216667` on both), so the rebuild is what changed the answer. No static overlay in any of the 8 rendered clips. The ingest-time consensus log line was NOT read — the worker container restarted at 20:42 and retention starts after the 19:23 ingest — but the stored provenance is strictly stronger evidence than the log, which only matters when the column is NULL. *(Superseded concern: a transient superchat inside this correct region does reach the render — Issue 448.)* ~~**Re-scoped from `3b6992fe` to the next fresh upload**~~ — that video's source was purged 2026-08-08 (`source_uri IS NULL`), so there is nothing left to backfill or re-render. Check `videos.camera_region_jsonb` for the height fraction plus the new `windows` / `windows_detected` / `windows_agreeing` provenance. A NULL column is **not** a failure: it means a gate declined and the render fell back to per-clip detection, which is the working path — the decline log line names which gate fired
 
 ---
 
@@ -2727,6 +2729,103 @@ review card (`YourCall.tsx:212-224`) and the long-form Export panel
 
 ---
 
+## Lane L28 — Audit findings from the 2026-08-10 fresh upload (Issues 448–449)
+
+**Filed 2026-08-10** from the first full-set audit of video `7e988321` ("2026-08-05 07-59-55",
+Backboard Media, 12 clips / 8 rendered). This upload is a **true A/B against the 2026-08-07
+baseline** — `duration_s = 1617.216667` on both, i.e. the SAME source recording re-uploaded — so
+every difference is attributable to the engine, not the input. 438/440/443 all verified fixed on
+it. The two issues below are the residue: neither is a regression, and neither was reachable
+before this upload.
+
+### Issue 448: a transient superchat overlay inside the camera region is burned into the render
+
+**Severity: high — visible, burned in, on a delivered clip; recurs on every livestream source.**
+
+Rank 3 of `7e988321` carries a full-width cyan YouTube superchat banner
+(`@Drew-l6j  $1.99 / "Worried they're gonna bench Mikey"`) across the bottom of the frame for its
+**final 11.5 s** (73.0 s → 84.4 s of an 84.4 s clip). Measured by sampling the bottom 200 px at
+2 Hz across all 8 rendered clips; **rank 3 is the only one affected**, and the banner runs to the
+clip's end.
+
+**This is not a regression of 439 or 443 — the region is correct.** The stored consensus rect is
+`(169, 326, 1704, 551)`, height fraction **0.5102**, from 9 windows detected with 8 agreeing. A
+source frame at t≈887 s with the rect overlaid shows it tightly enclosing the two camera feeds and
+**excluding** the SUBSCRIBE button, the `@WSHCARTER` socials strip, the WSH Carter logo and the
+top player graphic. The superchat is drawn by the streaming software *on top of* the lower part of
+the camera feed — i.e. **inside** an otherwise-correct region.
+
+**Why the existing machinery cannot catch it.** The region is resolved **once per video** and is
+static in time. Worse, Issue 443's fix actively hides this class: the per-window component-wise
+median exists precisely to discard transient outliers, so an overlay present in one window of nine
+can never move the consensus. Per-clip detection would not help either — the overlay is transient
+*within* a single clip.
+
+**Fix direction (needs its own CHECK phase — do not build from this sketch).** The honest options
+are temporal, not geometric: detect overlay bands per-segment and either (a) shrink the crop for
+the affected span, (b) letterbox/blur the band, or (c) surface it as a flagged clip the creator
+can re-cut. Option (c) is cheapest and matches the honesty constraint. Note the render's crop is
+a single static `crop=` for the whole clip today, so (a) is a real architectural change.
+
+**Acceptance**
+- [ ] A clip whose region contains a transient overlay for part of its span does not ship it
+      burned in without the creator knowing
+- [ ] The chosen mechanism is proven on rank 3 of `7e988321` specifically (source expires
+      **2026-08-13 19:23 UTC** — after that this exact case is unreproducible)
+- [ ] Whatever is chosen, `detect_video_camera_region`'s consensus is NOT loosened to chase it —
+      the median's outlier rejection is correct and load-bearing (Issue 443)
+- [ ] No regression on the 8 clean clips of this upload
+
+### Issue 449: `snap_start`'s inter-sentence-pause exemption bypasses the Issue-441 weak-opener guard
+
+**Severity: medium — one shipped clip opens on a discourse marker, which 441's live box forbids.**
+
+Rank 4 of `7e988321` opens audibly on **"Yeah."** — a token in `_DISCOURSE_MARKERS`, so
+`is_weak_opener("Yeah.")` is `True`. Issue 441 exists to walk such a start back, and here it never
+ran.
+
+**Root cause, reproduced against the real transcript.** `clip_engine/sentence_snap.py:200-215`:
+when the start does not fall *inside* a sentence, `snap_start` treats it as a clean open and
+returns it untouched — unless it coincides with a sentence start within
+`_BOUNDARY_EPSILON_S = 0.05`. The shipped start `1306.43` sits in the pause `[1306.27, 1306.51]`,
+**0.08 s** before the "Yeah." sentence — just outside the epsilon. So the weak-opener walk-back at
+`:236-242` is never reached and the clip opens on the marker anyway.
+
+Verified (`build_sentence_index` over the video's own 190 Deepgram segments, 607 sentences):
+```
+snap_start(1306.43) -> 1306.43   # untouched — opens on "Yeah."   (the shipped value)
+snap_start(1306.48) -> 1301.87   # 0.03 s later: guard fires, walks back correctly
+snap_start(1306.52) -> 1301.87
+```
+The walk-back was **not** budget-limited: the cost was 4.56 s against `SENTENCE_SNAP_MAX_S = 10.0`.
+And `1306.43` is only producible by the untouched-pause return — had the guard chosen the "Yeah."
+sentence, the lead-in floor would have yielded `1306.27`.
+
+**Fix direction:** in the pause branch, when the start sits between two sentences, test the
+sentence that *begins next* — that is what the clip will audibly open on — and apply the same
+bounded walk-back. This is **not** the widening the code comment at `:206-208` warns against: that
+warning is about snapping a pause start FORWARD to claim the next sentence's opener; this walks
+BACKWARD, which only adds context.
+
+**Also observed, same audit, different mechanism — do not fold it into this fix.** Rank 9 (not
+rendered) opens on `"feel like Percy Butler is a starting free anything"`; the preceding word is
+`"don't"`, so the cut **inverts the speaker's meaning**. `build_sentence_index` opened a sentence
+span at "feel" because Deepgram ended an utterance there — the index trusts utterance boundaries
+as grammatical ones. No closed word-class catches this, which is why 441 knowingly scoped it out
+(the "the Terry thing, no." case is the same shape and appears here as rank 7). Logged in
+`docs/OFF_COURSE_BUGS.md`; promote only with a real approach, not a longer word list.
+
+**Acceptance**
+- [ ] A start landing in the pause before a weak-opening sentence walks back, bounded by the same
+      step count and `max_snap_s` budget as the in-sentence path
+- [ ] The regression test is written against the real `1306.43` case and demonstrated **failing
+      first**
+- [ ] `test_snap_start_clean_boundary_unchanged` and the coordinator/pronoun exclusions stay green
+      — the pinned snap cases from 441 are not re-litigated
+- [ ] Eval scenarios stay at 100%; `SCENARIO_FLOOR` raised only if a fixture is added
+
+---
+
 ## Source index
 
 Collected from the 2026-08-03 research pass. Cited inline above; listed here so a future pass can
@@ -2800,4 +2899,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **448**.
+- Next free issue number: **450**.
