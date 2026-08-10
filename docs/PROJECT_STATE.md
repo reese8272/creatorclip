@@ -4,6 +4,40 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-10 — the 438-441 verification window closed; Issue 443 now blocks the retry
+
+**438–441 are deployed but none is live-verified, and the planned drill can no longer be run.**
+`SOURCE_MEDIA_RETENTION_HOURS=72` expired on 2026-08-08: `source_uri IS NULL` on both
+`3b6992fe` and `b8505eb7`, so no clip of either can be re-rendered (the endpoint 409s
+`source_expired`) and the camera-region backfill can never reach them either. Verification moves
+to the next fresh upload — which was already the only way to test 441.
+
+**Issue 439 Stage 2 broke twice during the attempted drill**, and both defects were invisible to
+the unit suite because every test in `tests/test_camera_region.py` patches the sampler out:
+1. **Sampling timeout** (fixed, `479f24e`). One ffmpeg pass with an `fps` filter forced a linear
+   decode of the whole span — `fps=0.0148` over 1617 s against a 60 s timeout. Long spans now use
+   one input-seek per frame; three tests exercise the sampler directly.
+2. **Wrong measurement** (open — **Issue 443**). With sampling fixed, the backfill stored height
+   fraction **0.701** for both videos, essentially rank 6's defective 0.694. Temporal-variance
+   detection works per clip *because* a 30–90 s window has a stable layout; across 27 minutes
+   nearly every pixel changes at some point, so the mask approaches full-frame and swallows the
+   chrome it exists to exclude. The approved design said *consensus of several keyframes*; what
+   shipped was one detection over a wide span.
+
+**⛔ 443 blocks the fresh-upload verification.** Ingest runs Stage 2, so a new upload would store a
+~0.70 region and every clip's render would prefer it — reintroducing the exact chrome bug 439
+fixes, across the whole video. There is no flag that disables Stage 2 alone. Fix 443 (or make the
+render ignore `video_camera_region`) before uploading.
+
+**Prod left in a safe, deliberate state:** both stored rects nulled, `camera_region_backfill_failed:`
+markers re-set (7-day TTL) so the hourly beat cannot refill them, render falling back to per-clip
+detection (Stage 1). Nothing is user-visibly broken; the column is simply unused.
+
+Also learned: a backfill failure marker outlives the bug that caused it — the second backfill
+silently processed 0 videos until the keys were cleared by hand.
+
+---
+
 ## 2026-08-07 (later) — Issues 438-441 ALL BUILT + the audit cleanup
 
 All four audit defects fixed, one at a time, each gated before the next started. Backend

@@ -2259,7 +2259,7 @@ requested-but-unbuildable caption track a loud failure rather than a silent omis
 - [x] `style_preset` is non-NULL for every clip a generation pass persists, including clips beyond `AUTO_RENDER_TOP_N` and when `AUTO_RENDER_CLIPS` is off (two tests in `test_progress_emit_wiring.py`, both demonstrated failing first)
 - [x] A requested caption track that resolves to nothing logs a warning (`test_requested_captions_that_resolve_to_nothing_are_logged`, demonstrated failing first)
 - [ ] Surface the captionless state in the clip's render metadata, not only the worker log — **not done**, deliberately deferred: it needs a field on the clip row and a UI affordance, which is its own issue. The warning is the interim signal
-- [ ] Live: re-render rank 13 of `3b6992fe` and confirm captions (needs deploy)
+- [ ] Live: **cannot be verified on `3b6992fe`** — its source media was purged 2026-08-08 (72 h retention), so no clip of it can be re-rendered. Verify on the next fresh upload: render a clip BEYOND rank 8 via the UI button (the bodiless `POST` is the only path that exercises the fix) and confirm captions
 
 ### Issue 439: Camera-region detection unions animated overlays into the region — a whole clip shipped with the SUBSCRIBE/socials overlay burned in
 
@@ -2350,7 +2350,7 @@ the backfill task is an ffmpeg/R2 I/O shell, covered structurally by
 - [x] Every clip of one source unpacks an identical rect (`test_video_region_is_shared_by_every_clip_of_one_source`)
 - [x] Ingest and backfill safety contracts pinned (`tests/test_camera_region_ingest_safety.py`)
 - [~] **A height ceiling was NOT added** — see `docs/DECISIONS.md` 2026-08-07. Building it showed the instrument cannot work: `test_detects_inner_camera_region` asserts a legitimate 0.648–0.815 height fraction and the defective region was 0.694, inside that band. Any ceiling catching the real failure would reject correct regions
-- [ ] Live: re-render rank 6 of `3b6992fe` — SUBSCRIBE button, socials strip and superchat all gone (needs deploy + migration)
+- [ ] Live: **cannot be verified on `3b6992fe`** (source purged 2026-08-08). Verify Stage 1 on the next fresh upload — and note **Issue 443 must land first**, or Stage 2 will store a ~0.70 region at ingest and reintroduce this exact defect across every clip
 
 ### Issue 440: `face_pan` fallback degenerates into repeated full-width sweeps — the virtual tripod only holds in `speaker_cut` mode
 
@@ -2407,7 +2407,7 @@ deadband corrected and multi-seat layouts no longer panning, nothing is left tha
 - [x] Low mapping confidence on a wide shot prefers a hold over a full-width glide
 - [x] A single subject who genuinely relocates still earns one monotonic glide — the two pre-existing tests that pinned this (`test_sustained_move_earns_glide_sendcmd_lines`, `test_x_in_script_is_within_frame`) pass unchanged rather than being rewritten
 - [x] The `speaker_cut` rung is untouched (`test_speaker_cut_mode_end_to_end` still 2 keyframes for a 1-cut clip)
-- [ ] Live: re-render ranks 2 and 7 of `3b6992fe` and confirm no empty-background frames (needs deploy)
+- [ ] Live: **cannot be verified on `3b6992fe`** (source purged 2026-08-08). Verify on the next fresh upload — any `face_pan` clip must show few keyframes, ≤1 direction flip, and no frame resting on empty background
 
 ### Issue 441: Primary clip generation emits overlapping windows and mid-sentence cold opens
 
