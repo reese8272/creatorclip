@@ -2260,7 +2260,7 @@ requested-but-unbuildable caption track a loud failure rather than a silent omis
 - [x] A requested caption track that resolves to nothing logs a warning (`test_requested_captions_that_resolve_to_nothing_are_logged`, demonstrated failing first)
 - [ ] Surface the captionless state in the clip's render metadata, not only the worker log — **not done**, deliberately deferred: it needs a field on the clip row and a UI affordance, which is its own issue. The warning is the interim signal
 - [x] Live (seeding half): **VERIFIED 2026-08-10 on video `7e988321`** — `style_preset` is non-NULL on **all 12** persisted clips, including ranks 9–12 which sit beyond `AUTO_RENDER_TOP_N = 8`. On the baseline video, from the same source recording, ranks 9–14 were all NULL and rank 13 shipped captionless. Burned-in captions confirmed visually on all 8 rendered clips' contact sheets
-- [ ] Live (bodiless-render half): **STILL OPEN** — needs a clip beyond rank 8 rendered via the UI "Render this clip" button, since that bodiless `POST` is the only path exercising the endpoint's brand-kit resolve. Ranks 9–12 of `7e988321` are `render_status = pending` and are the material. **Deadline 2026-08-13 19:23 UTC** (`ingest_done_at` + 72 h), after which the source purges and this is unverifiable for a third time
+- [x] Live (bodiless-render half): **VERIFIED 2026-08-10 23:45 UTC on `7e988321` rank 13.** The creator rendered an appended clip at rank 13 — beyond `AUTO_RENDER_TOP_N = 8` — and it came back `render_status = done` with `style_preset = {subtitle: bold_pop, captions_enabled: true, zoom_on_peak: false, denoise: false}` resolved from the brand kit, and **burned-in captions on all 12 sampled frames**. This is the decisive comparison: on the 2026-08-07 baseline, **rank 13 of this same source recording shipped with zero captions across its full 89 s** — that clip is what the issue was filed from. Delivery normal (1080×1920 h264/aac, 89.80 s exact, −14.0 LUFS, true peak −5.4 dBFS). **Issue 438 is fully closed.**
 
 ### Issue 439: Camera-region detection unions animated overlays into the region — a whole clip shipped with the SUBSCRIBE/socials overlay burned in
 
@@ -2743,11 +2743,16 @@ before this upload.
 
 **Severity: high — visible, burned in, on a delivered clip; recurs on every livestream source.**
 
-Rank 3 of `7e988321` carries a full-width cyan YouTube superchat banner
-(`@Drew-l6j  $1.99 / "Worried they're gonna bench Mikey"`) across the bottom of the frame for its
-**final 11.5 s** (73.0 s → 84.4 s of an 84.4 s clip). Measured by sampling the bottom 200 px at
-2 Hz across all 8 rendered clips; **rank 3 is the only one affected**, and the banner runs to the
-clip's end.
+**Two of nine rendered clips are affected — this is not a one-off.** Measured by sampling the
+bottom 200 px at 2 Hz across every rendered clip:
+- **Rank 3** — `@Drew-l6j $1.99 / "Worried they're gonna bench Mikey"` across the **final 11.5 s**
+  (73.0 → 84.4 s of an 84.4 s clip), running to the clip's end.
+- **Rank 13** — `@jacobcortes93` across the **opening 5.0 s** (0.0 → 4.5 s), i.e. burned into the
+  hook, the most damaging possible placement. Found 2026-08-10 23:45 UTC when the creator rendered
+  this clip; it is also the clip they **kept**.
+
+Ranks 1, 2, 4, 5, 6, 7, 8 are clean. A superchat lands wherever it lands, so the base rate here is
+**~22% of rendered clips**, and the two hits bracket the clip (end and start).
 
 **This is not a regression of 439 or 443 — the region is correct.** The stored consensus rect is
 `(169, 326, 1704, 551)`, height fraction **0.5102**, from 9 windows detected with 8 agreeing. A
@@ -2771,8 +2776,10 @@ a single static `crop=` for the whole clip today, so (a) is a real architectural
 **Acceptance**
 - [ ] A clip whose region contains a transient overlay for part of its span does not ship it
       burned in without the creator knowing
-- [ ] The chosen mechanism is proven on rank 3 of `7e988321` specifically (source expires
-      **2026-08-13 19:23 UTC** — after that this exact case is unreproducible)
+- [ ] The chosen mechanism is proven on **both** rank 3 (overlay at the end) and rank 13 (overlay
+      over the opening hook) of `7e988321` — they are different placements and a start-of-clip
+      overlay may deserve different handling from an end-of-clip one (source expires
+      **2026-08-13 19:23 UTC** — after that these exact cases are unreproducible)
 - [ ] Whatever is chosen, `detect_video_camera_region`'s consensus is NOT loosened to chase it —
       the median's outlier rejection is correct and load-bearing (Issue 443)
 - [ ] No regression on the 8 clean clips of this upload

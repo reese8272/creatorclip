@@ -91,8 +91,26 @@ multi-seat hold never engaged and the pan planner held the single detected face.
 cut to the wrong person, and stillness is what the creator asked for"* — has now been **falsified
 by the creator it was made for**. Do not fix it by reverting to sweeping.
 
-**Still open:** 438's bodiless-render check. Ranks 9–12 remain `pending`; rank 13 was generated and
-is rendering. Deadline unchanged: **2026-08-13 19:23 UTC**.
+### 23:45 UTC — rank 13 rendered: Issue 438 CLOSED, Issue 448 doubled
+
+The creator's appended **rank 13** finished rendering — beyond `AUTO_RENDER_TOP_N = 8`, with the
+brand kit resolved (`subtitle: bold_pop`, `captions_enabled: true`) and **captions burned in on
+all 12 sampled frames**. On the 2026-08-07 baseline, rank 13 of this same source recording shipped
+with **zero captions across its full 89 s** — that clip is what Issue 438 was filed from. Same
+source, same rank, opposite outcome: **438 is fully closed**, both halves. Delivery normal
+(89.80 s exact, −14.0 LUFS, true peak −5.4 dBFS); framing healthy (`speaker_cut`, 2 speakers,
+`mapping_confidence 0.543`).
+
+**But rank 13 also carries a superchat** — `@jacobcortes93` across its **opening 5.0 s**, burned
+into the hook. So Issue 448 is **2 of 9 rendered clips (~22%)**, not one, and the two instances
+bracket the clip: one at the very end, one over the opening. Issue 448 upgraded accordingly, and
+its acceptance now requires proving the fix on both placements. Note rank 13 is also the clip the
+creator **kept**.
+
+**Still open on this upload:** only 444's idempotency check — it needs the *same* clip triaged
+twice with the same verdict, and the creator kept one clip and dropped a different one. Ranks 9–12
+remain `pending` render (not needed now that 438 is closed). Deadline for anything needing the
+source: **2026-08-13 19:23 UTC**.
 
 ---
 
