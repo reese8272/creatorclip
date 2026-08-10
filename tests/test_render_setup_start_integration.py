@@ -90,6 +90,13 @@ async def test_render_task_cuts_from_setup_start_s(db_session: AsyncSession):
         patch("worker.storage.upload_file", return_value=f"clips/{clip.id}.mp4"),
         patch("clip_engine.render.render_clip_file") as mock_render,
     ):
+        # render_clip_file returns `dict | None` — the crop track when the
+        # speaker-aware reframe ran, else None (Issue 421) — and the task
+        # persists it straight into `Clip.reframe_track_jsonb`. Without an
+        # explicit return the bare MagicMock reaches psycopg's JSON dumper and
+        # the commit dies with "Object of type MagicMock is not JSON
+        # serializable", which has nothing to do with what this test asserts.
+        mock_render.return_value = None
         await _render_clip_async(str(clip.id))
 
     mock_render.assert_called_once()
