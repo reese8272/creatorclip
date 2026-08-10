@@ -2064,9 +2064,7 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                         pad_frac=_cfg.CAMERA_REGION_PAD_FRAC,
                     )
                 except Exception as exc:  # noqa: BLE001 — see the note above
-                    logger.warning(
-                        "camera-region detection failed for video %s: %s", video_id, exc
-                    )
+                    logger.warning("camera-region detection failed for video %s: %s", video_id, exc)
                     camera_region_json = None
 
         async with db.tenant_session(creator_id) as session:

@@ -440,6 +440,7 @@ def _face_inside(
     rx, ry, rw, rh = region
     return rx <= fx + fw / 2 <= rx + rw and ry <= fy + fh / 2 <= ry + rh
 
+
 # Auto-zoom punch-in at peak (Issue 184, opt-in via style_preset["zoom_on_peak"]).
 # Principle 4 (pattern interrupt). A triangular zoom pulse centered on the clip's
 # peak ramps to (1 + _PUNCH_IN_SCALE)× over ±_PUNCH_IN_RAMP_S seconds, then back to
@@ -588,9 +589,7 @@ def render_clip_file(
         # its own — there is no single face for a whole video — so validate it
         # against THIS clip's face box and fall back to per-clip detection if the
         # speaker is outside it.
-        detected = _camera_region.region_from_video_json(
-            video_camera_region, frame_w, frame_h
-        )
+        detected = _camera_region.region_from_video_json(video_camera_region, frame_w, frame_h)
         if detected is not None and not _face_inside(face_box, detected):
             logger.info(
                 "camera_region: video-level region %s does not contain this clip's face "

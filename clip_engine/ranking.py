@@ -334,9 +334,7 @@ async def score_and_rank(
             # Same two-predicate test as the containment pass (Issue 441) — a
             # regenerated clip that shares 3 s of speech with an existing one is
             # as duplicate as a contained one.
-            if not any(
-                _is_duplicate_of(c, w, _CONTAINMENT_THRESHOLD) for w in exclude_windows
-            )
+            if not any(_is_duplicate_of(c, w, _CONTAINMENT_THRESHOLD) for w in exclude_windows)
         ]
         for i, c in enumerate(ranked):
             c["rank"] = i + 1
@@ -475,9 +473,7 @@ async def append_ranked_clips(
 
     for attempt in range(2):
         base = await _max_engine_rank()
-        clips = [
-            _new_clip_row(video_id, creator_id, c, base + i + 1) for i, c in enumerate(ranked)
-        ]
+        clips = [_new_clip_row(video_id, creator_id, c, base + i + 1) for i, c in enumerate(ranked)]
         session.add_all(clips)
         try:
             await session.commit()

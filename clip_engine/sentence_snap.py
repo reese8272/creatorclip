@@ -58,14 +58,35 @@ CLIP_TARGET_MAX_S = 90.0  # hard ceiling for LLM-proposed windows (60–90 s tar
 #   - First and second person, which are self-anchoring.
 _SUBORDINATORS = frozenset(
     {
-        "because", "although", "though", "whereas", "unless", "until", "since",
-        "while", "when", "whenever",
+        "because",
+        "although",
+        "though",
+        "whereas",
+        "unless",
+        "until",
+        "since",
+        "while",
+        "when",
+        "whenever",
     }
 )
 _DISCOURSE_MARKERS = frozenset(
     {
-        "yeah", "yes", "yep", "yup", "no", "nah", "ok", "okay", "well", "right",
-        "um", "uh", "hmm", "anyway", "anyways",
+        "yeah",
+        "yes",
+        "yep",
+        "yup",
+        "no",
+        "nah",
+        "ok",
+        "okay",
+        "well",
+        "right",
+        "um",
+        "uh",
+        "hmm",
+        "anyway",
+        "anyways",
     }
 )
 _WEAK_OPENERS = _SUBORDINATORS | _DISCOURSE_MARKERS
@@ -130,16 +151,12 @@ def build_sentence_index(segments: list[dict]) -> list[dict]:
                 open_word = str(w.get("word", ""))
             last_end = w_end
             if _is_sentence_end(w.get("word", "")):
-                sentences.append(
-                    {"start_s": open_start, "end_s": w_end, "first_word": open_word}
-                )
+                sentences.append({"start_s": open_start, "end_s": w_end, "first_word": open_word})
                 open_start = None
                 open_word = ""
         # Utterance boundary closes an unterminated sentence (speaker trailed off).
         if open_start is not None:
-            sentences.append(
-                {"start_s": open_start, "end_s": last_end, "first_word": open_word}
-            )
+            sentences.append({"start_s": open_start, "end_s": last_end, "first_word": open_word})
 
     sentences.sort(key=lambda s: s["start_s"])
     return sentences

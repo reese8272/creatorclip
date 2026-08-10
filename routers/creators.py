@@ -260,7 +260,9 @@ async def put_brand_kit(
         updates["aspect"] = body.aspect
     if body.caption_position is not None:
         if body.caption_position not in {"top", "middle", "bottom"}:
-            raise HTTPException(status_code=422, detail="caption_position must be top|middle|bottom")
+            raise HTTPException(
+                status_code=422, detail="caption_position must be top|middle|bottom"
+            )
         updates["caption_position"] = body.caption_position
 
     row.style = {**row.style, **updates}
