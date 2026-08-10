@@ -1,11 +1,13 @@
 """Tests for the read-only clip-audit diagnostic (`scripts/clip_audit.py`).
 
-Only the pure geometry summarizer is covered — it is the part that turns a crop
-track into the numbers an audit verdict rests on, so a wrong answer here would
-silently mis-grade a render. The SQL and ffmpeg halves are I/O shells.
+Only the pure summarizers are covered — they are the parts that turn a crop
+track and a stored camera region into the numbers an audit verdict rests on, so
+a wrong answer here would silently mis-grade a render. The SQL and ffmpeg halves
+are I/O shells.
 """
 
 import importlib.util
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -81,3 +83,58 @@ def test_see_saw_pan_registers_direction_flips() -> None:
     assert stats["direction_flips"] == 3
     assert stats["moves_per_s"] == pytest.approx(1.0)
     assert stats["x_range"] == [100.0, 1000.0]
+
+
+def test_absent_region_is_reported_as_a_fallback_not_a_failure() -> None:
+    """A NULL `camera_region_jsonb` means a consensus gate declined (Issue 443).
+
+    The render then falls back to per-clip detection, which is the working path,
+    so the summary must not read as a defect.
+    """
+    summary = clip_audit.region_stats(None)
+    assert summary["present"] is False
+    assert "per-clip" in summary["note"]
+
+
+def test_height_frac_separates_the_healthy_region_from_the_chrome_defect() -> None:
+    """0.51 vs 0.70 is the whole 439/443 verdict — both are real measurements.
+
+    The rect is rank 6 of `3b6992fe`, which burned the SUBSCRIBE button and
+    socials strip in; the healthy value is what its siblings resolved.
+    """
+    defective = clip_audit.region_stats(
+        {
+            "version": 2,
+            "x": 0,
+            "y": 330,
+            "width": 1918,
+            "height": 749,
+            "frame": {"width": 1920, "height": 1080},
+        }
+    )
+    healthy = clip_audit.region_stats(
+        {
+            "version": 2,
+            "x": 1,
+            "y": 2,
+            "width": 1918,
+            "height": 548,
+            "frame": {"width": 1920, "height": 1080},
+            "windows": 9,
+            "windows_detected": 8,
+            "windows_agreeing": 7,
+        }
+    )
+    assert defective["height_frac"] == pytest.approx(0.694, abs=0.001)
+    assert healthy["height_frac"] == pytest.approx(0.507, abs=0.001)
+    assert healthy["windows_agreeing"] == 7
+    # Provenance is absent on a v1 row rather than fabricated as zero.
+    assert defective["windows_agreeing"] is None
+
+
+def test_source_expiry_is_seventy_two_hours_after_ingest_done() -> None:
+    """The retention clock starts at `ingest_done_at`, not upload — it is the
+    deadline that ended the two previous verification attempts."""
+    done = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    assert clip_audit._expiry(done) == str(datetime(2026, 8, 13, 12, 0, tzinfo=UTC))
+    assert clip_audit._expiry(None) is None
