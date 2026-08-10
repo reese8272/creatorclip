@@ -133,9 +133,7 @@ def _presign(uri: str | None, filename: str) -> str | None:
     try:
         from worker.storage import presigned_download_url
 
-        return presigned_download_url(
-            uri, filename=filename, disposition="inline", expires_s=3600
-        )
+        return presigned_download_url(uri, filename=filename, disposition="inline", expires_s=3600)
     except Exception as exc:  # diagnostic script: a presign failure is data, not a crash
         return f"<presign failed: {type(exc).__name__}: {exc}>"
 
@@ -285,8 +283,14 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 def _probe(path: Path) -> dict[str, Any]:
     proc = _run(
         [
-            "ffprobe", "-v", "error", "-show_format", "-show_streams",
-            "-of", "json", str(path),
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_format",
+            "-show_streams",
+            "-of",
+            "json",
+            str(path),
         ]
     )
     if proc.returncode != 0:
@@ -310,8 +314,17 @@ def _probe(path: Path) -> dict[str, Any]:
 def _loudness(path: Path) -> dict[str, Any]:
     """Integrated loudness of the delivered file (render targets I=-14 LUFS)."""
     proc = _run(
-        ["ffmpeg", "-nostdin", "-i", str(path), "-af", "ebur128=framelog=verbose",
-         "-f", "null", "-"]
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-i",
+            str(path),
+            "-af",
+            "ebur128=framelog=verbose",
+            "-f",
+            "null",
+            "-",
+        ]
     )
     summary = proc.stderr.rsplit("Summary:", 1)
     if len(summary) != 2:
@@ -329,8 +342,22 @@ def _loudness(path: Path) -> dict[str, Any]:
 
 def _frame(src: Path, t: float, dest: Path, width: int = 270) -> bool:
     proc = _run(
-        ["ffmpeg", "-nostdin", "-y", "-ss", f"{max(t, 0.0):.3f}", "-i", str(src),
-         "-frames:v", "1", "-vf", f"scale={width}:-2", "-q:v", "3", str(dest)]
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-y",
+            "-ss",
+            f"{max(t, 0.0):.3f}",
+            "-i",
+            str(src),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={width}:-2",
+            "-q:v",
+            "3",
+            str(dest),
+        ]
     )
     return proc.returncode == 0 and dest.exists()
 
@@ -342,9 +369,24 @@ def _tile(frames: list[Path], cols: int, dest: Path) -> bool:
     listing.write_text("".join(f"file '{f}'\n" for f in frames))
     rows = (len(frames) + cols - 1) // cols
     proc = _run(
-        ["ffmpeg", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
-         "-vf", f"tile={cols}x{rows}:padding=4:margin=4:color=0x202020", "-frames:v", "1",
-         "-q:v", "3", str(dest)]
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(listing),
+            "-vf",
+            f"tile={cols}x{rows}:padding=4:margin=4:color=0x202020",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "3",
+            str(dest),
+        ]
     )
     listing.unlink(missing_ok=True)
     return proc.returncode == 0 and dest.exists()
@@ -376,8 +418,11 @@ def cmd_inspect(args: argparse.Namespace) -> None:
 
         probe = _probe(mp4)
         entry: dict[str, Any] = {
-            "id": cid, "rank": rank, "file": str(mp4),
-            "probe": probe, "loudness": _loudness(mp4),
+            "id": cid,
+            "rank": rank,
+            "file": str(mp4),
+            "probe": probe,
+            "loudness": _loudness(mp4),
         }
 
         duration = probe.get("duration_s") or clip.get("duration_s") or 0.0

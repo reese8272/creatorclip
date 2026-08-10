@@ -13,6 +13,7 @@ import pytest
 
 pytest.importorskip("cv2")  # skip whole file if libGL is absent on this host
 
+from clip_engine import camera_region as _camera_region
 from clip_engine.render import (
     _detect_face_center_x,
     _extract_keyframe,
@@ -559,13 +560,17 @@ def _render_vf_with_video_region(tmp_path, *, stored, per_clip=None, face=None):
 
 
 _STORED_REGION = {
-    "version": 1,
+    # Read from the constant, not pinned to a literal: with a stale version the
+    # render falls back to per-clip detection, so a version bump would leave
+    # test_video_level_region_falls_back_when_the_face_is_outside_it passing for
+    # entirely the wrong reason (calls == 1 either way).
+    "version": _camera_region.VIDEO_REGION_VERSION,
     "x": 200,
     "y": 100,
     "width": 1400,
     "height": 900,
     "frame": {"width": 1920, "height": 1080},
-    "sample_frames": 24,
+    "sample_frames": 10,
 }
 
 

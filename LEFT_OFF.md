@@ -1,9 +1,8 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-10 · **Branch:** `main` @ `e49a2af` · **working tree CLEAN** ·
-**1 commit AHEAD of `origin/main` — `e49a2af` is UNPUSHED** (docs-only: Issue 443).
-**Prod:** `https://autoclip.studio` healthy (200), alembic `0056 (head)`, running the image built
-from `479f24e` (Deploy to production ✓ 2026-08-07 17:14 UTC). All scheduled workflows green.
+**Last updated:** 2026-08-10 · **Branch:** `main` (Issue 443 merged via PR) · **working tree CLEAN** ·
+**pushed, and `origin/staging` fast-forwarded to match `main`; no stray branches, no stashes.**
+**Prod:** `https://autoclip.studio` healthy (200), alembic `0056 (head)`. All scheduled workflows green.
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -11,37 +10,16 @@ from `479f24e` (Deploy to production ✓ 2026-08-07 17:14 UTC). All scheduled wo
 
 ## CURRENT FOCUS
 
-**Issues 438–441 are built, gated, pushed and DEPLOYED — but NONE of them is live-verified, and
-the video they were going to be verified on is gone.** The 72-hour source-media retention expired
-on 2026-08-08; `source_uri IS NULL` on both `3b6992fe` and `b8505eb7`, so the planned re-render
-drill is **permanently impossible** on those clips. Verification now requires a **fresh upload**.
+**Everything is built and deployed. One thing is missing: a fresh upload.**
 
-### ⛔ BLOCKER — do NOT upload until Issue 443 is fixed
-
-A fresh upload will run `detect_video_camera_region` **at ingest**, and Issue 443 means it stores a
-region with height fraction ~**0.70** — essentially the defective rank-6 shape (0.694), not the
-healthy per-clip 0.507. The render path *prefers* the stored region, and the face-box safety valve
-will not reject it (the speakers' faces sit inside it). **Result: the chrome bug Issue 439 exists
-to fix would come back across every clip of the new video**, and the upload would be wasted.
-
-There is no flag that disables Stage 2 alone — `CAMERA_REGION_DETECT_ENABLED` gates per-clip
-detection too, so turning it off removes chrome removal entirely.
+Issues 438–441 are built, gated and DEPLOYED but NONE is live-verified — the 72-hour source-media
+retention expired on 2026-08-08, `source_uri IS NULL` on both `3b6992fe` and `b8505eb7`, so the
+planned re-render drill is **permanently impossible** on those clips. Issue 443 (which would have
+poisoned a fresh upload) is now **fixed and closed**, so the upload is unblocked.
 
 ## → NEXT ACTION
 
-1. **Push the outstanding commit** (docs-only, safe):
-   `git push origin main` — then `gh run list --limit 3`. A failed image build **silently SKIPS
-   deploy**, so never assume the chain from a green push alone.
-2. **Fix Issue 443** (`docs/issues.md`) — the blocker above. The design that was approved and
-   mis-built: resolve the video region from a **consensus of several short windows**, not one
-   detection over a wide span. Concretely: run `detect_camera_region` over N windows of ≤60 s
-   (inside `_LINEAR_DECODE_MAX_SPAN_S`) spread across the runtime, discard the `None` declines,
-   take a **component-wise median** of the survivors. Each detection then gets the stable-layout
-   span the detector was designed for, and one overlay-heavy window cannot move the result.
-   *Cheaper interim option if you want to upload sooner:* make `render_clip_file` ignore
-   `video_camera_region` (one branch in `clip_engine/render.py`) so Stage 2 goes inert and every
-   clip falls back to per-clip detection — which is Stage 1, the part that actually works.
-3. **Then upload a fresh video** and let the full pipeline run. One upload verifies everything
+1. **Upload a fresh video** and let the full pipeline run. One upload verifies everything
    outstanding at once:
    - **438** — every clip gets a non-NULL `style_preset`; render one clip *beyond* rank 8 via the
      UI "Render this clip" button and confirm captions appear (that bodiless `POST` is the only
@@ -52,14 +30,18 @@ detection too, so turning it off removes chrome removal entirely.
      direction flip
    - **441** — no verbatim duplicated speech between clips, no conjunction-initial cold opens
      *(441 could never be checked on an existing video — its windows are already persisted)*
-4. **Audit it** with `scripts/clip_audit.py` (recipe below) and compare against the 2026-08-07
+   - **443** — `camera_region_jsonb` carries the new `windows` / `windows_detected` /
+     `windows_agreeing` provenance. **A NULL column is NOT a failure** — it means a consensus gate
+     declined and the render fell back to per-clip detection, which is the working path; the
+     decline log line names which gate fired and with what IoUs
+2. **Audit it** with `scripts/clip_audit.py` (recipe below) and compare against the 2026-08-07
    baseline recorded in `docs/PROJECT_STATE.md`.
-5. **Still owed on 437:** the *failure*-path browser drill — Review → devtools request-blocking on
+3. **Still owed on 437:** the *failure*-path browser drill — Review → devtools request-blocking on
    `**/clips/*/feedback` → Keep → pick a **tag** → Submit. Expect a red, persistent *"Couldn't
    reach the server — nothing was saved"*, panel still open, tag still selected. Using a **tag**
    (not the free-text note) also exercises the `feedback_tags` column, which no production row has
    ever populated.
-6. **Parked:** the 502 root cause (2026-08-05, self-recovered, never investigated — check with the
+4. **Parked:** the 502 root cause (2026-08-05, self-recovered, never investigated — check with the
    owner first, they sometimes power the droplet off) · Issue 442 (`background` key) · Issue-395
    live drills · operator punch-list in `docs/GO_LIVE.md`.
 
@@ -68,7 +50,7 @@ detection too, so turning it off removes chrome removal entirely.
 ```bash
 export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH && hash -r   # node 26 = 35 phantom jsdom fails
 redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
-# backend:  .venv/bin/python -m pytest -m "not integration" -p no:langsmith -q      # baseline 2919/0
+# backend:  .venv/bin/python -m pytest -m "not integration" -p no:langsmith -q      # baseline 2929/0
 # frontend: run from frontend/ (root npx = cached-Playwright ERR_INTERNAL_ASSERTION)
 # Layer 0:  .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py
 # eval:     any clip_engine/ change → tests/test_clip_engine.py gates it (SCENARIO_FLOOR=23, 24 fixtures)
@@ -78,12 +60,21 @@ redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
 
 ## WHAT WORKS NOW (verified — do not re-investigate)
 
-**Gates at `e49a2af`:** backend **2919/0** · Layer 0 ALL GREEN (ruff/mypy/bandit/pip-audit 0,
-coverage 84.07, `clip_engine` 92.59 vs floor 91.0) · eval 24 scenarios / 100%.
+**Gates after Issue 443:** backend **2929/0** · Layer 0 ALL GREEN (ruff/mypy/bandit/pip-audit 0,
+coverage 84.15, `clip_engine` 92.79 vs floor 91.0) · eval 24 scenarios / 100%.
 
 **Issues 438–441 — code complete, deployed, unit- and eval-gated.** Every new test was
 demonstrated **failing first**. What each actually changed is in `docs/issues.md`; the rulings and
 the three plan deviations are in `docs/DECISIONS.md` (2026-08-07 entries).
+
+**Issue 443 — CLOSED 2026-08-10.** `detect_video_camera_region` now runs the *unmodified* per-clip
+detector over **9 disjoint 60 s windows**, takes a component-wise **median** of the survivors, and
+keeps it only if a **strict majority agree at IoU ≥ 0.80**. `detect_camera_region`, both samplers
+and the whole render path are untouched. Four rulings in `docs/DECISIONS.md` (2026-08-10): IoU over
+height-MAD (MAD is blind to the horizontal axis, and `region_w` drives the render's `crop_w`); the
+marginal-median gate re-validation was **built into the plan then dropped as provably unreachable**;
+`VIDEO_REGION_VERSION` is now a *semantic* version (1 → 2) that also keys the backfill failure
+markers; `sample_frames` is per window (10), never a total to divide.
 
 **Audit verdict on `3b6992fe` (2026-08-07) — the baseline to beat, do not re-derive:** container
 and audio delivery flawless on all 9 rendered clips (1080×1920 h264/aac, duration exact to
@@ -121,10 +112,14 @@ python3.12 scripts/clip_audit.py inspect --manifest manifest.json --out ./audit
 3. Filed as **438–441**, then built one at a time — each gated before the next started. Three plan
    deviations, all forced by evidence and recorded in DECISIONS.
 4. Deployed. The re-render drill to verify them was blocked twice by defects in Issue 439's own
-   Stage 2: an ffmpeg sampling timeout (fixed, `479f24e`), then a wrong-measurement result (open,
-   **Issue 443**). Prod was put in a safe state (stored rects nulled, backfill markers set).
+   Stage 2: an ffmpeg sampling timeout (fixed, `479f24e`), then a wrong-measurement result
+   (**Issue 443**). Prod was put in a safe state (stored rects nulled, backfill markers set).
 5. Before the drill could run, the **72 h source retention expired** and both videos' source media
-   was purged — so verification moved to "next fresh upload", which 443 now blocks.
+   was purged — so verification moved to "next fresh upload", which 443 then blocked.
+6. **Issue 443 fixed and merged (2026-08-10)** — the video-level rect is now a majority-agreed
+   median over 9 short windows, so a fresh upload can no longer store the chrome-swallowing rect.
+   The repo was cleaned up in the same pass: `staging` fast-forwarded to `main`, the two merged
+   feature branches deleted, both stale stashes dropped.
 
 ---
 
@@ -134,8 +129,8 @@ python3.12 scripts/clip_audit.py inspect --manifest manifest.json --out ./audit
 |---|---|
 | Repo | `github.com/reese8272/creatorclip` · prod = VM (`ssh creatorclip-vm`, standing permission), `/opt/autoclip`, docker-compose, Cloudflare tunnel |
 | Deploy chain | push to `main` → Docker publish → Deploy to production (staging migration gate → prod). **A failed image build silently SKIPS deploy** — `gh run list` after every push |
-| Deployed HEAD | image from `479f24e`; `e49a2af` (docs) is committed locally but **not pushed** |
-| This batch | audit harness `79b9e63` · 438 `b926282` · 439 s1 `bee3c0b` · 439 s2 `3c5655c` · 440 `d068bf8` · 441 `1ce181a` · cleanup `651f902` · 439 sampling fix `479f24e` · 443 filed `e49a2af` |
+| Deployed HEAD | the Issue 443 merge on `main` — confirm with `gh run list` |
+| This batch | audit harness `79b9e63` · 438 `b926282` · 439 s1 `bee3c0b` · 439 s2 `3c5655c` · 440 `d068bf8` · 441 `1ce181a` · cleanup `651f902` · 439 sampling fix `479f24e` · 443 filed `e49a2af` · 443 fixed via PR from `fix/443-camera-region-consensus` |
 | Audited video | `3b6992fe-da0a-4e49-9ca6-dfdde4f0db2d` ("Video 2 Test", 27 min, 14 clips / 9 rendered) — **source PURGED, cannot re-render** |
 | Creator | Backboard Media `eb9af967-5d2f-4063-a05e-9f4f070ce840`; brand kit = `{subtitle: bold_pop, captions_enabled: true, zoom_on_peak: false, denoise: false}` |
 | Live flags (VM .env) | `ACTIVE_SPEAKER_REFRAME_ENABLED=true` · `REFRAME_MIN_MAPPING_CONFIDENCE=0.2` · `CAMERA_REGION_DETECT_ENABLED=true` |
@@ -162,16 +157,26 @@ python3.12 scripts/clip_audit.py inspect --manifest manifest.json --out ./audit
   python3.12 …` is the shape that passes. `git push` needed an allowlist rule — now in
   `.claude/settings.json` (**tracked in git**, so it applies to every clone; move it to
   `.claude/settings.local.json` if you'd rather keep it personal).
-- **A backfill failure marker outlives the bug that caused it.** `camera_region_backfill_failed:*`
-  has a 7-day TTL, so after fixing a code defect the retry silently processes 0 videos until the
-  key is cleared. Two are set right now (both purged videos — harmless, but that is why).
+- **A backfill failure marker outlives the bug that caused it** — the trap that cost a full cycle.
+  `camera_region_backfill_failed:*` has a 7-day TTL, so after fixing a code defect the retry
+  silently processes 0 videos until the key is cleared. **Structurally closed for this sweep by
+  Issue 443:** the key is now `camera_region_backfill_failed:v{VIDEO_REGION_VERSION}:{id}`, so
+  bumping the version invalidates the markers (and orphaned the two that were set on prod). The
+  contract is written at the constant: **bump `VIDEO_REGION_VERSION` whenever detection SEMANTICS
+  change, not only when the stored shape does** — otherwise the trap returns. Other backfills
+  (`poster`) still use unversioned markers and remain exposed.
 - **Do NOT add retry to the feedback POST.** `POST /clips/{id}/feedback` is not idempotent — it
   inserts a row and retriggers the preference retrain, so retrying a timed-out-but-applied write
   double-counts. A real offline outbox needs a server-side idempotency key first.
 - **Do not "restore" things DECISIONS deliberately removed:** the EMA smoothing (436, it *was* the
   5 Hz staircase), the camera-region height ceiling (439, it rejects legitimate regions), speaker
   following on the `face_pan` rung (440, it twitches), coordinators/pronouns in the weak-opener
-  list (441, they broke pinned snap cases). Each has evidence attached.
+  list (441, they broke pinned snap cases), re-validating the consensus median against the
+  detector's gates (443, provably unreachable — some survivor dominates the median in every
+  component at once, and it already cleared them). Each has evidence attached.
+- **Do not widen the video-level windows.** A window must stay under
+  `_LINEAR_DECODE_MAX_SPAN_S` and near the 30–90 s the detector is verified on. Lengthening the
+  temporal window reclassifies static regions as moving (Porikli 2007) — that IS Issue 443.
 - **Concurrency, not separation, distinguishes a two-shot from a subject who moved** (440). Two
   well-separated face tracks that never co-occur are one person relocating — that belongs to the
   pan planner, and holding a "dominant seat" there frames empty space.
@@ -195,7 +200,6 @@ python3.12 scripts/clip_audit.py inspect --manifest manifest.json --out ./audit
 ## OPEN, LOGGED, NOT FIXED
 
 Canonical list `docs/OFF_COURSE_BUGS.md` + `docs/issues.md`. Top:
-- **Issue 443 — the blocker above.** Video-level camera region measures the wrong thing.
 - **Issue 442** — `style_preset["background"]` accepted, persisted, never applied; decide between
   a contain/letterbox mode and removing the key end to end.
 - **502 root cause on the VM — never investigated** (2026-08-05; self-recovered).
@@ -212,9 +216,9 @@ Canonical list `docs/OFF_COURSE_BUGS.md` + `docs/issues.md`. Top:
 
 | Doc | Purpose |
 |---|---|
-| `docs/issues.md` | Work queue — 431–441 DONE (all `Live:` boxes on 438–441 still OPEN); **442 + 443 filed, not started**; next free number **444** |
-| `docs/DECISIONS.md` — three 2026-08-07 entries | 439 (vertical-overlap union, no height ceiling) · 440 (seat holds, concurrency discriminator) · 441 (seconds not ratios, narrow opener list) |
-| `docs/PROJECT_STATE.md` top two entries | The audit findings + the 438–441 build summary, gates, and the recorded baseline to compare a fresh upload against |
+| `docs/issues.md` | Work queue — 431–441 + **443** DONE (all `Live:` boxes on 438–441 and 443 still OPEN, all closable by ONE fresh upload); **442 filed, not started**; next free number **444** |
+| `docs/DECISIONS.md` — 2026-08-10 + three 2026-08-07 entries | 443 (window consensus, IoU over height-MAD, semantic region version) · 439 (vertical-overlap union, no height ceiling) · 440 (seat holds, concurrency discriminator) · 441 (seconds not ratios, narrow opener list) |
+| `docs/PROJECT_STATE.md` top three entries | The 443 close-out + the audit findings + the 438–441 build summary, gates, and the recorded baseline to compare a fresh upload against |
 | `docs/SOT.md` | Architecture; `scripts/clip_audit.py` registered there |
 | `docs/UI.md` § Status messaging | The error/success/pending token + `aria-live` contract (437) |
 | `docs/OFF_COURSE_BUGS.md` | Incidental-defect log |

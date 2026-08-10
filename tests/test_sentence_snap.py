@@ -179,7 +179,7 @@ def test_snap_start_walks_back_off_a_discourse_marker():
 
 
 def test_snap_start_leaves_a_coordinator_alone():
-    """"But here's the thing." is a punchy opening, not a broken one — and none
+    """ "But here's the thing." is a punchy opening, not a broken one — and none
     of the live failures were coordinator-initial. Over-rejecting drags starts
     earlier and can collapse two candidates onto one opening."""
     sentences = build_sentence_index(NEGATION_SEGMENTS)

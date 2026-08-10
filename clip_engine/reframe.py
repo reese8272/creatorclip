@@ -585,12 +585,8 @@ def plan_pan_holds(
     for span_start, points in _split_at_boundaries(raw, shot_cut_times):
         first_window = [p for p in points if p.timestamp_s < points[0].timestamp_s + retarget_s]
         real_first = [p for p in first_window if not p.is_fallback]
-        hold = float(
-            statistics.median([p.center_x for p in (real_first or first_window)])
-        )
-        out.append(
-            CropCenterPoint(span_start, int(round(hold)), is_fallback=not real_first)
-        )
+        hold = float(statistics.median([p.center_x for p in (real_first or first_window)]))
+        out.append(CropCenterPoint(span_start, int(round(hold)), is_fallback=not real_first))
 
         span_end = points[-1].timestamp_s
         window: deque[CropCenterPoint] = deque(maxlen=window_n)
@@ -1216,9 +1212,7 @@ def compute_dynamic_crop(
                     # width. At crop_w it was ~46px against ~940px of travel — a
                     # 20x mismatch that let any attention change commit to a
                     # full-width glide.
-                    deadband_px=(
-                        settings.REFRAME_PAN_DEADBAND_FRAC * max(1, frame_width - crop_w)
-                    ),
+                    deadband_px=(settings.REFRAME_PAN_DEADBAND_FRAC * max(1, frame_width - crop_w)),
                     retarget_s=settings.REFRAME_PAN_RETARGET_S,
                     glide_px_per_s=settings.REFRAME_PAN_GLIDE_PX_PER_S,
                     glide_sample_fps=settings.REFRAME_GLIDE_SAMPLE_FPS,
@@ -1231,9 +1225,7 @@ def compute_dynamic_crop(
         # EMPTY script → render.py's static-crop branch: a true locked-off
         # crop with no sendcmd file at all.
         script = (
-            build_sendcmd_script(planned, crop_w, frame_width, start_s)
-            if len(planned) > 1
-            else ""
+            build_sendcmd_script(planned, crop_w, frame_width, start_s) if len(planned) > 1 else ""
         )
         track_json = _build_track_json(
             planned,

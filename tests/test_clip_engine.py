@@ -418,7 +418,9 @@ def _assert_snap_scenario(scenario: dict) -> None:
     )
 
     min_c = expected.get("min_candidates", 0)
-    assert len(candidates) >= min_c, f"[{name}] expected >= {min_c} candidates, got {len(candidates)}"
+    assert len(candidates) >= min_c, (
+        f"[{name}] expected >= {min_c} candidates, got {len(candidates)}"
+    )
 
     if expected.get("starts_on_sentence_start", False):
         sentences = build_sentence_index(segments)

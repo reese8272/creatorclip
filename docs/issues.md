@@ -2327,10 +2327,11 @@ the backfill task is an ffmpeg/R2 I/O shell, covered structurally by
 **What changed — Stage 2 (video-level consensus)**
 - Migration `0056` + `Video.camera_region_jsonb` — the rect resolved once per video, stored with
   the source dimensions it was measured against.
-- `detect_video_camera_region` samples 24 frames across the whole runtime. Sampling wide is
-  itself part of the fix: an overlay on screen for part of a video contributes far less temporal
-  variance across 24 frames spanning 27 minutes than across 10 frames inside the 84 seconds it
-  happens to cover.
+- `detect_video_camera_region` originally sampled 24 frames across the whole runtime, on the
+  premise that sampling wide dilutes an intermittent overlay. **That premise was wrong and is the
+  subject of Issue 443** — a wide span saturates the motion mask instead of diluting it. Since
+  2026-08-10 it runs the per-clip detector over 9 disjoint 60-second windows (10 frames each) and
+  takes a majority-agreed component-wise median.
 - Resolved during ingest inside the existing `alocal_path` block (the source is already local —
   a separate task would pay a second full download), with the poster's never-fails-ingest
   posture: `ingest_video` is a `RefundOnFailureTask`, so a propagating error would retry the
@@ -2338,19 +2339,20 @@ the backfill task is an ffmpeg/R2 I/O shell, covered structurally by
 - `render_clip_file` prefers the stored rect and falls back to per-clip detection when it is
   absent, when the source dimensions no longer match, or when **this clip's** face box sits
   outside it — the video-level rect carries no face-sanity check of its own.
-- `backfill_video_camera_regions` Beat task, hourly, batch 10 (vs the poster sweep's 25 — this
-  pass decodes 24 frames per video rather than one).
+- `backfill_video_camera_regions` Beat task, hourly, batch 5 (vs the poster sweep's 25 — this
+  pass decodes up to 9 sixty-second windows per video rather than one frame; batch was 10 until
+  Issue 443 rebuilt Stage 2 as a consensus).
 
 **Acceptance**
 - [x] An animated overlay strip below the camera band is excluded, not unioned in (`test_animated_overlay_strip_below_the_camera_is_excluded`, demonstrated failing first at bottom edge 1079 vs the camera band's 800)
 - [x] The side-by-side two-camera union the rule exists for still works (`test_side_by_side_second_camera_is_still_unioned`, green before and after)
-- [x] Region is resolved per video, stored, and preferred by the render path; per-clip detection remains the fallback for older videos (`test_video_level_region_is_preferred_over_per_clip_detection`, `test_absent_video_region_still_detects_per_clip`) — **wiring verified, but the measurement it feeds is wrong: see Issue 443.** Stage 2 is disabled in data on prod (rects nulled, backfill markers set) pending that fix
+- [x] Region is resolved per video, stored, and preferred by the render path; per-clip detection remains the fallback for older videos (`test_video_level_region_is_preferred_over_per_clip_detection`, `test_absent_video_region_still_detects_per_clip`) — the wiring was always right; the measurement it fed was wrong and was **rebuilt as a per-window consensus in Issue 443** (2026-08-10)
 - [x] A clip whose speaker falls outside the stored rect re-detects rather than cropping them away (`test_video_level_region_falls_back_when_the_face_is_outside_it`)
 - [x] A rect measured against different source dimensions is distrusted (`test_video_region_rejected_when_source_dimensions_changed`)
 - [x] Every clip of one source unpacks an identical rect (`test_video_region_is_shared_by_every_clip_of_one_source`)
 - [x] Ingest and backfill safety contracts pinned (`tests/test_camera_region_ingest_safety.py`)
 - [~] **A height ceiling was NOT added** — see `docs/DECISIONS.md` 2026-08-07. Building it showed the instrument cannot work: `test_detects_inner_camera_region` asserts a legitimate 0.648–0.815 height fraction and the defective region was 0.694, inside that band. Any ceiling catching the real failure would reject correct regions
-- [ ] Live: **cannot be verified on `3b6992fe`** (source purged 2026-08-08). Verify Stage 1 on the next fresh upload — and note **Issue 443 must land first**, or Stage 2 will store a ~0.70 region at ingest and reintroduce this exact defect across every clip
+- [ ] Live: **cannot be verified on `3b6992fe`** (source purged 2026-08-08). Verify on the next fresh upload. Issue 443 has landed, so Stage 2 now stores a consensus rect (or declines) instead of the ~0.70 region that would have reintroduced this defect across every clip
 
 ### Issue 440: `face_pan` fallback degenerates into repeated full-width sweeps — the virtual tripod only holds in `speaker_cut` mode
 
@@ -2534,23 +2536,26 @@ This mis-built the design that was actually approved, which said resolve the reg
 **from a consensus of several keyframes** — what shipped was one detection over a wide span, which
 is a different and worse thing.
 
-**Current state:** both stored rects have been nulled on prod and the
-`camera_region_backfill_failed:` markers re-set (7-day TTL) so the hourly beat cannot refill them.
-The render path falls back to per-clip detection, i.e. Stage 1 behaviour, which is what the live
-drill is verifying. Nothing is user-visibly broken — the column is simply unused.
+**Current state (pre-fix):** both stored rects were nulled on prod and the
+`camera_region_backfill_failed:` markers re-set (7-day TTL) so the hourly beat could not refill
+them. The render path fell back to per-clip detection, i.e. Stage 1 behaviour. Nothing was
+user-visibly broken — the column was simply unused.
 
-**Fix direction:** run `detect_camera_region` over **N short windows** (each inside
-`_LINEAR_DECODE_MAX_SPAN_S`, e.g. 60 s) spread across the runtime, discard the declines, and take
-a component-wise **median** of the surviving rects. That is a genuine consensus: robust to a
-window that happens to contain an overlay burst, and each detection runs on the stable-layout span
-the detector was designed for. Reuses the existing per-clip path unchanged.
+**Fix (shipped 2026-08-10):** run `detect_camera_region` over **N short windows** (each inside
+`_LINEAR_DECODE_MAX_SPAN_S` — 9 × 60 s) spread across the runtime, discard the declines, and take
+a component-wise **median** of the surviving rects. A genuine consensus: robust to a window that
+happens to contain an overlay burst (the median's breakdown point is 50%), and each detection runs
+on the stable-layout span the detector was designed for. Reuses the per-clip path unchanged. The
+median is then kept only if a **strict majority of survivors agree with it at IoU ≥ 0.80** —
+otherwise the video-level rect is not stored at all. See `docs/DECISIONS.md` 2026-08-10 for the
+three rulings (IoU over height-MAD, no gate re-validation, version-scoped markers).
 
 **Acceptance**
-- [ ] The video-level rect for `3b6992fe` lands near the healthy per-clip height fraction (~0.51), not ~0.70
-- [ ] A single overlay-heavy window cannot move the consensus (unit test: N clean windows + 1 poisoned → clean result)
-- [ ] A rect that deviates materially from the per-clip detections is not stored at all — declining is correct, and the render already falls back
-- [ ] Live: backfill `3b6992fe`, confirm the stored rect, then re-render rank 6 and confirm the overlay stays gone
-- [ ] The failure marker is not left suppressing retries after a code fix (this cost a full cycle to notice)
+- [x] A single overlay-heavy window cannot move the consensus (`test_one_poisoned_window_cannot_move_the_consensus` — 8 clean + 1 poisoned → 0.507, demonstrated failing under the old single-window premise)
+- [x] A rect that deviates materially from the per-clip detections is not stored at all — declining is correct, and the render already falls back (`test_consensus_declines_when_the_windows_disagree`, `test_consensus_declines_below_the_survivor_quorum`)
+- [x] No detection may span the whole runtime — the root cause, pinned (`test_video_region_never_runs_one_detection_over_the_whole_runtime`, demonstrated failing at `1617.0 <= 60.0`)
+- [x] The failure marker is not left suppressing retries after a code fix (this cost a full cycle to notice) — the marker key is now scoped to `VIDEO_REGION_VERSION`, so a detector fix invalidates the markers its own bug wrote (`test_backfill_marker_is_scoped_to_the_detector_version`). Bumping 1 → 2 also orphans the two markers currently set on prod, with no manual Redis operation
+- [ ] Live: the video-level rect lands near the healthy per-clip height fraction (~0.51), not ~0.70, and a rendered clip shows no overlay. **Re-scoped from `3b6992fe` to the next fresh upload** — that video's source was purged 2026-08-08 (`source_uri IS NULL`), so there is nothing left to backfill or re-render. Check `videos.camera_region_jsonb` for the height fraction plus the new `windows` / `windows_detected` / `windows_agreeing` provenance. A NULL column is **not** a failure: it means a gate declined and the render fell back to per-clip detection, which is the working path — the decline log line names which gate fired
 
 ---
 
@@ -2628,4 +2633,3 @@ re-verify or refresh them.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
 - Next free issue number: **444**.
-#JS9DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW     RRRRRRRRRRRRRRRRREEEEEEEEEEE[ -KQLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL;]
