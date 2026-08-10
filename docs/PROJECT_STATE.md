@@ -62,6 +62,38 @@ idempotency check (all 12 clips are `triage = pending` with zero `clip_feedback`
 `height_frac`, the `ingest_done_at` + 72 h source-expiry deadline, `clips.triage`, and a per-clip
 feedback rollup. Backend **2941/0** (baseline 2938 + 3 new tests).
 
+### Creator review the same evening — Issue 450, and a correction to the 440 verdict above
+
+The creator reviewed the upload at 23:37–23:38 UTC: **dropped rank 1, kept a newly generated rank
+13**, each with a note. Both wrote exactly **one** `clip_feedback` row with one distinct action,
+triage advanced to `dropped`/`kept` in step, and `preference_models` went to **v4** — so 444's
+feedback→triage sync works. `feedback_tags` is still NULL on both (the tag column has still never
+been populated in production).
+
+**The drop note is a finding this audit missed:**
+
+> "When Rio is talking (the guy on the right), it is on the man on the left (who is not talking)"
+
+Verified on the media: rank 1's crop sits at `x = 230` of a 1704-wide region — the LEFT seat — for
+all 34.55 s, while source frames at t = 758/768/780 show the RIGHT seat mid-sentence and the left
+seat silent, and diarization attributes all 31.0 s of in-window speech to one speaker. **Filed as
+Issue 450.**
+
+**Correction to the 440 entry above.** This audit graded 440 green on motion numbers alone —
+1 keyframe, 0 flips, no empty background — and every one of those criteria is satisfied *by a
+34-second shot of the wrong person*. The numbers were right and the conclusion was too narrow.
+440's live box is now split: motion criteria verified, framing correctness failed.
+
+Root cause is upstream of 440, which behaved as designed: the track has `speakers.count = 1` and
+`mapping_confidence = 0.045`, and `hold_seats` returns `None` when `len(tracks) < 2`, so the
+multi-seat hold never engaged and the pan planner held the single detected face. The tradeoff
+`reframe.py:900-904` states outright — *"a still frame on the wrong person is far cheaper than a
+cut to the wrong person, and stillness is what the creator asked for"* — has now been **falsified
+by the creator it was made for**. Do not fix it by reverting to sweeping.
+
+**Still open:** 438's bodiless-render check. Ranks 9–12 remain `pending`; rank 13 was generated and
+is rendering. Deadline unchanged: **2026-08-13 19:23 UTC**.
+
 ---
 
 ## 2026-08-10 (later still) — Lane L27 opened; Issue 444 CLOSED: clips have a triage state

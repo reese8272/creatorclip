@@ -2410,7 +2410,8 @@ deadband corrected and multi-seat layouts no longer panning, nothing is left tha
 - [x] Low mapping confidence on a wide shot prefers a hold over a full-width glide
 - [x] A single subject who genuinely relocates still earns one monotonic glide — the two pre-existing tests that pinned this (`test_sustained_move_earns_glide_sendcmd_lines`, `test_x_in_script_is_within_frame`) pass unchanged rather than being rewritten
 - [x] The `speaker_cut` rung is untouched (`test_speaker_cut_mode_end_to_end` still 2 keyframes for a 1-cut clip)
-- [x] Live: **VERIFIED 2026-08-10 on video `7e988321`** — the same source recording as the baseline (`duration_s = 1617.216667` on both), so this is a true A/B. The one `face_pan` clip (rank 1) shows **1 keyframe, 0 direction flips, 0.0 visible moves/s** over 34.6 s — a complete hold. The baseline's failures on this identical source were rank 7 at **343 keyframes / 7 runs of ±900 px / 7.6 moves/s** and rank 2 resting on empty background. Across all 8 rendered clips: 1–4 keyframes, ≤2 direction flips, 0.023–0.047 moves/s, and the cut sheets (±0.2 s around every cut) show instant speaker-to-speaker switches with both subjects centred — no frame rests between seats
+- [x] Live (motion criteria): **VERIFIED 2026-08-10 on video `7e988321`** — the same source recording as the baseline (`duration_s = 1617.216667` on both), so this is a true A/B. The one `face_pan` clip (rank 1) shows **1 keyframe, 0 direction flips, 0.0 visible moves/s** over 34.6 s — a complete hold. The baseline's failures on this identical source were rank 7 at **343 keyframes / 7 runs of ±900 px / 7.6 moves/s** and rank 2 resting on empty background. Across all 8 rendered clips: 1–4 keyframes, ≤2 direction flips, 0.023–0.047 moves/s, and the cut sheets (±0.2 s around every cut) show instant speaker-to-speaker switches with both subjects centred — no frame rests between seats
+- [ ] ⚠️ **The motion criteria passed but the clip is still wrong — see Issue 450.** The creator dropped rank 1 the same day with the note *"When Rio is talking (the guy on the right), it is on the man on the left (who is not talking)."* Verified: the crop sits at `x = 230` of a 1704-wide region (the LEFT seat) for the whole clip, while source frames at t = 758 / 768 / 780 show the RIGHT seat mid-sentence and the left seat silent; diarization attributes all 31.0 s of speech in the window to one speaker. **This audit graded 440 green on the numbers alone and missed it** — "few keyframes, ≤1 flip, no empty background" are all satisfied by a shot of the wrong person. The stated tradeoff at `reframe.py:884-905` (*"a still frame on the wrong person is far cheaper than a cut to the wrong person, and stillness is what the creator asked for"*) has now been falsified by the creator it was made for
 
 ### Issue 441: Primary clip generation emits overlapping windows and mid-sentence cold opens
 
@@ -2824,6 +2825,56 @@ as grammatical ones. No closed word-class catches this, which is why 441 knowing
       — the pinned snap cases from 441 are not re-litigated
 - [ ] Eval scenarios stay at 100%; `SCENARIO_FLOOR` raised only if a fixture is added
 
+### Issue 450: a two-shot with only one detected face track holds the crop on the silent person
+
+**Severity: high — the creator dropped the clip for this reason, in their own words. It is the
+first live rejection of a framing decision this project made deliberately.**
+
+Rank 1 of `7e988321` frames the **non-speaking** participant for its entire 34.55 s. The creator's
+verbatim feedback (`clip_feedback`, 2026-08-10 23:37 UTC, `downvote`):
+
+> "When Rio is talking (the guy on the right), it is on the man on the left (who is not talking)"
+
+**Confirmed on the media, not inferred.** The stored track holds `crop.x = 230` (width 309) inside
+a 1704-wide region — the LEFT third — with **1 keyframe, 0 flips, 0.0 moves/s**. Source frames at
+t = 758 / 768 / 780 s all show the right seat (Rio) mid-sentence, mouth open, leaning into the
+mic, and the left seat (Carter) silent and looking down. Deepgram attributes **all 31.0 s** of
+speech inside the window to a single speaker.
+
+**Root cause is upstream of Issue 440, which behaved exactly as designed.** The track records
+`speakers.count = 1` and `mapping_confidence = 0.045`, far under
+`REFRAME_MIN_MAPPING_CONFIDENCE = 0.2`. `hold_seats` (`clip_engine/reframe.py:884`) opens with
+`if len(tracks) < 2: return None`, so with one face track the **multi-seat hold logic never
+engaged at all** — the clip fell through to `plan_pan_holds`, which correctly held on the one face
+it had. 440 made this rung stop sweeping; it did not, and was never meant to, make it pick the
+right seat. Other clips on this same video (ranks 4/6/7) reached `speaker_cut` with two speakers,
+so both faces *are* detectable in general — the detector found only one across this window.
+
+**The accepted tradeoff is now falsified.** `reframe.py:900-904` justifies the hold with *"a still
+frame on the wrong person is far cheaper than a cut to the wrong person, and stillness is what the
+creator asked for."* The creator has now rejected precisely that outcome. Note the failure is
+arguably worse post-440: a sweep was wrong half the time, a hold is wrong continuously.
+
+**Do not fix this by reverting 440's hold** — the 343-keyframe sweep is not an improvement, and
+DECISIONS records the speaker-following experiment on this rung being rejected at five flips in
+ten seconds. The tractable direction is upstream: find out **why only one face track was built on
+a two-shot** (Rio wears wraparound sunglasses and a bucket hat for the whole recording, which is a
+standing condition for this creator, not a one-off), and if a second seat cannot be detected,
+prefer a wider framing that contains both seats over a tight crop on an arbitrary one.
+
+**Acceptance**
+- [ ] CHECK phase establishes why the second face track is missing on this window — detector
+      confidence, hat/sunglasses occlusion, or track-lifetime pruning — with evidence, before any
+      fix is chosen
+- [ ] Rank 1 of `7e988321` specifically no longer frames the silent participant (source expires
+      **2026-08-13 19:23 UTC**; capture the frames needed to build a fixture before then)
+- [ ] When a two-shot yields only one usable seat, the fallback framing is justified in
+      `docs/DECISIONS.md` against both alternatives (tight-on-the-one-face vs contain-both)
+- [ ] Issue 440's motion guarantees are preserved — no return to sweeping, no per-utterance
+      cutting on this rung (both rejected with evidence)
+- [ ] An eval fixture encodes "holds the speaking seat", so this class is caught by the harness
+      rather than by the creator
+
 ---
 
 ## Source index
@@ -2899,4 +2950,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **450**.
+- Next free issue number: **451**.
