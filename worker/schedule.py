@@ -125,8 +125,9 @@ celery.conf.beat_schedule = {
         "task": "worker.tasks.backfill_video_peaks",
         "schedule": timedelta(hours=1),
     },
-    # Issue 439 — same doctrine again, but a SMALLER batch (10 vs 25): this pass
-    # decodes 24 frames per video rather than one, so equal egress buys more CPU.
+    # Issue 439 — same doctrine again, but a SMALLER batch (5 vs 25): this pass
+    # decodes up to 9 sixty-second windows per video (Issue 443's consensus)
+    # rather than one frame, so equal egress buys far more CPU.
     # Bounded like the peaks backfill — detection needs the source, which is
     # purged at SOURCE_MEDIA_RETENTION_HOURS, so older rows stop matching and
     # keep falling back to per-clip detection at render time.

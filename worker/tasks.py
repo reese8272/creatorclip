@@ -3798,15 +3798,17 @@ async def _backfill_video_posters_async() -> None:
     logger.info("poster backfill: processed %d video(s)", done)
 
 
-# Smaller batch than the poster sweep: this pass decodes 24 frames per video
-# rather than one, so the same egress buys proportionally more CPU.
-_CAMERA_REGION_BACKFILL_BATCH = 10
+# Smaller batch than the poster sweep: this pass decodes up to 9 sixty-second
+# windows per video (Issue 443's consensus) rather than one frame, so the same
+# egress buys far more CPU. 10 → 5 with the consensus rebuild — 10 videos at the
+# 240 s detection budget already reached 2400 s against CELERY_SOFT_TIME_LIMIT_S.
+_CAMERA_REGION_BACKFILL_BATCH = 5
 
 
 async def _backfill_video_camera_regions_async() -> None:
     from sqlalchemy import and_, select
 
-    from clip_engine.camera_region import detect_video_camera_region
+    from clip_engine.camera_region import VIDEO_REGION_VERSION, detect_video_camera_region
     from clip_engine.render import frame_dimensions
     from config import settings
     from worker.storage import alocal_path
@@ -3847,7 +3849,11 @@ async def _backfill_video_camera_regions_async() -> None:
     for video_id, creator_id, source_uri, duration_s in candidates:
         if done >= _CAMERA_REGION_BACKFILL_BATCH:
             break
-        marker = f"camera_region_backfill_failed:{video_id}"
+        # Scoped to VIDEO_REGION_VERSION so a detector fix INVALIDATES the
+        # markers its own bug set. Without this the 7-day TTL silently suppresses
+        # retries after the fix lands and the sweep processes 0 videos — the
+        # trap that cost a full cycle on Issue 443.
+        marker = f"camera_region_backfill_failed:v{VIDEO_REGION_VERSION}:{video_id}"
         skip = False
         # Egress optimisation, never a correctness gate — an unreachable Redis
         # just means the row is retried next pass.

@@ -58,9 +58,18 @@ class TestBackfill:
 
     def test_marks_declines_so_egress_is_not_paid_hourly_forever(self) -> None:
         """A source with no detectable chrome legitimately returns None forever —
-        without a marker it would be re-downloaded every pass for all time."""
+        without a marker it would be re-downloaded every pass for all time. The
+        key is version-scoped; see the test below for why."""
         src = inspect.getsource(tasks._backfill_video_camera_regions_async)
         assert "camera_region_backfill_failed:" in src
+
+    def test_backfill_marker_is_scoped_to_the_detector_version(self) -> None:
+        """Issue 443: the marker's 7-day TTL outlives the bug that set it, so
+        after a detector fix the hourly sweep silently processed 0 videos — it
+        cost a full cycle to notice. Keying by VIDEO_REGION_VERSION makes a fix
+        invalidate the markers its own bug wrote."""
+        src = inspect.getsource(tasks._backfill_video_camera_regions_async)
+        assert "VIDEO_REGION_VERSION" in src
 
     def test_one_bad_source_does_not_end_the_batch(self) -> None:
         src = inspect.getsource(tasks._backfill_video_camera_regions_async)
@@ -68,6 +77,6 @@ class TestBackfill:
         assert "except Exception" in body
 
     def test_batch_is_smaller_than_the_poster_sweep(self) -> None:
-        """This pass decodes 24 frames per video rather than one, so equal egress
-        buys proportionally more CPU."""
+        """This pass decodes up to 9 sixty-second windows per video (Issue 443's
+        consensus) rather than one frame, so equal egress buys far more CPU."""
         assert tasks._CAMERA_REGION_BACKFILL_BATCH < tasks._POSTER_BACKFILL_BATCH

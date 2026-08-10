@@ -5,6 +5,81 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-10 — Issue 443: the video-level region is a per-window consensus, judged by IoU
+
+**Decision 1 — resolve the video-level rect from N SHORT windows, not one wide span.**
+`detect_video_camera_region` now runs the unmodified per-clip `detect_camera_region` over 9
+disjoint 60-second windows spread across the runtime, discards the declines, and takes a
+component-wise median of the survivors. `detect_camera_region` itself, both samplers,
+`_LINEAR_DECODE_MAX_SPAN_S` and the render path are untouched.
+
+**Why:** the shipped Stage 2 ran ONE variance detection across the entire runtime, which measures
+the wrong thing. Temporal-variance detection works per clip *because* a 30–90 s window has a stable
+layout; over 27 minutes nearly every pixel changes at some point, so the mask saturates and the
+rect grows to swallow the chrome it exists to exclude. It stored a 0.701 height fraction against
+the healthy per-clip 0.507. The median's **50% breakdown point** is what makes one overlay-heavy
+window harmless; the mean's is 0.
+
+**Source/evidence:** Porikli 2007, *Detection of Temporarily Static Regions by Processing Video at
+Different Frame Rates* (https://www.porikli.com/mysite/pdfs/porikli%202007%20-%20Detection%20of%20temporarily%20static%20regions%20by%20processing%20video%20at%20different%20frame%20rates.pdf)
+— lengthening the temporal window reclassifies static regions as moving, the exact mechanism here.
+Breakdown points from https://en.wikipedia.org/wiki/Robust_statistics (median 50%, mean 0%).
+Median box fusion as the standard robust summary of repeated detections: Wei et al. 2018, *Fusion
+of an Ensemble of Augmented Image Detectors for Robust Object Detection*, Sensors 18(3):894
+(https://doi.org/10.3390/s18030894), which also notes its limits under extreme outliers — the
+reason for the agreement gate below rather than trusting the median alone. Live measurement: the
+defective `0,330,1918,749` (0.694) and stored `0,322,1918,757` (0.701) vs healthy siblings at 0.507.
+
+**Decision 2 — agreement is judged by IoU ≥ 0.80, NOT by a height-fraction MAD.** The consensus is
+kept only if a strict majority of survivors (floor 3) reach that IoU with the median rect.
+
+**Why:** MAD was the tempting choice — same 50% breakdown, and it measures the exact quantity the
+acceptance criterion is written in (0.51 vs 0.70). It was rejected because it is **blind to the
+horizontal axis**, and that axis is load-bearing: `clip_engine/render.py` computes
+`crop_w = min(int(region_h * out_w / out_h), region_w)`, so if detection intermittently drops the
+second camera of a side-by-side layout, `w` halves while `h` is unchanged and a height-only gate
+sees a perfect consensus while the render zooms in on one speaker. The 0.80 threshold is derived,
+not guessed: the healthy band (h≈548) against the defective one (h=757) at the same x/w is
+IoU **0.724**, so anything above ~0.73 rejects the observed defect; 0.80 keeps a margin while still
+tolerating a 25% height difference or a vertical offset of 11% of region height. Both gates were
+NOT shipped — two thresholds means two ways to false-decline and a much harder story about which
+one fired. The diagnostic value of MAD is recovered by logging per-survivor IoUs **and** height
+fractions on every decline.
+
+**Decision 3 (plan deviation) — the marginal median is NOT re-validated against the detector's
+geometric gates.** The approved plan included that step; building it showed the branch is
+unreachable and it was dropped.
+
+**Why:** each component's median has at least ⌈n/2⌉ survivors at or above it, and for an odd
+survivor count two such sets must intersect — so some survivor dominates the median in every
+component simultaneously, and that survivor already cleared `min_area_frac`, `min_height_frac` and
+`full_frame_frac`. The same argument bounds the median from below. Shipping the check would have
+added an unreachable branch (a coverage hole and a false sense of safety), not a net. The clamps in
+`_median_rect` cover the even-count corner; the agreement majority is what actually rejects a bad
+consensus. Reasoning recorded in a comment at the site so it is not "restored" later.
+
+**Decision 4 — `VIDEO_REGION_VERSION` is a SEMANTIC version, and the backfill's failure markers are
+keyed by it.** Bumped 1 → 2; the marker is now
+`camera_region_backfill_failed:v{VIDEO_REGION_VERSION}:{video_id}`.
+
+**Why:** the marker's 7-day TTL outlives the bug that set it, so after a code fix the hourly sweep
+silently processes 0 videos — that cost a full debugging cycle on this very issue. Clear-on-success
+cannot apply (the marker only exists when there *was* no success), and a boot-time `SCAN` sweep is
+worse: deploys are frequent, so it would re-pay egress on every legitimately-declining video and
+defeat the point of the TTL. Version-scoping costs zero extra Redis calls, is structurally testable
+(`test_backfill_marker_is_scoped_to_the_detector_version`), and orphans the two markers currently
+set on prod with no manual `DEL`. The constant's contract is documented at its definition: bump it
+whenever detection *semantics* change, not only when the stored shape changes.
+
+**Decision 5 — `sample_frames` is PER WINDOW (10), never a total to divide.** Splitting the old
+budget of 24 across 9 windows would give 2 frames each; `detect_camera_region` rejects any stack
+under 3, so **every** window would decline and the function would return `None` forever — the same
+silent-inertness class as the sampling defect that preceded this one. `_CAMERA_REGION_BACKFILL_BATCH`
+drops 10 → 5 to keep the hourly sweep clear of `CELERY_SOFT_TIME_LIMIT_S = 3000` now that each
+video decodes up to 9 × 60 s instead of one frame.
+
+---
+
 ## 2026-08-07 — Issue 441: seconds, not ratios, for overlap; a narrow closed list for openers
 
 **Decision 1 — duplicate windows are caught in ABSOLUTE SECONDS.** `suppress_contained` gains a

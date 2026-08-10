@@ -22,8 +22,10 @@ today's full-height crop, so plain single-camera sources are byte-identical.
 from __future__ import annotations
 
 import logging
+import statistics
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -200,7 +202,94 @@ def detect_camera_region(
         return None
 
 
-VIDEO_REGION_VERSION = 1
+# Bump whenever detection SEMANTICS change, not only when the stored shape
+# changes. The version invalidates two things at once: stored rects (see
+# ``region_from_video_json`` below) and the hourly backfill's failure markers,
+# which ``worker/tasks.py`` keys by version. A detector change that would
+# produce a different answer for the same input MUST bump this, or the backfill
+# silently suppresses retries for up to a week AFTER the fix lands — which is
+# exactly what cost a full debugging cycle on Issue 443.
+# 1 → 2 (Issue 443): one whole-runtime detection → a consensus of short windows.
+VIDEO_REGION_VERSION = 2
+
+# Span of each consensus window. Mid-range of the 30-90 s clip window the
+# detector is frame-verified on, and safely under ``_LINEAR_DECODE_MAX_SPAN_S``
+# so every window routes through ``_sample_by_linear_decode`` — the same
+# machinery, at the same operating point, as a per-clip detection.
+_WINDOW_SPAN_S = 60.0
+# A hard floor, not a preference: ``statistics.median`` of two values is their
+# MEAN, whose breakdown point is 0, so one poisoned window would drag a
+# two-survivor "consensus" halfway to itself. Robustness starts at three.
+_MIN_CONSENSUS_WINDOWS = 3
+# Cost cap — 9 x 60 s = 540 s of decoded video for a 27-minute source.
+_MAX_WINDOWS = 9
+# Agreement floor between one window's rect and the consensus. Derived from the
+# measured defect: the healthy band is h≈548 and the defective one h=757 at the
+# same x/w, i.e. IoU 0.724 — so any threshold above ~0.73 rejects it. 0.80 keeps
+# a margin while still tolerating a 25% height difference, or a vertical offset
+# of 11% of region height, between windows that genuinely agree.
+_MIN_WINDOW_IOU = 0.80
+# Don't issue a detection the deadline has already doomed.
+_MIN_WINDOW_TIMEOUT_S = 5.0
+
+
+def _window_spans(duration_s: float, span_s: float, max_windows: int) -> list[tuple[float, float]]:
+    """Placements for the consensus windows, or ``[]`` if the runtime is too
+    short to take a consensus from at all.
+
+    Each window is centred inside its own ``1/n`` slice of the runtime. Two
+    properties fall out of that construction instead of needing clamps:
+
+    - ``seg >= span_s`` is guaranteed (``n <= duration_s // span_s``), so the
+      offset is never negative: the first window cannot start before 0 and the
+      last cannot run past the end.
+    - The windows are provably DISJOINT. That is deliberate, not incidental —
+      overlapping windows share source frames, so a single overlay burst would
+      poison two of them and erode the median's 50% breakdown point.
+
+    Centring also buys head/tail margin for free (on a 27-minute source the
+    first window starts near 60 s and the last ends near 1557 s), skipping the
+    cold-open montage and the end card — the two stretches whose layout is
+    least like the body of the video.
+    """
+    n = min(int(duration_s // span_s), max_windows)
+    if n < _MIN_CONSENSUS_WINDOWS:
+        return []
+    seg = duration_s / n
+    offset = (seg - span_s) / 2.0
+    spans = []
+    for i in range(n):
+        start = max(0.0, i * seg + offset)
+        spans.append((start, min(duration_s, start + span_s)))
+    return spans
+
+
+def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    """Intersection-over-union of two ``(x, y, w, h)`` rects."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _median_rect(
+    rects: list[tuple[int, int, int, int]], frame_w: int, frame_h: int
+) -> tuple[int, int, int, int]:
+    """Component-wise median of the surviving rects, clamped to the frame.
+
+    This is the MARGINAL median: ``y`` may come from one window and ``h`` from
+    another, so the result is NOT required to be a member of ``rects`` and can
+    violate gates that every individual survivor cleared. The caller re-validates
+    it against the detector's own gates for exactly that reason.
+    """
+    x = max(0, int(statistics.median([float(r[0]) for r in rects])))
+    y = max(0, int(statistics.median([float(r[1]) for r in rects])))
+    w = min(int(statistics.median([float(r[2]) for r in rects])), frame_w - x)
+    h = min(int(statistics.median([float(r[3]) for r in rects])), frame_h - y)
+    return (x, y, w, h)
 
 
 def detect_video_camera_region(
@@ -209,51 +298,156 @@ def detect_video_camera_region(
     frame_w: int,
     frame_h: int,
     *,
-    sample_frames: int = 24,
+    sample_frames: int = 10,
+    motion_thresh: float = 6.0,
+    min_area_frac: float = 0.30,
+    min_height_frac: float = 0.55,
+    full_frame_frac: float = 0.92,
+    pad_frac: float = 0.02,
     timeout_s: float = 240.0,
-    **kwargs: object,
 ) -> dict | None:
-    """Resolve the camera region ONCE for a whole video (Issue 439).
+    """Resolve the camera region ONCE for a whole video, as a consensus of
+    several short windows (Issue 439 Stage 2, rebuilt by Issue 443).
 
-    Same detector, sampled across the entire runtime instead of one clip window,
-    so every clip of a source shares one answer. Sampling wide is also what makes
-    an intermittent overlay harmless: a SUBSCRIBE animation that is on screen for
-    part of the video contributes far less temporal variance across 24 frames
-    spanning 27 minutes than across 10 frames inside the 84 seconds it happens to
-    cover — which is how one clip came to disagree with its siblings.
+    The first build ran ONE detection across the entire runtime, which measures
+    the wrong thing. Temporal-variance detection works per clip *because* a
+    30-90 s window has a stable layout; over 27 minutes nearly every pixel
+    changes at some point — overlays come and go, segments differ, layouts shift
+    — so the motion mask saturates and the region grows to swallow the very
+    chrome it exists to exclude. It measured a 0.70 height fraction where the
+    healthy per-clip siblings measured 0.51. A longer temporal window
+    reclassifying static regions as moving is the documented behaviour of this
+    family of detectors (Porikli 2007, "Detection of Temporarily Static Regions
+    by Processing Video at Different Frame Rates").
+
+    So: run the UNMODIFIED per-clip detector over N short windows spread across
+    the runtime, drop the declines, take a component-wise median of the
+    survivors, and keep it only if a majority of them agree with it. Each
+    detection gets the stable-layout span it was designed for, and the median's
+    50% breakdown point means one overlay-heavy window cannot move the answer.
+
+    ``sample_frames`` is PER WINDOW, not a total to divide up. Dividing would be
+    a silent total failure rather than a tuning choice: ``detect_camera_region``
+    rejects any stack under 3 frames, so a split budget makes every window
+    decline and this function return ``None`` forever — the same inertness class
+    as the sampling defect that preceded this one.
 
     No ``face_box`` is passed: there is no single face for a whole video. The
-    per-clip face-sanity check still runs at render time against this rect, so a
+    per-clip face-sanity check still runs against this rect at render time, so a
     bad video-level answer is caught there rather than trusted blindly.
 
-    Returns the storage shape for ``Video.camera_region_jsonb``, or ``None`` when
-    detection declines (same fail-open contract as ``detect_camera_region``).
+    Returns the storage shape for ``Video.camera_region_jsonb``, or ``None``
+    when the consensus declines — which is a correct outcome, not an error: the
+    render simply detects per clip, the path this one is built out of.
     """
     if duration_s <= 0:
         return None
-    region = detect_camera_region(
-        source_path,
-        0.0,
-        duration_s,
-        frame_w,
-        frame_h,
-        sample_frames=sample_frames,
-        # Generous by default: this runs at ingest and in a Beat backfill, never
-        # in the render hot path, and it seeks across the whole runtime.
-        timeout_s=timeout_s,
-        **kwargs,  # type: ignore[arg-type]
-    )
-    if region is None:
+    spans = _window_spans(duration_s, _WINDOW_SPAN_S, _MAX_WINDOWS)
+    if not spans:
+        logger.info(
+            "camera_region: %.0fs runtime is shorter than %d x %.0fs windows — no video-level "
+            "consensus, every clip detects for itself",
+            duration_s,
+            _MIN_CONSENSUS_WINDOWS,
+            _WINDOW_SPAN_S,
+        )
         return None
-    x, y, w, h = region
+
+    # A deadline, not a per-window quota: the fair share is recomputed from what
+    # is actually left, so it GROWS as fast windows finish and no single slow
+    # window can starve the ones behind it.
+    deadline = time.monotonic() + timeout_s
+    survivors: list[tuple[int, int, int, int]] = []
+    attempted = 0
+    for i, (start_s, end_s) in enumerate(spans):
+        per_window = (deadline - time.monotonic()) / (len(spans) - i)
+        if per_window < _MIN_WINDOW_TIMEOUT_S:
+            logger.warning(
+                "camera_region: consensus budget (%.0fs) exhausted after %d/%d windows",
+                timeout_s,
+                attempted,
+                len(spans),
+            )
+            break
+        attempted += 1
+        region = detect_camera_region(
+            source_path,
+            start_s,
+            end_s,
+            frame_w,
+            frame_h,
+            sample_frames=sample_frames,
+            motion_thresh=motion_thresh,
+            min_area_frac=min_area_frac,
+            min_height_frac=min_height_frac,
+            full_frame_frac=full_frame_frac,
+            pad_frac=pad_frac,
+            timeout_s=per_window,
+        )
+        if region is not None:
+            survivors.append(region)
+
+    if len(survivors) < _MIN_CONSENSUS_WINDOWS:
+        logger.info(
+            "camera_region: only %d of %d windows detected a region (need %d) — declining the "
+            "video-level consensus, every clip detects for itself",
+            len(survivors),
+            attempted,
+            _MIN_CONSENSUS_WINDOWS,
+        )
+        return None
+
+    # The marginal median is deliberately NOT re-checked against the detector's
+    # own gates, because for an odd survivor count it cannot fail them. Each
+    # component's median has at least ⌈n/2⌉ survivors at or above it, and two
+    # such sets must intersect, so some survivor dominates the median in every
+    # component at once — and that survivor already cleared the gates. The
+    # clamps in ``_median_rect`` cover the even-count corner. An extra gate here
+    # would be an unreachable branch, not a safety net; the agreement majority
+    # below is what actually rejects a bad consensus.
+    region = _median_rect(survivors, frame_w, frame_h)
+    mx, my, mw, mh = region
+    ious = [_iou(s, region) for s in survivors]
+    agreeing = sum(1 for v in ious if v >= _MIN_WINDOW_IOU)
+    # A strict majority is the only bar coherent with using a median at all: its
+    # robustness claim is "a minority cannot move me". If half the survivors
+    # disagree with the result, it is an artifact rather than a consensus.
+    required = max(_MIN_CONSENSUS_WINDOWS, len(survivors) // 2 + 1)
+    if agreeing < required:
+        # Three gates can decline, so name which one fired and with what numbers
+        # — otherwise a live drill cannot tell "correctly declined" from "still
+        # broken". IoU conflates the axes; the height fractions disambiguate.
+        logger.info(
+            "camera_region: only %d of %d windows agree with the consensus rect %s (need %d) — "
+            "declining. IoUs %s, height fracs %s",
+            agreeing,
+            len(survivors),
+            region,
+            required,
+            [f"{v:.2f}" for v in ious],
+            [f"{r[3] / frame_h:.3f}" for r in survivors],
+        )
+        return None
+
+    logger.info(
+        "camera_region: video-level consensus %s from %d of %d windows (height %.3f of frame)",
+        region,
+        agreeing,
+        attempted,
+        mh / frame_h,
+    )
     return {
         "version": VIDEO_REGION_VERSION,
-        "x": x,
-        "y": y,
-        "width": w,
-        "height": h,
+        "x": mx,
+        "y": my,
+        "width": mw,
+        "height": mh,
         "frame": {"width": frame_w, "height": frame_h},
         "sample_frames": sample_frames,
+        "windows": attempted,
+        "windows_detected": len(survivors),
+        "windows_agreeing": agreeing,
+        "window_span_s": _WINDOW_SPAN_S,
     }
 
 
@@ -359,8 +553,6 @@ def _sample_by_seeking(
     skipped; the caller's ``< 3 frames`` guard still rejects a stack too sparse
     to measure temporal variance against.
     """
-    import time
-
     deadline = time.monotonic() + timeout_s
     captured = 0
     for i in range(sample_frames):

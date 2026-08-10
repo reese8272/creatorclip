@@ -4,6 +4,44 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-10 (later) — Issue 443 CLOSED: the video-level region is a per-window consensus
+
+**The fresh-upload blocker is cleared.** `detect_video_camera_region` no longer runs one variance
+detection across the whole runtime. It runs the unmodified per-clip detector over **9 disjoint
+60-second windows** spread across the runtime, discards the declines, takes a **component-wise
+median** of the survivors, and keeps it only if a **strict majority agree with it at IoU ≥ 0.80**.
+Every window now gets the stable-layout span the detector is actually verified on, and the median's
+50% breakdown point means one overlay-heavy window cannot move the answer.
+
+`detect_camera_region`, both samplers, and the whole render path are **untouched** — the fix is
+built entirely out of the per-clip path that is already frame-verified in production.
+
+**Gates:** backend **2929/0** (baseline 2919 + 10 new tests) · Layer 0 all green (ruff 0, mypy 0,
+bandit 0, pip-audit 0, coverage **84.15** up from 84.07, `clip_engine` **92.79** vs floor 91.0) ·
+eval 24 scenarios / 100%. The two load-bearing tests were demonstrated failing under the old
+single-window premise — the root-cause assertion fails at literally `1617.0 <= 60.0`.
+
+**Four rulings, all in `docs/DECISIONS.md` 2026-08-10:**
+1. **IoU ≥ 0.80, not a height-fraction MAD** — MAD is blind to the horizontal axis, and `region_w`
+   is load-bearing in the render's `crop_w`. The 0.80 threshold is *derived*: healthy vs defective
+   is IoU 0.724.
+2. **Plan deviation — the marginal median is NOT re-validated against the detector's gates.**
+   Building it proved the branch unreachable (an intersection argument on the order statistics), so
+   it was dropped rather than shipped as a coverage hole.
+3. **`VIDEO_REGION_VERSION` is a semantic version (1 → 2), and the backfill markers are keyed by
+   it** — so a detector fix invalidates the markers its own bug wrote. This also orphans the two
+   markers currently set on prod with no manual Redis operation.
+4. **`sample_frames` is per window (10), never a total to divide** — 24 split across 9 windows
+   would give 2 frames each, below the 3-frame floor, making every window decline silently forever.
+   `_CAMERA_REGION_BACKFILL_BATCH` 10 → 5 for the soft-time-limit headroom.
+
+**Still open on 443:** the live box only. Re-scoped from `3b6992fe` (source purged) to the next
+fresh upload — confirm `videos.camera_region_jsonb` height fraction ≈0.51 plus the new
+`windows` / `windows_detected` / `windows_agreeing` provenance. A NULL column is **not** a failure:
+it means a gate declined and the render fell back to per-clip detection, which is the working path.
+
+---
+
 ## 2026-08-10 — the 438-441 verification window closed; Issue 443 now blocks the retry
 
 **438–441 are deployed but none is live-verified, and the planned drill can no longer be run.**
@@ -53,7 +91,8 @@ ships migration **0056**.
   shares its vertical span, so an animated overlay is excluded instead of absorbed. Stage 2:
   migration 0056 + `Video.camera_region_jsonb`, resolved once at ingest from 24 frames across the
   whole runtime, preferred by the render with a per-clip face-box safety valve, plus an hourly
-  backfill.
+  backfill. *(The whole-runtime sampling was the wrong premise — rebuilt as a per-window consensus
+  by Issue 443 on 2026-08-10.)*
 - **440** — `face_pan` holds the dominant seat per shot instead of gliding across a two-shot;
   **concurrency** (not separation) distinguishes a two-shot from a subject who relocated; the
   surviving pan path's deadband scales to the pan space.
