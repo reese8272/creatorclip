@@ -8,7 +8,7 @@ import pytest
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import Clip, Creator, IngestStatus, RenderStatus, Video
+from models import Clip, ClipTriage, Creator, IngestStatus, RenderStatus, Video
 from routers.clips import _clip_response
 from tests._helpers import owned_lookup_result
 
@@ -156,6 +156,7 @@ def test_create_clip_duplicate_selection_returns_existing_200(client):
     creator = _creator()
     video = _video(creator.id)
     existing = MagicMock(spec=Clip)
+    existing.triage = ClipTriage.pending
     existing.id = uuid.uuid4()
     existing.video_id = video.id
     existing.creator_id = creator.id
@@ -210,6 +211,7 @@ def test_list_clips_impressions_exclude_creator_selections(client):
 
     def _mock_clip(rank, origin):
         cl = MagicMock(spec=Clip)
+        cl.triage = ClipTriage.pending
         cl.id = uuid.uuid4()
         cl.video_id = video.id
         cl.creator_id = creator.id
@@ -261,6 +263,7 @@ def test_list_clips_impressions_exclude_creator_selections(client):
 
 def test_clip_response_engine_backcompat_origin_and_aspect():
     clip = MagicMock(spec=Clip)
+    clip.triage = ClipTriage.pending
     clip.id = uuid.uuid4()
     clip.video_id = uuid.uuid4()
     clip.setup_start_s = 1.0

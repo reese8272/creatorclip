@@ -338,6 +338,12 @@ _FLOOR_EXEMPT_HANDLERS = frozenset(
         # Saving is always allowed; exporting is gated, and POST /clips/{id}/cuts
         # keeps its floor. Do not "fix" this by adding check_positive_balance.
         "put_edit_document",
+        # Issue 444 — same reasoning. Triage is one enum column: it enqueues no
+        # task, spends no minutes, and calls no LLM. Organising your own clips
+        # must keep working at zero balance, and it must keep working when the
+        # llm_generation / render_intake kill switches are flipped — the review
+        # backlog does not stop being yours during an incident.
+        "set_clip_triage",
     }
 )
 

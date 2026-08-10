@@ -12,6 +12,7 @@ import asyncio
 import logging
 import math
 import uuid
+from functools import partial
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -22,10 +23,18 @@ from auth import get_current_creator
 from billing.ledger import check_positive_balance
 from billing.spend_guard import require_budget
 from clip_engine.edits import MIN_KEEP_SEGMENT_S
+from config import settings
 from db import get_session
 from flags import require_flag
 from limiter import RENDER_DAILY_LIMIT, creator_key, limiter
-from models import Clip, ClipFeedback, Creator, FeedbackAction
+from models import (
+    TRIAGE_BY_FEEDBACK_ACTION,
+    Clip,
+    ClipFeedback,
+    ClipTriage,
+    Creator,
+    FeedbackAction,
+)
 from routers._enqueue import enqueue_stream_task
 from routers._owned import get_owned
 from routers._schemas import TaskQueuedOut
@@ -44,6 +53,36 @@ _KEEP_ACTIONS: frozenset[FeedbackAction] = frozenset(
 class FeedbackOut(BaseModel):
     id: str
     action: str
+
+
+# Issue 444 — the feedback action a triage move implies. Moving a clip between
+# piles IS a change of verdict, so it records one: the pile and the model can
+# then never hold different opinions. Safe only because preference/train.py now
+# keeps one label per clip (the newest) — before that dedup this would have
+# stacked contradictory samples, which is the bug the issue exists to fix.
+#
+# `pending` maps to `skip`, which is a genuine RETRACTION: it supersedes the
+# earlier verdict in the training partition and then drops out, because `skip`
+# is not a trainable action. Sending a clip back to the review queue therefore
+# withdraws its label rather than leaving a stale one behind.
+_TRIAGE_TO_ACTION: dict[ClipTriage, FeedbackAction] = {
+    ClipTriage.kept: FeedbackAction.upvote,
+    ClipTriage.dropped: FeedbackAction.downvote,
+    ClipTriage.pending: FeedbackAction.skip,
+}
+
+
+class TriageIn(BaseModel):
+    # extra="forbid" is load-bearing: without it a client sending {"state": …}
+    # instead of {"triage": …} gets a cheerful 200 and a silent no-op.
+    model_config = ConfigDict(extra="forbid")
+
+    triage: ClipTriage
+
+
+class TriageOut(BaseModel):
+    id: str
+    triage: str
 
 
 _FEEDBACK_NOTE_MAX_LEN = 2000
@@ -192,6 +231,17 @@ async def submit_feedback(
         feedback_note=body.feedback_note or None,
     )
     session.add(feedback)
+    # Issue 444 — a rating IS a verdict, so the pile moves with it in the same
+    # transaction. Deriving triage server-side rather than making the client
+    # send both is what makes it structurally impossible for the rating and the
+    # pile to disagree. `skip` is absent from the map on purpose: skipping is
+    # not a verdict, so the clip keeps whatever state it had and stays in the
+    # queue. The reverse direction is NOT symmetric — PUT /clips/{id}/triage
+    # moves a clip between piles WITHOUT writing a label, which is what stops a
+    # restore-from-drop from poisoning the training set.
+    implied_triage = TRIAGE_BY_FEEDBACK_ACTION.get(body.action)
+    if implied_triage is not None:
+        clip.triage = implied_triage
     await session.commit()
     await session.refresh(feedback)
 
@@ -227,9 +277,7 @@ async def submit_feedback(
     # Retrain the creator's preference model so ranking adapts to this feedback.
     # The task self-debounces (no-op without new trainable labels), so enqueuing
     # on every feedback write is cheap. (Issue 60)
-    from worker.tasks import retrain_preference
-
-    await asyncio.to_thread(retrain_preference.delay, str(creator.id))
+    await _enqueue_retrain(creator.id)
 
     # Issue 371: tags/notes carry the "why" — feed the style distiller. Only
     # enqueued when substance exists; the task itself debounces + LLM-gates.
@@ -239,6 +287,90 @@ async def submit_feedback(
         await asyncio.to_thread(distill_style_prefs.delay, str(creator.id))
 
     return {"id": str(feedback.id), "action": feedback.action.value}
+
+
+async def _enqueue_retrain(creator_id: uuid.UUID) -> None:
+    """Queue a preference retrain, coalescing bursts (Issue 444).
+
+    The existing protections do NOT collapse a burst on their own: the
+    non-blocking advisory lock only drops *overlapping* tasks, and the
+    self-debounce checks for trainable rows newer than the last model — so after
+    task N commits a model, task N+1 does find a newer row and retrains. A
+    creator triaging 20 clips in a minute would otherwise pay 20 full model fits.
+    The countdown bunches them into one effective run.
+
+    Freshness cost is nil: the model is read only at generate/rerank time, never
+    in the request that wrote the label.
+    """
+    from worker.tasks import retrain_preference
+
+    await asyncio.to_thread(
+        partial(
+            retrain_preference.apply_async,
+            args=[str(creator_id)],
+            countdown=settings.PREFERENCE_RETRAIN_DEBOUNCE_S,
+        )
+    )
+
+
+@router.put("/{clip_id}/triage", response_model=TriageOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def set_clip_triage(
+    request: Request,
+    clip_id: uuid.UUID,
+    body: TriageIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Set the creator's current verdict on a clip (Issue 444).
+
+    PUT, not POST, because this is a state transition on a known URI: applying
+    the same body twice must leave the same state and must be safe to retry.
+    POST would say "append to a collection", which is what /feedback already is.
+
+    A change of pile IS a change of verdict, so it records one — state and label
+    move in a SINGLE transaction and can never disagree. Two browser writes
+    could not be made atomic, and if the label write were the one that failed
+    the pile would say "kept" while the model went on believing "dropped", with
+    no reconciliation path. This is only safe because preference/train.py keeps
+    one label per clip: the derived row supersedes the previous verdict instead
+    of stacking a contradiction on top of it.
+
+    An unchanged state is a total no-op — no row, no task, no activation event —
+    which is what makes a double-click or an offline replay harmless.
+
+    No budget or kill-switch dependency: organising your own clips must keep
+    working at zero balance and during an LLM/render incident.
+    """
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+
+    if clip.triage == body.triage:
+        return {"id": str(clip_id), "triage": clip.triage.value}
+
+    action = _TRIAGE_TO_ACTION[body.triage]
+    # Checked BEFORE the commit so the row being written is not counted by the
+    # existence query — same ordering as submit_feedback above.
+    is_activation = action in _KEEP_ACTIONS and await _is_first_keep(session, creator.id)
+
+    clip.triage = body.triage
+    # Carries no tags or note, so distill_style_prefs (which selects only rows
+    # where feedback_tags or feedback_note is non-null) cannot see it and its
+    # STYLE_DISTILL_MIN_NEW debounce cannot be tripped by pile-shuffling.
+    session.add(ClipFeedback(clip_id=clip_id, creator_id=creator.id, action=action))
+    await session.commit()
+
+    if is_activation:
+        from event_log import record_event_nowait
+
+        record_event_nowait(
+            source="backend",
+            event="clip_kept",
+            creator_id=creator.id,
+            extra={"action": action.value},
+        )
+
+    await _enqueue_retrain(creator.id)
+    return {"id": str(clip_id), "triage": body.triage.value}
 
 
 @router.post(

@@ -26,6 +26,7 @@ from main import app
 from models import (
     Clip,
     ClipPublication,
+    ClipTriage,
     Creator,
     IngestStatus,
     PublishPlatform,
@@ -51,6 +52,7 @@ def _clip(
     creator_id: uuid.UUID, *, render_status: RenderStatus = RenderStatus.pending
 ) -> MagicMock:
     cl = MagicMock(spec=Clip)
+    cl.triage = ClipTriage.pending
     cl.id = uuid.uuid4()
     cl.creator_id = creator_id
     cl.video_id = uuid.uuid4()
@@ -281,6 +283,7 @@ def test_list_clips_truncated_true_when_at_limit(client):
 
     def _make_clip_obj():
         cl = MagicMock(spec=Clip)
+        cl.triage = ClipTriage.pending
         cl.id = uuid.uuid4()
         cl.video_id = video.id
         cl.creator_id = creator.id
@@ -396,6 +399,7 @@ def test_confirm_publication_non_scheduled_returns_409(client, initial_status):
     status → 409 Conflict."""
     creator = _creator()
     cl = MagicMock(spec=Clip)
+    cl.triage = ClipTriage.pending
     cl.id = uuid.uuid4()
     cl.creator_id = creator.id
     pub = _pub(creator.id, initial_status)
@@ -424,6 +428,7 @@ def test_cancel_publication_non_mutable_returns_409(client, initial_status):
     (pending, running, done, failed) → 409 Conflict."""
     creator = _creator()
     cl = MagicMock(spec=Clip)
+    cl.triage = ClipTriage.pending
     cl.id = uuid.uuid4()
     cl.creator_id = creator.id
     pub = _pub(creator.id, initial_status)
@@ -448,6 +453,7 @@ def test_cancel_then_confirm_race_returns_409(client):
     """
     creator = _creator()
     cl = MagicMock(spec=Clip)
+    cl.triage = ClipTriage.pending
     cl.id = uuid.uuid4()
     cl.creator_id = creator.id
 
@@ -516,6 +522,7 @@ def test_list_publications_truncated_field_present(client):
     """GET /clips/{id}/publications always returns a 'truncated' field."""
     creator = _creator()
     cl = MagicMock(spec=Clip)
+    cl.triage = ClipTriage.pending
     cl.id = uuid.uuid4()
     cl.creator_id = creator.id
 

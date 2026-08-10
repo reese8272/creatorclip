@@ -349,6 +349,12 @@ videos
     the extracted audio WAV; source_uri STAYS the original video so the renderer
     can extract keyframes. Ingest no longer overwrites source_uri with audio /
     deletes the mp4; both are purged at 72h by purge_stale_source_media),
+  archived_at (NULLABLE, migration 0057 — Issue 444 schema / Issue 446 behaviour:
+    soft-delete marker; NULL = active. Archiving hides the video and frees its
+    media but PRESERVES its clips and their clip_feedback rows, which are the
+    preference model's training labels. NOT an erasure mechanism — an archived
+    row still holds creator data, so DELETE /auth/me stays the right-to-erasure
+    path. A timestamp not a boolean: restore and audit both want to know when)
   poster_uri (NULLABLE, migration 0050 — one 640px JPEG still at
     posters/{creator_id}/{video_id}.jpg, extracted during ingest. DELIBERATELY
     SURVIVES the 72h purge, unlike audio_uri: a lossy single frame reconstructs
@@ -459,6 +465,15 @@ clips
                                        -- video, pre-clamped; publish precedence
                                        -- applied_* -> suggested_* -> video.title|"#Shorts";
                                        -- fill-only on suggested_title IS NULL)
+  triage (NOT NULL DEFAULT 'pending', clip_triage_enum, migration 0057 — Issue 444:
+    the creator's CURRENT verdict, `pending` | `kept` | `dropped`. Mutable and
+    reversible via PUT /clips/{id}/triage, which writes the state AND a derived
+    clip_feedback row in ONE transaction so the pile and the preference model
+    can never disagree (kept->upvote, dropped->downvote, pending->skip).
+    Distinct from `shortlisted` (a presentation cut over engine rank, Issue 377)
+    and from render_status (pipeline state). Exposed on ClipOut; aggregated
+    per-video by GET /videos/clips/counts. server_default is load-bearing —
+    the previous image's INSERT does not name the column during a rolling restart)
   reframe_track_jsonb (NULLABLE, migration 0055 — Issue 421: the speaker-aware
     crop track in the unified wire contract; keyframe x = the exact ffmpeg
     sendcmd left-edge values. Recomputed + replaced (or nulled) in the same

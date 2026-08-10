@@ -31,6 +31,7 @@ from models import (
     ClipEditDocument,
     ClipFormat,
     ClipImpression,
+    ClipTriage,
     Creator,
     CreatorStyle,
     IngestStatus,
@@ -100,6 +101,11 @@ class ClipOut(BaseModel):
     # heavy for the list surface); the JSON comes from the authed
     # /clips/{id}/crop-track endpoint. False = 404 there (code no_crop_track).
     has_crop_track: bool = False
+    # Issue 444 — the creator's CURRENT verdict: "pending" (still in the review
+    # queue) | "kept" | "dropped". Mutable and reversible via PUT
+    # /clips/{id}/triage; distinct from the append-only feedback log, so moving
+    # a clip between piles writes no training label.
+    triage: str = "pending"
 
 
 class PersonalizationStatus(BaseModel):
@@ -161,7 +167,16 @@ class VideoClipCount(BaseModel):
 
     video_id: str
     total: int
+    # Production progress — how many clips finished rendering. NOT a review
+    # figure: it never decrements as the creator rates, which is exactly why the
+    # Dashboard's "ready to review" badge was wrong before Issue 444.
     rendered: int
+    # Triage breakdown (Issue 444). `pending` is the honest "still needs a
+    # decision" number the review queue is built from. Deliberately not gated on
+    # render status — a clip that is still rendering still needs a verdict.
+    pending: int = 0
+    kept: int = 0
+    dropped: int = 0
 
 
 class ClipCountsOut(BaseModel):
@@ -270,6 +285,7 @@ def _clip_response(clip: Clip) -> dict:
         "shortlisted": is_shortlisted(clip.rank),
         "has_poster": clip.poster_uri is not None,
         "has_crop_track": clip.reframe_track_jsonb is not None,
+        "triage": clip.triage.value,
     }
 
 
@@ -295,6 +311,9 @@ async def get_clip_counts(
             Clip.video_id.label("video_id"),
             func.count().label("total"),
             func.sum(case((Clip.render_status == RenderStatus.done, 1), else_=0)).label("rendered"),
+            func.count().filter(Clip.triage == ClipTriage.pending).label("pending"),
+            func.count().filter(Clip.triage == ClipTriage.kept).label("kept"),
+            func.count().filter(Clip.triage == ClipTriage.dropped).label("dropped"),
         )
         .join(Video, Clip.video_id == Video.id)
         .where(Video.creator_id == creator.id)
@@ -307,6 +326,9 @@ async def get_clip_counts(
             video_id=str(row.video_id),
             total=row.total,
             rendered=row.rendered,
+            pending=row.pending,
+            kept=row.kept,
+            dropped=row.dropped,
         )
         for row in rows
     ]
@@ -645,6 +667,10 @@ async def create_clip(
         render_status=RenderStatus.pending,
         rank=None,
         style_preset=kit_style or None,
+        # Explicit, like render_status above: a column default is applied at
+        # FLUSH time, so an unflushed instance would read `triage = None` and
+        # any caller touching it before the commit gets an AttributeError.
+        triage=ClipTriage.pending,
     )
     session.add(clip)
     await session.commit()

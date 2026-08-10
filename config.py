@@ -595,7 +595,27 @@ class Settings(BaseSettings):
     # older rows worth ~0, so truncating the long tail is correctness-free.
     # 5000 is the industry-standard ceiling for a per-user LightGBM ranker
     # at 30d half-life (Spotify/Netflix sklearn pipelines). (Issue 102)
+    #
+    # Issue 444 — the UNIT IS NOW DISTINCT CLIPS, not feedback rows: training
+    # keeps only the newest verdict per clip, and this cap is applied after that
+    # dedup rather than before it.
     PREFERENCE_MAX_TRAINING_LABELS: int = 5000
+    # Newest-first cap on the RAW clip_feedback rows scanned before the
+    # latest-per-clip dedup (Issue 444). Without it the dedup's window function
+    # would sort a power creator's entire history on every retrain — exactly the
+    # memory/CPU problem Issue 102 fixed, reintroduced one layer down.
+    # Truncating newest-first is safe: the newest row for a clip is by
+    # definition inside any newest-first window that contains that clip at all,
+    # so the cap can only drop clips whose ENTIRE history is older than the
+    # window — the same clips the outer cap would have dropped anyway.
+    PREFERENCE_FEEDBACK_SCAN_LIMIT: int = 20_000
+    # Delay before a queued preference retrain actually runs (Issue 444). The
+    # existing advisory lock only drops OVERLAPPING tasks and the self-debounce
+    # only skips runs with no new labels, so a creator triaging 20 clips in a
+    # minute would otherwise pay 20 full model fits. A countdown coalesces the
+    # burst into one. Freshness cost is nil — the model is read at
+    # generate/rerank time, never in the request that wrote the label.
+    PREFERENCE_RETRAIN_DEBOUNCE_S: int = 60
     # Warn-only ratchet on the per-retrain offline eval (Issue 202): if the new
     # model version's held-out NDCG@5 drops by MORE than this vs the previous
     # version's stored metric, a warning-severity event is logged. Never blocks

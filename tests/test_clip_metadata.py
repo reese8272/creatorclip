@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import Clip, Creator, RenderStatus
+from models import Clip, ClipTriage, Creator, RenderStatus
 from tests._helpers import stub_get_owned
 
 
@@ -30,6 +30,7 @@ def _mock_clip(
     """Clip mock with every field _clip_response serializes set to a real value
     (ClipOut response validation rejects bare MagicMock attributes)."""
     clip = MagicMock(spec=Clip)
+    clip.triage = ClipTriage.pending
     clip.id = uuid.uuid4()
     clip.creator_id = creator_id
     clip.video_id = uuid.uuid4()
