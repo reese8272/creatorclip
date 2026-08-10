@@ -25,7 +25,7 @@ from httpx import ASGITransport, AsyncClient
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import Creator, IngestStatus, RenderStatus, Signals, Video
+from models import ClipTriage, Creator, IngestStatus, RenderStatus, Signals, Video
 from tests._helpers import override_current_creator, owned_lookup_result
 
 # ── Stubs ─────────────────────────────────────────────────────────────────────
@@ -63,6 +63,7 @@ def _clip_stub(video_id: uuid.UUID) -> MagicMock:
     c.rank = 1
     c.signals_jsonb = {"principle": "Hook in the first 3 seconds", "reasoning": "x"}
     c.render_status = RenderStatus.pending
+    c.triage = ClipTriage.pending
     c.render_uri = None
     c.cleaned_render_uri = None
     c.applied_title = None

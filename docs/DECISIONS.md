@@ -5,6 +5,79 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-10 (later) — Issue 444: triage is a verdict, and a clip carries exactly one label
+
+**Decision 1 — `clips.triage` is a NATIVE PG enum, not VARCHAR + CHECK.** This reverses the
+approved plan, which called for VARCHAR + CHECK on evolvability grounds.
+
+**Why the reversal:** the plan's central argument was that `ALTER TYPE … ADD VALUE` cannot run
+inside Alembic's transaction. **That has been false since PostgreSQL 12**, and this project targets
+PG16 (CI pins `pgvector/pgvector:pg16`; `CLAUDE.md` Architecture Constraints). With the premise
+gone, the remaining CHECK advantage is renaming/removing a value — a risk bounded here because the
+taxonomy is a fixed three piles and the export finish line (Issue 447) takes its own column rather
+than more triage states. Against that: this schema declares 15+ native enums and **zero**
+VARCHAR+CHECK status columns, so the deviation would have cost every future reader a "why is this
+one different?". Consistency wins.
+
+**Source/evidence:** [Crunchy Data — Enums vs Check Constraints in Postgres](https://www.crunchydata.com/blog/enums-vs-check-constraints-in-postgres)
+(fetched 2026-08-10) recommends CHECK generically for changing value sets; the PG12 release removed
+the transaction restriction its argument rests on. Existing precedent: `0024_video_origin_enum.py`,
+`0048_video_feedback.py`.
+
+**Decision 2 — a triage move RECORDS a verdict; it does not merely reorganise.**
+`PUT /clips/{id}/triage` writes the clip's new state **and** a derived `ClipFeedback` row in one
+transaction (`kept`→`upvote`, `dropped`→`downvote`, `pending`→`skip`). This also reverses the
+approved plan, which had triage write no label at all.
+
+**Why:** with a label-free triage, a creator who dropped a clip and later restored it to Keep would
+leave the model still believing "dropped" — the pile and the preference model silently diverging,
+fixable only by a full re-rate. Two writes from a browser also cannot be made atomic: if the label
+write were the one that failed, the divergence would be permanent with no reconciliation path. One
+endpoint, one transaction, one truth. This is only safe **because** of Decision 3 — before the
+dedup it would have stacked contradictory samples, which is the very bug this issue fixes. Owner
+decision, 2026-08-10.
+
+**Decision 3 — training keeps ONE label per clip: the creator's newest verdict.**
+`preference/train.py` partitions `clip_feedback` by `clip_id` (`ROW_NUMBER() … ORDER BY created_at
+DESC, id DESC`) and takes rank 1. `PREFERENCE_MAX_TRAINING_LABELS` now applies **after** the dedup.
+
+**Why:** every feedback row was previously a separate training sample with no dedup anywhere, so an
+upvote and a later downvote of the same clip contributed a positive AND a negative with identical
+features. A single annotator revising their own judgement is a label **correction**, not
+inter-annotator disagreement — so newest-wins is right and majority-vote is wrong (it would let a
+retracted opinion outvote the current one). Sources: majority/consensus voting is the standard fix
+for *multi-annotator* conflicts ([Sapien — Labeling Data for ML](https://www.sapien.io/blog/labeling-data-for-machine-learning-best-practices-and-quality-control),
+[Deepchecks — Conflicting Labels](https://docs.deepchecks.com/0.14/nlp/auto_checks/data_integrity/plot_conflicting_labels.html));
+neither describes this case.
+
+The partition runs over `_VERDICT_ACTIONS`, which **includes `skip`**, and the trainable filter is
+applied afterwards. That ordering is what makes a retraction real: sending a clip back to `pending`
+records a `skip`, which wins the partition and then drops out, so the clip contributes nothing. It
+also fixes a pre-existing latent bug — a `skip` after an upvote never used to retract it.
+
+**Consequence the owner accepted:** `label_count` now counts **distinct clips judged**, not feedback
+rows, so it can DROP for a creator who has re-reviewed clips — possibly below
+`PERSONALIZATION_THRESHOLD_LABELS = 20`, flipping `PersonalizationStatus.active` to false. That is
+the honest number (24 rows over 12 clips was never 24 independent labels) and per `CLAUDE.md`'s
+honesty constraint we show it rather than compensate. **`PERSONALIZATION_THRESHOLD_LABELS` was
+deliberately NOT lowered in the same change** — that would hide the fix behind a knob turn and make
+the two effects un-attributable. Issue 445's copy should read "clips reviewed", not "labels".
+
+**Decision 4 — `preference/efficacy.py` shares the same subquery.** `load_labeled_clips` documents
+itself as mirroring the training query; if only one deduped, the per-retrain offline NDCG would
+measure a dataset production never trains on and the warn-ratchet would fire on a phantom shift.
+Both now call `latest_verdict_subquery`.
+
+**Decision 5 — retrain is enqueued with a countdown (`PREFERENCE_RETRAIN_DEBOUNCE_S = 60`).**
+The existing protections do not collapse a burst: the advisory lock only drops *overlapping* tasks,
+and the self-debounce only skips runs with no new labels — so after task N commits a model, task
+N+1 does find a newer row and refits. A creator triaging 20 clips would have paid 20 full LightGBM
+fits. Freshness cost is nil: the model is read at generate/rerank time, never in the request that
+wrote the label. `PREFERENCE_FEEDBACK_SCAN_LIMIT = 20000` bounds the pre-dedup window scan, or the
+dedup would reintroduce exactly the unbounded-sort problem Issue 102 fixed one layer down.
+
+---
+
 ## 2026-08-10 — Issue 443: the video-level region is a per-window consensus, judged by IoU
 
 **Decision 1 — resolve the video-level rect from N SHORT windows, not one wide span.**

@@ -13,8 +13,9 @@ import uuid
 from datetime import UTC, datetime
 
 import numpy as np
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.selectable import Subquery
 
 from config import settings
 from models import Clip, ClipFeedback, ClipOutcome, FeedbackAction, PreferenceModel
@@ -30,6 +31,15 @@ _NEGATIVE_ACTIONS = {FeedbackAction.downvote}
 # Feedback actions that contribute a training label (skip/format are excluded).
 TRAINABLE_ACTIONS = _POSITIVE_ACTIONS | _NEGATIVE_ACTIONS
 
+# Actions that constitute a VERDICT on a clip — the partition set for "the
+# creator's current opinion" (Issue 444). `skip` is included so that sending a
+# clip back to the review queue RETRACTS its label; `format` is excluded because
+# choosing an aspect ratio is render mechanics, not a judgement, and must not
+# supersede an earlier upvote. Note the 0057 backfill deliberately treats
+# `format` as a keep — that answers a different question (what pile should this
+# land in) and the two sets are not meant to match.
+_VERDICT_ACTIONS = TRAINABLE_ACTIONS | {FeedbackAction.skip}
+
 # Superseded PreferenceModel rows to retain per creator. Only the newest 2
 # versions are ever read (load_latest + the worker's NDCG warn-ratchet), but a
 # few extra are kept as a manual-rollback margin; everything older is pruned on
@@ -37,24 +47,83 @@ TRAINABLE_ACTIONS = _POSITIVE_ACTIONS | _NEGATIVE_ACTIONS
 _KEEP_MODEL_VERSIONS = 5
 
 
+def latest_verdict_subquery(creator_id: uuid.UUID) -> Subquery:
+    """One row per clip: the id of the creator's most recent VERDICT on it.
+
+    Shared by ``build_and_save`` and ``preference.efficacy.load_labeled_clips``
+    so the offline NDCG eval measures exactly the dataset production trains on.
+    If the two ever diverge, the per-retrain warn-ratchet fires on a phantom
+    shift that corresponds to nothing anyone changed.
+
+    ``id DESC`` breaks ``created_at`` ties, so the choice is deterministic
+    rather than whatever the planner happens to return.
+    """
+    recent = (
+        select(
+            ClipFeedback.id.label("fid"),
+            ClipFeedback.clip_id.label("cid"),
+            ClipFeedback.created_at.label("ts"),
+        )
+        .where(
+            ClipFeedback.creator_id == creator_id,
+            ClipFeedback.action.in_(_VERDICT_ACTIONS),
+        )
+        .order_by(ClipFeedback.created_at.desc(), ClipFeedback.id.desc())
+        .limit(settings.PREFERENCE_FEEDBACK_SCAN_LIMIT)
+        .subquery()
+    )
+    ranked = select(
+        recent.c.fid.label("feedback_id"),
+        func.row_number()
+        .over(partition_by=recent.c.cid, order_by=(recent.c.ts.desc(), recent.c.fid.desc()))
+        .label("rn"),
+    ).subquery()
+    return ranked
+
+
 async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> PreferenceScorer | None:
     """
     Load feedback, build training data, fit model, persist weights_blob to DB.
     Returns None if there are fewer than 2 training samples (one per class minimum).
     """
-    # Fetch feedback + clip signals + outcomes in one pass. Newest-first +
-    # LIMIT so a power creator with years of feedback doesn't pull the entire
-    # set into memory and into LightGBM's ndarray copy on every retrain. The
-    # 30d-half-life recency decay (preference/decay.py) makes rows past the
-    # cap worth ~0 in the sample weight anyway. (Issue 102)
+    # ONE label per clip — the creator's most recent verdict (Issue 444).
+    #
+    # `clip_feedback` is an append-only log with no unique constraint, so a clip
+    # rated up and later rated down contributed TWO contradictory samples: a
+    # positive and a negative with identical features, differing only in weight.
+    # That is not a signal the model can learn from, it is noise the creator
+    # explicitly retracted. A single annotator revising their own judgement is a
+    # label CORRECTION, not inter-annotator disagreement, so newest-wins is the
+    # right rule — majority-vote across a creator's own changes of mind would
+    # let a retracted opinion outvote the current one.
+    #
+    # `id` breaks created_at ties so the choice is deterministic rather than
+    # whatever the planner returns.
+    #
+    # The partition runs over _VERDICT_ACTIONS (which INCLUDES `skip`) and the
+    # trainable filter is applied afterwards. That ordering is what makes a
+    # retraction real: PUT /clips/{id}/triage back to `pending` records a
+    # `skip`, which wins the partition and then drops out at the filter, so the
+    # clip contributes no label at all. Partitioning over TRAINABLE_ACTIONS
+    # instead would let the superseded upvote survive forever — and would leave
+    # today's latent bug (a `skip` after an upvote never retracting it) in place.
+    latest_per_clip = latest_verdict_subquery(creator_id)
+
+    # Newest-first + LIMIT so a power creator with years of feedback doesn't
+    # pull the entire set into memory and into LightGBM's ndarray copy on every
+    # retrain. The 30d-half-life recency decay (preference/decay.py) makes rows
+    # past the cap worth ~0 in the sample weight anyway. (Issue 102)
+    #
+    # The cap now applies AFTER the per-clip dedup, which is the whole point:
+    # applied before, a creator who flip-flopped on a handful of clips could
+    # fill the entire budget with repeats of those few clips and starve the
+    # model of every other label they ever gave.
     result = await session.execute(
         select(ClipFeedback, Clip, ClipOutcome)
+        .join(latest_per_clip, latest_per_clip.c.feedback_id == ClipFeedback.id)
         .join(Clip, Clip.id == ClipFeedback.clip_id)
         .outerjoin(ClipOutcome, ClipOutcome.clip_id == ClipFeedback.clip_id)
-        .where(
-            ClipFeedback.creator_id == creator_id,
-            ClipFeedback.action.in_(TRAINABLE_ACTIONS),
-        )
+        .where(latest_per_clip.c.rn == 1, ClipFeedback.action.in_(TRAINABLE_ACTIONS))
         .order_by(ClipFeedback.created_at.desc())
         .limit(settings.PREFERENCE_MAX_TRAINING_LABELS)
     )

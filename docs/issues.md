@@ -2559,6 +2559,174 @@ three rulings (IoU over height-MAD, no gate re-validation, version-scoped marker
 
 ---
 
+## Lane L27 — Clip triage & upload management (Issues 444–447)
+
+**Filed 2026-08-10.** The creator reviews clips with no record of what they have already reviewed,
+and no way to manage or remove uploads at all. This is not a side quest: Keep/Drop **is** the
+channel-knowledge loop — `POST /clips/{id}/feedback` is what trains the preference model — so a loop
+the creator cannot see or trust is a loop they under-use, and it is the product's one differentiator.
+
+Owner decisions taken up front (2026-08-10): **archive by default, purge media, keep ratings**;
+four issues built in order; the Keep pile tracks a clip to a finish line (rendered → downloaded →
+published); the 72-hour source expiry becomes visible.
+
+### Issue 444: clips have no persistent triage state, and the model trains on contradictory labels
+
+**Severity: high — blocks 445/446/447 and fixes a live training-data defect.**
+
+Review state exists today **only** as an append-only `ClipFeedback` log that no read path surfaces:
+- `models.py:681-780` — `Clip` has no triage/review column. `shortlisted` is *computed*
+  (`clip_engine/ranking.py:134`, `rank <= SHORTLIST_SIZE`), not stored.
+- `routers/clips.py:59-102` — `ClipOut` exposes no feedback state, so the UI is physically incapable
+  of showing what has been rated.
+- `frontend/src/pages/Review.tsx:208` — queue position is a local `useState` index; a reload or a
+  shortlist toggle resets to clip 1 with every clip looking untouched.
+
+**The latent defect.** `preference/train.py:50-83` treats **every feedback row as a separate
+training sample** — there is no dedup by `clip_id` anywhere, and no unique constraint on
+`clip_feedback (clip_id, creator_id)`. A creator who rates a clip Keep and later changes it to Drop
+contributes **two contradictory labels**. Reversible piles (the whole point of a restorable Drop
+pile) make this dramatically worse, so it must be fixed in the same issue.
+
+**Approach.** Separate the two concerns that are currently conflated:
+- a **mutable, idempotent workflow state** on the clip (`triage`), set by `PUT /clips/{id}/triage` —
+  cheap, reversible, no retrain, no side effects; this is what pile-moving calls;
+- the existing **append-only event log** (`POST /clips/{id}/feedback`), contract untouched — still
+  carries tags/note/trim and still triggers `retrain_preference` + `distill_style_prefs`.
+
+Training then reads only the creator's **latest verdict per clip**. This is a label *correction* by
+a single annotator over time, not inter-annotator disagreement, so latest-wins is right and
+majority-vote is not.
+
+**Industry standard checked (2026-08-10):**
+- [Crunchy Data — Enums vs Check Constraints in Postgres](https://www.crunchydata.com/blog/enums-vs-check-constraints-in-postgres)
+  — recommends CHECK for a status column whose value set will grow. **We went the other way and
+  shipped a native enum:** the argument rests on `ALTER TYPE … ADD VALUE` being impossible inside a
+  transaction, which PostgreSQL 12 made false and this project targets PG16. Consistency with the
+  schema's 15+ existing enums won. Recorded in `docs/DECISIONS.md` 2026-08-10.
+- [koder.ai — Soft deletes vs hard deletes](https://koder.ai/blog/soft-deletes-vs-hard-deletes)
+  — nullable timestamp over boolean for archive; soft-delete-then-purge to reclaim storage; the real
+  cost is applying the filter **unevenly** across read paths; soft delete alone is not erasure.
+- [restfulapi.net — Idempotent REST APIs](https://restfulapi.net/idempotent-rest-apis/) ·
+  [Postman — PUT vs POST](https://blog.postman.com/put-vs-post/) — PUT for a retry-safe state
+  transition on a known URI; POST stays correct for the feedback event.
+
+**Alternatives ruled out:** deriving triage from the feedback log (every list call needs a
+latest-row-per-clip subquery, and "restore from Drop" would have to write a training label just to
+change a workflow state — exactly the bug); a native PG enum (`ALTER TYPE … ADD VALUE` is awkward
+inside Alembic's transaction and values cannot be removed or renamed); reusing `FeedbackAction` as
+the triage vocabulary (conflates a training signal with a workflow state — `skip`/`format` have no
+triage meaning, `trim` is orthogonal).
+
+**Acceptance**
+- [x] Migration `0057`: `clips.triage` as native enum `clip_triage_enum` NOT NULL DEFAULT `'pending'`; `videos.archived_at` nullable timestamptz (added now so 446 is a pure code change); bounded-CTE backfill deriving triage from the latest feedback row per clip (`upvote|trim|format` → kept, `downvote` → dropped, else pending); real `downgrade()` with `drop_column` before `DROP TYPE`
+- [x] **Native enum, reversing the plan's VARCHAR+CHECK** — the plan's premise (`ALTER TYPE … ADD VALUE` can't run in a transaction) has been false since PG12 and this project targets PG16. Recorded in `docs/DECISIONS.md`
+- [x] `server_default` is present, so the PREVIOUS image's `persist_ranked_clips` INSERT (which does not name the column) keeps working through a rolling restart
+- [x] `PUT /clips/{clip_id}/triage` is idempotent — the same body twice is a 200 no-op that writes no row, enqueues no task and fires no activation event (`test_triage_is_idempotent_and_a_repeat_is_a_total_noop`)
+- [x] Unknown state → 422; unknown field → 422 (`extra="forbid"`); another creator's clip → 404 via `get_owned`
+- [x] **A pile move records the verdict** — state and derived label commit in ONE transaction, so the pile and the model can never disagree (`test_triage_sets_the_state_and_records_the_verdict`). Owner decision 2026-08-10, reversing the plan's label-free triage
+- [x] Returning a clip to `pending` records `skip`, which supersedes the old verdict in the partition and then drops out — a real retraction, not a stale label (`test_triage_back_to_pending_records_a_retraction`)
+- [x] The `clip_kept` activation funnel survives the move to the pile board (`test_first_keep_via_triage_fires_the_activation_event`); dropping never fires it
+- [x] `POST /clips/{id}/feedback` keeps its exact contract — 201, `FeedbackOut {id, action}`, its rate limit, and the `_is_first_keep` guard — and now advances triage too, so the two surfaces cannot diverge whichever the client calls
+- [x] **Training uses only the latest verdict per clip** (`tests/test_clip_triage_integration.py::test_contradictory_feedback_yields_one_training_label`). `PREFERENCE_MAX_TRAINING_LABELS` applies AFTER the dedup; `PREFERENCE_FEEDBACK_SCAN_LIMIT` bounds the pre-dedup scan so the window function never sorts a whole history
+- [x] `format` does not supersede a verdict (render mechanics, not judgement); `skip` does (`test_choosing_a_format_does_not_supersede_a_verdict`, `test_returning_a_clip_to_pending_retracts_its_label`)
+- [x] `preference/efficacy.py` shares `latest_verdict_subquery`, so the offline NDCG measures the dataset production actually trains on and the warn-ratchet cannot fire on a phantom shift
+- [x] Retrain enqueued with `PREFERENCE_RETRAIN_DEBOUNCE_S=60` so a burst of pile moves coalesces into one model fit (`test_retrain_is_enqueued_with_a_countdown`)
+- [x] The `label_count` consequence is stated in `docs/DECISIONS.md`: counts become distinct clips, can drop below `PERSONALIZATION_THRESHOLD_LABELS = 20`, and the threshold was deliberately NOT lowered to compensate
+- [x] `ClipOut` exposes `triage`; `GET /videos/clips/counts` returns per-video `pending`/`kept`/`dropped`
+- [x] `GET /videos/{id}/clips` gained NO `triage=` filter — a filtered call would log `ClipImpression` rows for a subset at their global ranks, and the table has no column distinguishing a filtered view from the full ranked list, so the exposure record would be corrupted irreversibly. The list is capped at 100 and engine clips at 24, so the piles partition client-side for free. If 445 ever needs server-side filtering, add a `context` discriminator to `ClipImpression` FIRST
+- [x] Gates: backend 2938/0, Layer 0 all green (coverage 84.17, `preference` 90.24 vs floor 88.0)
+- [ ] Live: after deploy, `PUT /clips/{id}/triage` twice with the same body → both 200, one row state, exactly one derived `clip_feedback` row, and one retrain enqueued rather than two
+
+**Known gap, accepted rather than papered over:** a clip judged by the OLD image during the rolling
+restart gets a `clip_feedback` row but no triage update, and the one-shot backfill has already run.
+Those clips read as `pending` until re-triaged — a handful of rows in a ~30 s window.
+
+### Issue 445: three workable piles — needs review / keep / drop
+
+**Severity: high — this is the part the creator feels.**
+
+Depends on 444. The queue becomes "clips where `triage = 'pending'`", which fixes the
+reset-to-0-on-reload problem for free rather than as separate work.
+
+**Settled up front (owner, 2026-08-10):** Keep/Drop commits on the FIRST click and advances; the
+tag chips become optional post-hoc enrichment with an Undo, plus K/X keyboard shortcuts. Rationale:
+a mandatory optional field gets satisficed — twenty forced Submits produce twenty junk tags, which
+is worse for the style distiller than no tags at all.
+
+**Open design questions to settle in this issue's own CHECK phase:** where the piles live (tabs
+inside the focused one-clip-at-a-time `/review` ToolChrome flow vs a new `/library` list route —
+note `App.tsx:117`'s catch-all means a new path needs a real `Nav.tsx` entry); how a pile filter
+coexists with the Issue-377 shortlist toggle (`Review.tsx:231-249`); whether Keep/Drop should still
+open the tag panel every time (`components/review/YourCall.tsx:139-143` — the interaction performed
+dozens of times per video); and whether to introduce this codebase's **first** optimistic-update
+pattern (`grep -r 'onMutate|setQueryData|cancelQueries' frontend/src` returns zero hits today)
+without regressing Issue 437's honest-failure contract.
+
+**Acceptance**
+- [ ] Three piles, each independently workable: review the unreviewed, restore or purge the dropped,
+      export or un-keep the kept
+- [ ] Reviewed clips stay visibly reviewed across a reload; the queue resumes where it left off
+- [ ] Moving a clip between piles keeps the model in step — it records the new verdict rather
+      than stacking a contradiction, so the pile and the model never disagree (Issue 444
+      `PUT /clips/{id}/triage`; owner decision 2026-08-10 reversed the original label-free plan)
+- [ ] The Dashboard badge counts pending-triage clips and decrements as you rate — replacing the
+      `counts[].rendered` sum at `pages/Dashboard.tsx:108`; the test pinning the old wrong behaviour
+      (`pages/Dashboard.test.tsx:169`) is updated with a note on why it changed
+- [ ] Per-video review progress is visible ("5 of 12 reviewed")
+- [ ] `docs/UI.md` status-token contract honoured; exactly one `data-elevation="primary"` panel; no
+      native form controls; no glyph icons; keyboard-operable
+
+### Issue 446: manage, archive, and delete uploads — and close the render erasure gap
+
+**Severity: high — includes a live right-to-erasure defect.**
+
+There is no `DELETE /videos/{id}`; the only DELETE routes in the whole API are `/auth/me` and
+API keys. Archive sets `videos.archived_at`, hides the video from the library, and purges its media
+while **preserving `ClipFeedback`** so the preference model does not lose its training labels.
+A separate, explicitly-worded "erase permanently" removes the rows.
+
+**The gotcha that is also a bonus fix.** Renders are written **non-creator-scoped** —
+`clips/{clip_id}.mp4` (`worker/tasks.py:2538`), `clips/{clip_id}_clean.mp4` (:2810),
+`clips/{clip_id}_edit.mp4` (:2900) — so `delete_prefix` cannot reach them. This is not only a 446
+problem: `erase_creator` purges `clips/{creator_id}/` (`routers/auth.py:486-495`), which **matches
+nothing**, so **account deletion today leaves every rendered clip in R2**. The code comment says so.
+The per-clip URI enumeration this issue needs is exactly the primitive that closes it.
+
+**Acceptance**
+- [ ] Archive/restore a video from `VideoTable`; archived videos leave the library
+- [ ] `archived_at IS NULL` applied to EVERY read path — `GET /videos`, `GET /videos/catalog`,
+      `GET /videos/clips/counts`, the Dashboard and Profile aggregates, the data-export job
+      (`worker/tasks.py:4876`), and the backfill/purge beat tasks. Enumerated by 444, audited here
+- [ ] Media purge enumerates per-clip URIs from the DB (not `delete_prefix`) and reuses the
+      `_purge_stale_source_media_async` posture (`worker/tasks.py:3983-4066`): release the session
+      before I/O, delete each blob independently, null only what succeeded
+- [ ] Archiving does **not** delete `ClipFeedback`; "erase permanently" says plainly that it does
+- [ ] `erase_creator` is wired to the same per-clip enumeration — account deletion actually removes
+      renders. `docs/COMPLIANCE.md` updated; the known-gap note at `routers/auth.py:486-489` removed
+- [ ] The 72-hour source expiry is visible per video: time remaining, and an explicit
+      "can no longer be re-rendered" state once `source_uri IS NULL` (today the only signal is a
+      409 `source_expired` at render time, `routers/clips.py:841-854`)
+
+### Issue 447: the Keep pile needs a finish line
+
+**Severity: medium — "where do my approved clips end up?"**
+
+`render_status` and `ClipPublication` already carry two thirds of it. The gap: **a download is a
+302 to a presigned URL with no server-side record** (`routers/clips.py:1854-1895`), so "did I
+already download this?" is unanswerable. Download and publish both exist but are buried in the
+review card (`YourCall.tsx:212-224`) and the long-form Export panel
+(`components/editor/LongFormEditor.tsx:317-353`).
+
+**Acceptance**
+- [ ] Each kept clip shows where it is: rendered → downloaded → published
+- [ ] Decide with evidence whether a download needs a server-side record (a column) or can be
+      inferred; if a column, justify it against simply reading `ClipPublication`
+- [ ] Download and schedule-publish are reachable from the Keep pile, not only from the review card
+- [ ] No surface promises virality or reach (structural test stays green)
+
+---
+
 ## Source index
 
 Collected from the 2026-08-03 research pass. Cited inline above; listed here so a future pass can
@@ -2632,4 +2800,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **444**.
+- Next free issue number: **448**.

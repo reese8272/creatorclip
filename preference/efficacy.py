@@ -429,22 +429,29 @@ async def load_labeled_clips(session: AsyncSession, creator_id: uuid.UUID) -> li
 
     Mirrors preference.train.build_and_save's query: trainable feedback joined to its clip and
     (optionally) its outcome. Graded relevance comes from the outcome/action; skip is excluded.
+
+    Issue 444 — it shares build_and_save's ``latest_verdict_subquery`` so both see ONE label per
+    clip. Keeping its own un-deduped query would make the offline NDCG measure a dataset production
+    never trains on, and the warn-ratchet would then fire on a phantom shift.
     """
     from sqlalchemy import select
 
     from config import settings
     from models import Clip, ClipFeedback, ClipOutcome
     from preference.features import clip_features
+    from preference.train import latest_verdict_subquery
 
     # Bounded like train.py's training query (Issue 102): newest-first + LIMIT
     # so a power creator with years of feedback doesn't pull the entire join
     # into the per-retrain harness (which also runs O(n²) tau on the eval
     # split). Rows are re-sorted ascending below for the chronological split.
+    latest = latest_verdict_subquery(creator_id)
     result = await session.execute(
         select(ClipFeedback, Clip, ClipOutcome)
+        .join(latest, latest.c.feedback_id == ClipFeedback.id)
         .join(Clip, Clip.id == ClipFeedback.clip_id)
         .outerjoin(ClipOutcome, ClipOutcome.clip_id == ClipFeedback.clip_id)
-        .where(ClipFeedback.creator_id == creator_id)
+        .where(latest.c.rn == 1)
         .order_by(ClipFeedback.created_at.desc())
         .limit(settings.PREFERENCE_MAX_TRAINING_LABELS)
     )

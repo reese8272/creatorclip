@@ -17,7 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import IngestStatus, OnboardingState, RenderStatus, Signals, VideoKind, VideoOrigin
+from models import (
+    ClipTriage,
+    IngestStatus,
+    OnboardingState,
+    RenderStatus,
+    Signals,
+    VideoKind,
+    VideoOrigin,
+)
 from tests._helpers import owned_result
 
 
@@ -90,6 +98,7 @@ def _mock_clip(creator_id, video_id):
     c.rank = 1
     c.signals_jsonb = {"principle": "setup-first", "reasoning": "ok"}
     c.render_status = RenderStatus.done
+    c.triage = ClipTriage.pending
     c.render_uri = "r2://clip.mp4"
     c.cleaned_render_uri = None
     c.applied_title = None

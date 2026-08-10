@@ -287,11 +287,12 @@ def test_list_clips_no_clips_no_signals_row_returns_no_signal(client):
 
 def test_list_clips_with_clips_has_no_skip_reason(client):
     """GET /videos/{id}/clips with existing clips → skip_reason is None."""
-    from models import Clip, RenderStatus
+    from models import Clip, ClipTriage, RenderStatus
 
     creator = _creator()
     video = _video(creator.id)
     clip = MagicMock(spec=Clip)
+    clip.triage = ClipTriage.pending
     clip.id = uuid.uuid4()
     clip.video_id = video.id
     clip.creator_id = creator.id

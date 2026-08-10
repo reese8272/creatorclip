@@ -24,7 +24,7 @@ from auth import get_current_creator
 from config import settings
 from db import get_session
 from main import app
-from models import Creator, IngestStatus, RenderStatus, Signals, Video
+from models import ClipTriage, Creator, IngestStatus, RenderStatus, Signals, Video
 from tests._helpers import override_current_creator, owned_lookup_result
 
 # ── score_and_rank exclude_windows ───────────────────────────────────────────
@@ -190,6 +190,7 @@ def _clip_stub(
     c.rank = rank
     c.signals_jsonb = {"principle": "Hook in the first 3 seconds", "reasoning": "x"}
     c.render_status = RenderStatus.pending
+    c.triage = ClipTriage.pending
     c.render_uri = None
     c.cleaned_render_uri = None
     c.applied_title = None

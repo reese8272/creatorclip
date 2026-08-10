@@ -4,6 +4,46 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-10 (later still) — Lane L27 opened; Issue 444 CLOSED: clips have a triage state
+
+**New lane L27 — Clip triage & upload management (Issues 444–447)**, filed 2026-08-10 after the
+owner named the actual friction: reviewing clips with no record of what was already reviewed, and
+no way to manage or remove uploads at all. Owner decisions taken up front: archive-by-default
+(purge media, KEEP ratings), four issues in order, the Keep pile tracks a clip to a finish line,
+and the 72-hour source expiry becomes visible.
+
+**Issue 444 shipped** — `clips.triage` (`pending`/`kept`/`dropped`) + `videos.archived_at` in
+migration `0057`, `PUT /clips/{id}/triage`, triage on `ClipOut` and in `/videos/clips/counts`, and
+the training-label fix.
+
+**The defect it fixed was already live.** `preference/train.py` treated every `clip_feedback` row
+as a separate training sample with no dedup anywhere, so a clip rated up and later rated down
+contributed a positive AND a negative with identical features. Training now keeps **one label per
+clip — the newest verdict**. Proven in `tests/test_clip_triage_integration.py` against real
+Postgres (the dedup is a window function, so a mocked session cannot see it).
+
+**Two reversals of the approved plan, both recorded in `docs/DECISIONS.md` 2026-08-10:**
+1. **Native PG enum, not VARCHAR + CHECK.** The plan's premise — `ALTER TYPE … ADD VALUE` can't run
+   in a transaction — has been false since PG12, and this project targets PG16. With the premise
+   gone, consistency with the schema's 15+ existing enums won.
+2. **A pile move records a verdict.** The plan had triage write no label; that would have let a
+   Drop→Keep restore leave the model still believing "dropped". State and derived label now commit
+   in one transaction. Safe *because* of the dedup — before it, this would have stacked
+   contradictions. Owner decision.
+
+**Consequence to expect on deploy:** `PersonalizationStatus.labels` counts **distinct clips
+judged** now, not feedback rows, so it can drop for a creator who has re-reviewed clips — possibly
+below the threshold of 20, flipping personalization to inactive. That is the honest number;
+`PERSONALIZATION_THRESHOLD_LABELS` was deliberately not lowered to hide it.
+
+**Gates:** backend **2938/0** · Layer 0 all green (ruff/mypy/bandit/pip-audit 0, coverage 84.17,
+`preference` 90.24 vs floor 88.0, `clip_engine` 92.79 vs 91.0).
+
+**Still open on 444:** the live box only — after deploy, confirm a repeated `PUT …/triage` is a
+genuine no-op (one row state, one derived feedback row, one retrain rather than two).
+
+---
+
 ## 2026-08-10 (later) — Issue 443 CLOSED: the video-level region is a per-window consensus
 
 **The fresh-upload blocker is cleared.** `detect_video_camera_region` no longer runs one variance

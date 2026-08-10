@@ -161,6 +161,36 @@ class InsightType(enum.Enum):
     recommendation = "recommendation"
 
 
+class ClipTriage(enum.Enum):
+    """The creator's CURRENT verdict on a clip (Issue 444) — a mutable,
+    reversible workflow state, deliberately not an append-only event.
+
+    A native PG enum, matching every other status column in this schema. The
+    usual argument for VARCHAR+CHECK — that `ALTER TYPE … ADD VALUE` cannot run
+    inside a transaction — has been false since PostgreSQL 12, and this project
+    targets PG16. What remains true is that a value can never be *removed* or
+    *renamed* cleanly; that risk is bounded here because the taxonomy is a fixed
+    three piles and the export finish line is modelled on its own column rather
+    than as extra triage values.
+    """
+
+    pending = "pending"  # not yet judged — the default pile, i.e. the review queue
+    kept = "kept"
+    dropped = "dropped"
+
+
+# Which triage state a feedback action implies, for the one place a rating and a
+# verdict are recorded together. `skip` is absent on purpose: skipping is not a
+# verdict, so the clip stays in the queue. `format` is absent too — choosing an
+# aspect ratio is render mechanics, not a judgement, so it must not silently
+# promote a clip out of the queue. Mirrors the 0057 backfill.
+TRIAGE_BY_FEEDBACK_ACTION: dict[FeedbackAction, ClipTriage] = {
+    FeedbackAction.upvote: ClipTriage.kept,
+    FeedbackAction.trim: ClipTriage.kept,
+    FeedbackAction.downvote: ClipTriage.dropped,
+}
+
+
 # ── Core entities ─────────────────────────────────────────────────────────────
 
 
@@ -380,6 +410,17 @@ class Video(Base):
         default=lambda: datetime.now(UTC),
     )
     ingest_done_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+    )
+    # Soft-delete marker (Issue 444 schema, Issue 446 behaviour). NULL = active.
+    # A timestamp rather than a boolean so restore and audit both know WHEN.
+    # Archiving hides the video and frees its media but deliberately PRESERVES
+    # the clips and their clip_feedback rows — those are the preference model's
+    # training labels, and losing them would silently degrade personalization.
+    # This is NOT an erasure mechanism: an archived row still holds creator data,
+    # so DELETE /auth/me remains the right-to-erasure path.
+    archived_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=True,
     )
@@ -733,6 +774,26 @@ class Clip(Base):
         default=RenderStatus.pending,
     )
     rank: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    # The creator's CURRENT verdict — a mutable, reversible workflow state, not a
+    # training event (Issue 444, migration 0057). `pending` = still in the review
+    # queue; `kept`/`dropped` = triaged, and freely moved back and forth.
+    #
+    # Deliberately separate from `clip_feedback`: that log is append-only and
+    # every row is a training sample, so routing pile-moves through it left an
+    # upvote and a later downvote of the same clip BOTH in the training set.
+    # Setting triage writes no label and triggers no retrain; recording a verdict
+    # with tags/notes still goes through POST /clips/{id}/feedback.
+    #
+    # `server_default` is load-bearing, not decoration: during a rolling restart
+    # the PREVIOUS image's persist_ranked_clips INSERT does not name this column,
+    # so without a database-side default that INSERT would violate NOT NULL and
+    # clip generation would 500 for the whole restart window.
+    triage: Mapped[ClipTriage] = mapped_column(
+        sa.Enum(ClipTriage, name="clip_triage_enum"),
+        nullable=False,
+        default=ClipTriage.pending,
+        server_default=ClipTriage.pending.value,
+    )
     # Render style chosen by the creator in the review UI (Issue 119).
     # JSONB: {subtitle: "white_large"|"yellow_impact"|"captions_sm"|null,
     #         background: "blur"|"black"|"brand"|null, captions_enabled: bool}

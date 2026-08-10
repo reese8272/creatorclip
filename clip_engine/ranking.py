@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from clip_engine.candidates import extract_candidates
 from clip_engine.scoring import score_candidates
 from clip_engine.sentence_snap import snap_candidates_to_sentences
-from models import Clip, ClipFormat, RenderStatus
+from models import Clip, ClipFormat, ClipTriage, RenderStatus
 
 logger = logging.getLogger(__name__)
 
@@ -434,6 +434,10 @@ def _new_clip_row(video_id: uuid.UUID, creator_id: uuid.UUID, c: dict, rank: int
         format=ClipFormat.short,
         render_status=RenderStatus.pending,
         rank=rank,
+        # Explicit, like render_status: column defaults apply at FLUSH time, so
+        # an unflushed row would read `triage = None`. Every engine clip starts
+        # in the review queue (Issue 444).
+        triage=ClipTriage.pending,
     )
 
 
