@@ -388,6 +388,13 @@ class Video(Base):
     # recompute it freely. NULL = unresolved (older video, detection declined, or
     # the flag was off at ingest) → the render path falls back to per-clip detection.
     camera_region_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Issue 448 — when a transient overlay (a livestream superchat) sits INSIDE
+    # the camera region, the region crop cannot exclude it, so the render masks
+    # it instead. Separate from `camera_region_jsonb` on purpose: that column is
+    # a nine-window median kept on a strict majority and is deliberately blind
+    # to transients (Issue 443); this one records exactly those transients.
+    # NULL = no masking, which is the pre-448 behaviour.
+    overlay_spans_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     origin: Mapped[VideoOrigin] = mapped_column(
         sa.Enum(VideoOrigin, name="video_origin_enum"),
         nullable=False,

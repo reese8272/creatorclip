@@ -2783,16 +2783,41 @@ the affected span, (b) letterbox/blur the band, or (c) surface it as a flagged c
 can re-cut. Option (c) is cheapest and matches the honesty constraint. Note the render's crop is
 a single static `crop=` for the whole clip today, so (a) is a real architectural change.
 
+**Status: DONE (2026-08-11)** — backend **2960/0**, eval 25 scenarios / 100%, Layer 0 clean.
+Design rulings in `docs/DECISIONS.md` 2026-08-11.
+
+**What shipped**
+- `clip_engine/overlay_bands.py` — detection over the whole source at ingest, reusing
+  `camera_region`'s samplers and analysis-to-source scaling. Feature: per frame, rows in the
+  lower 40 % whose mean exceeds *that frame's own* lower-region median by 25. Fixture separation
+  is 14-20 clean vs 26-28 band; the threshold sits between.
+- Migration **`0058`** — `videos.overlay_spans_jsonb`, additive nullable JSONB (Template A, no
+  offline-mode branch needed). `OVERLAY_SPANS_VERSION` carries the same bump-on-semantic-change
+  contract as `VIDEO_REGION_VERSION`.
+- Ingest resolves it with the same never-fails-ingest posture as the camera region; the existing
+  hourly sweep backfills it, sharing ONE source download rather than paying egress twice.
+- `clip_engine/render.py` inserts `split` -> `crop` -> `boxblur` -> `overlay` with
+  `enable='between(t,…)'` FIRST in the chain, in absolute source pixels, so the region pre-crop
+  and the 9:16 crop carry the masked pixels through by construction.
+- `OVERLAY_BAND_DETECT_ENABLED` (default false) in `config.py` + `.env.example`.
+
 **Acceptance**
-- [ ] A clip whose region contains a transient overlay for part of its span does not ship it
-      burned in without the creator knowing
-- [ ] The chosen mechanism is proven on **both** rank 3 (overlay at the end) and rank 13 (overlay
-      over the opening hook) of `7e988321` — they are different placements and a start-of-clip
-      overlay may deserve different handling from an end-of-clip one (source expires
-      **2026-08-13 19:23 UTC** — after that these exact cases are unreproducible)
-- [ ] Whatever is chosen, `detect_video_camera_region`'s consensus is NOT loosened to chase it —
-      the median's outlier rejection is correct and load-bearing (Issue 443)
-- [ ] No regression on the 8 clean clips of this upload
+- [x] A clip whose region contains a transient overlay does not ship it burned in — **proven on
+      the real source**: rank 3 re-rendered through the production filter chain, masked from
+      72.78 s to the clip end, donor name/amount/message unreadable, framing and captions
+      untouched. Clean before the span at t=70 s
+- [x] Proven on both placements: rank 3 (11.6 s at the end) and rank 13 (25.3 s from frame one).
+      The mask is one time-gated overlay, so start-of-clip and end-of-clip need no special-casing
+- [x] `detect_video_camera_region` is untouched — this is a separate module and a separate
+      column, precisely because 443's outlier rejection is correct and load-bearing
+- [x] No regression on clean clips: `test_no_overlay_mask_is_byte_identical` asserts a clip that
+      misses every span renders the exact vf string it renders today, and all pre-existing
+      render/camera-region tests pass unchanged
+- [x] Detector unit-tested on the frozen fixtures — both transitions land on the measured
+      seconds (885 / 1006) and the clean control produces no run
+- [x] The emitted graph is compiled by real ffmpeg in CI, not just string-matched
+- [ ] Live: re-render rank 3 and rank 13 through the deployed pipeline with
+      `OVERLAY_BAND_DETECT_ENABLED=true`. **Source expires 2026-08-13 19:23 UTC**
 
 ### Issue 449: `snap_start`'s inter-sentence-pause exemption bypasses the Issue-441 weak-opener guard
 

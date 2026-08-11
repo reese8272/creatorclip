@@ -473,6 +473,22 @@ class Settings(BaseSettings):
     # Padding added around the detected region, per side, as a frame fraction.
     CAMERA_REGION_PAD_FRAC: float = 0.02
 
+    # ── Transient overlay bands (Issue 448) ─────────────────────────────────
+    # A livestream superchat is drawn ON TOP of the camera feed, so it lands
+    # inside the camera region and the region crop cannot exclude it — two of
+    # nine rendered clips on the first audited upload shipped with a stranger's
+    # donation banner burned in. Detected once per video at ingest and masked
+    # by a time-gated blur at render.
+    #
+    # NOT a knob on CAMERA_REGION_*: that pass takes a nine-window median kept
+    # on a strict majority (Issue 443) and is deliberately blind to transients,
+    # which is what makes it correct. This is the opposite measurement.
+    #
+    # Fail-open like its sibling: a signal that is not sustained and clearly
+    # separated produces no mask at all, because a false positive blurs a
+    # speaker's face in an otherwise good clip.
+    OVERLAY_BAND_DETECT_ENABLED: bool = False
+
     # Persisted clips per video (post-dedup, post-trim). 8 → 12 (2026-08-05,
     # user directive): one ingest, wider option set — feedback on un-rendered
     # clips still trains the preference model, so more options = better DNA
