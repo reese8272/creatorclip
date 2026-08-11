@@ -84,9 +84,14 @@ Issue 450.**
 34-second shot of the wrong person*. The numbers were right and the conclusion was too narrow.
 440's live box is now split: motion criteria verified, framing correctness failed.
 
-Root cause is upstream of 440, which behaved as designed: the track has `speakers.count = 1` and
-`mapping_confidence = 0.045`, and `hold_seats` returns `None` when `len(tracks) < 2`, so the
-multi-seat hold never engaged and the pan planner held the single detected face. The tradeoff
+**Root cause is not yet established, and an earlier claim here was withdrawn.** This entry first
+stated that `hold_seats` bailed at `len(tracks) < 2` — inferred from `speakers.count = 1`, which is
+the **diarized-speaker** count, not the face-track count. Nothing recorded answers which branch
+ran: the track JSON never stores `len(tracks)`, the summary log doesn't either, and that log is
+gone. `keyframes=1, cuts=0` fits both `hold_seats` (dominant seat won its per-span vote, where the
+vote is over the **largest face**, not the speaking one) and the `plan_pan_holds` fallback.
+Settling it needs a detection re-run against the source before **2026-08-13 19:23 UTC**. The
+tradeoff
 `reframe.py:900-904` states outright — *"a still frame on the wrong person is far cheaper than a
 cut to the wrong person, and stillness is what the creator asked for"* — has now been **falsified
 by the creator it was made for**. Do not fix it by reverting to sweeping.

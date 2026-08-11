@@ -2848,14 +2848,40 @@ t = 758 / 768 / 780 s all show the right seat (Rio) mid-sentence, mouth open, le
 mic, and the left seat (Carter) silent and looking down. Deepgram attributes **all 31.0 s** of
 speech inside the window to a single speaker.
 
-**Root cause is upstream of Issue 440, which behaved exactly as designed.** The track records
-`speakers.count = 1` and `mapping_confidence = 0.045`, far under
-`REFRAME_MIN_MAPPING_CONFIDENCE = 0.2`. `hold_seats` (`clip_engine/reframe.py:884`) opens with
-`if len(tracks) < 2: return None`, so with one face track the **multi-seat hold logic never
-engaged at all** — the clip fell through to `plan_pan_holds`, which correctly held on the one face
-it had. 440 made this rung stop sweeping; it did not, and was never meant to, make it pick the
-right seat. Other clips on this same video (ranks 4/6/7) reached `speaker_cut` with two speakers,
-so both faces *are* detectable in general — the detector found only one across this window.
+**Which branch produced this is UNDETERMINED — settle it before fixing anything.** *(Corrected
+2026-08-10: an earlier revision of this issue asserted that `hold_seats` bailed at
+`if len(tracks) < 2: return None`. That was inferred from `speakers.count = 1` in the stored
+track, but that field is `speaker_count = len({t.speaker for t in turns})` — the number of
+**diarized speakers**, not face tracks. The claim was unverified and has been withdrawn.)*
+
+No recorded artifact answers it. The track JSON (`_build_track_json`, `reframe.py:1015`) stores
+`keyframes`, `cuts`, `shots` and `speakers`, and **never the face-track count**; the summary log
+line at `reframe.py:1259` logs `speakers=`/`confidence=`/`coverage=` but not `len(tracks)` — and
+that log is gone regardless (worker retention starts 2026-08-10 20:42; rank 1 rendered ~19:2x).
+The observed `keyframes = 1, cuts = 0, shots = 0` is consistent with **both** paths:
+
+1. **`hold_seats` ran** — one shot span, and the dominant seat won the per-span vote; or
+2. **`hold_seats` returned `None`** at one of its three gates (`len(tracks) < 2`, seats collapsing
+   to one framing under `crop_w`, or the simultaneous-occupancy check) and the clip fell through
+   to `plan_pan_holds`, which held the largest face.
+
+**If (1), the defect is the vote itself.** The per-span choice is
+`Counter(_nearest_seat(obs[0].cx) ...)`, and `obs[0]` is the **largest** detected face (cf.
+`_raw_track_largest_face` directly below it) — so "dominant seat" means *the seat that was the
+biggest face in the most samples*, a quantity uncorrelated with who is talking. Whoever sits
+closer to their camera wins the whole clip.
+
+**If (2), the defect is upstream** in whichever gate rejected the two-shot, and fixing the vote
+would be fixing the wrong function.
+
+Either way **Issue 440 behaved exactly as designed** — it made this rung stop sweeping; it never
+claimed to pick the right seat. Ranks 4/6/7 of this same video reached `speaker_cut` with two
+speakers, so both faces are detectable in general.
+
+**Settling it is time-boxed.** The only way is to re-run `build_face_tracks` + `_seat_hold_plan`
+over the window `[754.62, 789.17]` against the source, which purges **2026-08-13 19:23 UTC**.
+Note `mediapipe` is absent from the local venv (only `cv2` 4.13.0), so this must run in the app
+container — the `scripts/clip_audit.py` stdin pattern is the shape to copy.
 
 **The accepted tradeoff is now falsified.** `reframe.py:900-904` justifies the hold with *"a still
 frame on the wrong person is far cheaper than a cut to the wrong person, and stillness is what the
@@ -2870,17 +2896,20 @@ standing condition for this creator, not a one-off), and if a second seat cannot
 prefer a wider framing that contains both seats over a tight crop on an arbitrary one.
 
 **Acceptance**
-- [ ] CHECK phase establishes why the second face track is missing on this window — detector
-      confidence, hat/sunglasses occlusion, or track-lifetime pruning — with evidence, before any
-      fix is chosen
+- [ ] **FIRST:** establish which branch ran (`hold_seats` vs the `plan_pan_holds` fallback) by
+      re-running detection over `[754.62, 789.17]` in the app container, capturing the track count,
+      the collapsed seat list, the occupancy-gate result and the per-span `Counter`. Everything
+      below depends on the answer. **Deadline 2026-08-13 19:23 UTC**
 - [ ] Rank 1 of `7e988321` specifically no longer frames the silent participant (source expires
       **2026-08-13 19:23 UTC**; capture the frames needed to build a fixture before then)
 - [ ] When a two-shot yields only one usable seat, the fallback framing is justified in
       `docs/DECISIONS.md` against both alternatives (tight-on-the-one-face vs contain-both)
 - [ ] Issue 440's motion guarantees are preserved — no return to sweeping, no per-utterance
       cutting on this rung (both rejected with evidence)
-- [ ] An eval fixture encodes "holds the speaking seat", so this class is caught by the harness
-      rather than by the creator
+- [ ] A regression test encodes "holds the speaking seat", so this class is caught in CI rather
+      than by the creator. Note this belongs in `tests/test_reframe_planner.py` /
+      `tests/test_speaker_map.py`, **not** `tests/eval/scenarios/` — that harness covers clip-window
+      geometry (setup-before-peak, overlap, openers), not framing
 
 ---
 
