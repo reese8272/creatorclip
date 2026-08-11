@@ -4,6 +4,47 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-11 — Issue 26 CLOSED: the OAuth consent screen is configured and live-verified
+
+**The last hard blocker before the friend beta is now #28 alone.** #26 was configured on the
+current "Google Auth Platform" console UI (the old single OAuth-consent-screen page is gone):
+Branding, Audience, Clients and Data Access.
+
+**Verified from the live app, not the console** — `GET /auth/login` 302s to `accounts.google.com`
+carrying `client_id=742666675967-…`, `redirect_uri=https://autoclip.studio/auth/callback`
+(character-exact) and precisely the five scopes the code requests — `openid`, `userinfo.email`,
+`userinfo.profile`, `youtube.readonly`, `yt-analytics.readonly` — with **no `youtube.upload`**.
+A live OAuth round trip then advanced `youtube_tokens.updated_at` from `2026-08-10 23:36:45` to
+`2026-08-11 18:29:58`, still 5 scopes, with `creators` unchanged at 6 (existing row reused, not
+duplicated). Protected routes 401 without a session. Cross-creator isolation re-verified live:
+`creatorclip_app`, `BYPASSRLS=false`, tenant tables return **0 rows with the `app.creator_id` GUC
+unset** and **0 foreign rows** per creator.
+
+**The archived issue body was wrong on two points, both corrected:**
+1. It said to register "exactly the four read-only scopes". The code requests **five** —
+   `openid` is in `SCOPES` too.
+2. It said to name the app **CreatorClip**. Every user-facing surface — the live page title, the
+   ToS, the privacy policy, the landing brand — says **AutoClip**, and the consent screen is what
+   beta users read. Registered as AutoClip; consistency with the domain and policy pages is also
+   what Google checks at Stage-B verification (#29).
+
+**`docs/GO_LIVE.md` corrected in the same pass.** The Stage-A totals paragraph still named #282
+uptime monitoring a blocker "which the 2026-07-29 31-hour silent outage proved beta-critical" —
+contradicting #282's own row, corrected 2026-07-31, which records that the outage was an
+**intentional owner poweroff** and explicitly retracts the beta-critical framing. Stale sentence
+removed. Stage A is now **16 GREEN / 6 CODE-GREEN / 10 OPEN**.
+
+`docs/ACCESS.md` also updated — its console path pointed at the retired UI.
+
+**Residual on #26:** the ≥2-test-user count was never confirmed by the operator. If it is
+currently just the owner, a friend must be added before #28 can run.
+
+**Known and accepted (documented in `docs/ACCESS.md`):** Testing mode expires each tester's
+connection after **7 days**, so beta friends re-click "Connect YouTube" weekly. Removing that
+means Google verification (#29), a Stage-B gate.
+
+---
+
 ## 2026-08-10 (latest) — Fresh-upload audit: 438/440/443 VERIFIED, 441 half-failed, two new issues
 
 **Video `7e988321-2265-4e22-85bd-0e9ffd583f84`** ("2026-08-05 07-59-55", Backboard Media, 12 clips /

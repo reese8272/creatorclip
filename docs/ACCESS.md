@@ -35,9 +35,18 @@ in Issue 146 — deploy/migration steps there were stale; for those follow
 [`docs/BRANCHING.md`](BRANCHING.md) + [`docs/DEPLOYMENT.md`](DEPLOYMENT.md).)
 
 **1 — Add testers (OAuth "Testing" mode).** The Google app is in **Testing** mode, which
-only lets explicitly-listed accounts in. Google Cloud Console → **APIs & Services → OAuth
-consent screen → Test users → + Add users**; add each tester's Google account email (the
-one tied to their YouTube channel), up to 100. Save.
+only lets explicitly-listed accounts in. Google Cloud Console →
+[**Google Auth Platform → Audience**](https://console.cloud.google.com/auth/audience) →
+**Test users → + ADD USERS**; add each tester's Google account email (the one tied to their
+YouTube channel), up to 100. Save.
+
+> **Console UI note (updated 2026-08-11):** the old single "APIs & Services → OAuth consent
+> screen" page is gone on this project. The consent screen is now split across **Branding**
+> (app name, domain, policy links), **Audience** (user type, publishing status, test users),
+> **Clients** (redirect URIs) and **Data Access** (scopes). The app name registered there is
+> **AutoClip**, matching the domain and the policy pages — *not* the internal repo name
+> "CreatorClip". Do not click **PUBLISH APP** on the Audience page: that moves the app out of
+> Testing into production and is a Stage-B decision (#29/#30), not a beta one.
 
 > ⚠️ **7-day expiry caveat:** in Testing mode Google expires each tester's connection
 > after **7 days** — they must re-click "Connect YouTube" weekly. For a short beta that's
