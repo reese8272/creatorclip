@@ -2743,16 +2743,26 @@ before this upload.
 
 **Severity: high — visible, burned in, on a delivered clip; recurs on every livestream source.**
 
-**Two of nine rendered clips are affected — this is not a one-off.** Measured by sampling the
-bottom 200 px at 2 Hz across every rendered clip:
-- **Rank 3** — `@Drew-l6j $1.99 / "Worried they're gonna bench Mikey"` across the **final 11.5 s**
-  (73.0 → 84.4 s of an 84.4 s clip), running to the clip's end.
-- **Rank 13** — `@jacobcortes93` across the **opening 5.0 s** (0.0 → 4.5 s), i.e. burned into the
-  hook, the most damaging possible placement. Found 2026-08-10 23:45 UTC when the creator rendered
-  this clip; it is also the clip they **kept**.
+**Measured against the source, 2026-08-11 (supersedes the first estimate — see below).** A 1 Hz
+scan of all 1617 s of source found a superchat present in **two spans — 885–914 s (30 s) and
+930–1006 s (77 s) — 107 s total, 6.6 % of the runtime.**
 
-Ranks 1, 2, 4, 5, 6, 7, 8 are clean. A superchat lands wherever it lands, so the base rate here is
-**~22% of rendered clips**, and the two hits bracket the clip (end and start).
+Two of the nine rendered clips overlap those spans:
+- **Rank 3** — `@Drew-l6j $1.99 / "Worried they're gonna bench Mikey"` for **11.6 s (13.8 % of the
+  clip)**, running to the clip's end.
+- **Rank 13** — `@jacobcortes939 $1.99 / "how did the center position look"` for **25.3 s (28.1 %)**,
+  starting at frame one, so it is burned into the hook. It is also the clip the creator **kept**.
+
+Ranks 1, 2, 4, 5, 6, 7, 8 are clean, as are the four unrendered clips.
+
+⚠️ **The first revision of this issue said rank 13 carried the band for 5.0 s. That was wrong —
+it is 25.3 s.** The original figure came from scanning the *rendered* clip for cyan pixels in the
+bottom 200 px, which caught only the portion where the banner sat in that strip at that hue. Two
+lessons, both now encoded in `tests/fixtures/superchat/README.md`: measure on the **source**, and
+do not key on colour. Rank 3's 11.5 s estimate was close (11.6 s actual).
+
+**Never measure this on a rendered clip.** The burned-in captions are themselves a bright
+lower-frame band; a rendered-clip scan on 2026-08-11 flagged ranks 1 and 6, both visually clean.
 
 **This is not a regression of 439 or 443 — the region is correct.** The stored consensus rect is
 `(169, 326, 1704, 551)`, height fraction **0.5102**, from 9 windows detected with 8 agreeing. A
@@ -2848,40 +2858,36 @@ t = 758 / 768 / 780 s all show the right seat (Rio) mid-sentence, mouth open, le
 mic, and the left seat (Carter) silent and looking down. Deepgram attributes **all 31.0 s** of
 speech inside the window to a single speaker.
 
-**Which branch produced this is UNDETERMINED — settle it before fixing anything.** *(Corrected
-2026-08-10: an earlier revision of this issue asserted that `hold_seats` bailed at
-`if len(tracks) < 2: return None`. That was inferred from `speakers.count = 1` in the stored
-track, but that field is `speaker_count = len({t.speaker for t in turns})` — the number of
-**diarized speakers**, not face tracks. The claim was unverified and has been withdrawn.)*
+**SETTLED 2026-08-11 — `hold_seats` RAN, and the defect is its vote.** Measured in the app
+container against the source before it purged; full numbers in
+`tests/fixtures/reframe_seats/README.md`:
 
-No recorded artifact answers it. The track JSON (`_build_track_json`, `reframe.py:1015`) stores
-`keyframes`, `cuts`, `shots` and `speakers`, and **never the face-track count**; the summary log
-line at `reframe.py:1259` logs `speakers=`/`confidence=`/`coverage=` but not `len(tracks)` — and
-that log is gone regardless (worker retention starts 2026-08-10 20:42; rank 1 rendered ~19:2x).
-The observed `keyframes = 1, cuts = 0, shots = 0` is consistent with **both** paths:
+| Quantity | Value |
+|---|---|
+| `len(tracks)` | **2** — gate 1 passed, it did not bail |
+| track `median_cx` | **381.2** and **1257.5** (region space, width 1704) |
+| `crop_w` | 309 — seats 876 px apart, so no collapse to one framing |
+| occupancy gate | passed (most sampled frames detect 2 faces) |
+| `_seat_hold_plan` | **1 hold point at x = 381**, 0 cuts |
+| `n_speakers` / `coverage` | **1** / **1.0** |
+| `mapping.confidence` | **0.084** vs `REFRAME_MIN_MAPPING_CONFIDENCE = 0.2` |
 
-1. **`hold_seats` ran** — one shot span, and the dominant seat won the per-span vote; or
-2. **`hold_seats` returned `None`** at one of its three gates (`len(tracks) < 2`, seats collapsing
-   to one framing under `crop_w`, or the simultaneous-occupancy check) and the clip fell through
-   to `plan_pan_holds`, which held the largest face.
+**The defect is `Counter(_nearest_seat(obs[0].cx))`.** `obs[0]` is the **largest** detected face
+(cf. `_raw_track_largest_face` directly below), so "dominant seat" means *the seat that was the
+biggest face in the most samples* — uncorrelated with who is talking. It chose x = 381, the LEFT
+seat, and the right seat is the one speaking. Whoever sits closer to their camera wins the clip.
 
-**If (1), the defect is the vote itself.** The per-span choice is
-`Counter(_nearest_seat(obs[0].cx) ...)`, and `obs[0]` is the **largest** detected face (cf.
-`_raw_track_largest_face` directly below it) — so "dominant seat" means *the seat that was the
-biggest face in the most samples*, a quantity uncorrelated with who is talking. Whoever sits
-closer to their camera wins the whole clip.
+**What was available and unused:** diarization had **full coverage (1.0) and exactly one speaker**
+for the entire window. The engine knew someone was talking throughout; it could not map that
+speaker to a face confidently, and fell back to a size vote rather than a speech-aware one.
 
-**If (2), the defect is upstream** in whichever gate rejected the two-shot, and fixing the vote
-would be fixing the wrong function.
+**Issue 440 behaved exactly as designed** — it made this rung stop sweeping; it never claimed to
+pick the right seat.
 
-Either way **Issue 440 behaved exactly as designed** — it made this rung stop sweeping; it never
-claimed to pick the right seat. Ranks 4/6/7 of this same video reached `speaker_cut` with two
-speakers, so both faces are detectable in general.
-
-**Settling it is time-boxed.** The only way is to re-run `build_face_tracks` + `_seat_hold_plan`
-over the window `[754.62, 789.17]` against the source, which purges **2026-08-13 19:23 UTC**.
-Note `mediapipe` is absent from the local venv (only `cv2` 4.13.0), so this must run in the app
-container — the `scripts/clip_audit.py` stdin pattern is the shape to copy.
+*(Two corrections closed here. The first revision asserted `hold_seats` bailed at
+`len(tracks) < 2`, inferred from `speakers.count = 1` — which is the diarized-speaker count, not
+the face-track count. That claim was withdrawn 2026-08-10 as unverified, and this measurement
+confirms the withdrawal was right: there were two tracks all along.)*
 
 **The accepted tradeoff is now falsified.** `reframe.py:900-904` justifies the hold with *"a still
 frame on the wrong person is far cheaper than a cut to the wrong person, and stillness is what the
@@ -2896,10 +2902,9 @@ standing condition for this creator, not a one-off), and if a second seat cannot
 prefer a wider framing that contains both seats over a tight crop on an arbitrary one.
 
 **Acceptance**
-- [ ] **FIRST:** establish which branch ran (`hold_seats` vs the `plan_pan_holds` fallback) by
-      re-running detection over `[754.62, 789.17]` in the app container, capturing the track count,
-      the collapsed seat list, the occupancy-gate result and the per-span `Counter`. Everything
-      below depends on the answer. **Deadline 2026-08-13 19:23 UTC**
+- [x] **Establish which branch ran** — DONE 2026-08-11 in the app container before the source
+      purged: `hold_seats` ran with 2 tracks and chose the wrong seat via the largest-face vote.
+      Evidence and fixtures in `tests/fixtures/reframe_seats/`
 - [ ] Rank 1 of `7e988321` specifically no longer frames the silent participant (source expires
       **2026-08-13 19:23 UTC**; capture the frames needed to build a fixture before then)
 - [ ] When a two-shot yields only one usable seat, the fallback framing is justified in
