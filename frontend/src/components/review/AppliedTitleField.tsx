@@ -61,8 +61,10 @@ export function AppliedTitleField({
       )
     }
     return (
-      <div className="mt-2.5 flex items-center justify-between gap-2 rounded-sm border border-default bg-bg px-3 py-1.5 text-xs">
-        <span className="min-w-0 flex-1 truncate text-fg" title={clip.applied_title}>
+      // Issue 452 — the title this clip PUBLISHES with is the last thing that should be
+      // hidden behind a tooltip. Wraps like the metadata rows and the pile rows (445).
+      <div className="mt-2.5 flex items-start justify-between gap-2 rounded-sm border border-default bg-bg px-3 py-1.5 text-xs">
+        <span className="min-w-0 flex-1 break-words text-fg">
           <span className="mr-1.5 text-subtle">Publish title:</span>
           {clip.applied_title}
         </span>

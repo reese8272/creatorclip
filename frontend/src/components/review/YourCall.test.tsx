@@ -281,3 +281,55 @@ describe('YourCall — keep/drop write failures (Issue 437)', () => {
     release()
   })
 })
+
+// Issue 451 — the re-render affordance for an ALREADY-rendered clip.
+//
+// The trigger used to live only inside StagePlaceholder, which the stage swaps out the
+// moment `render_uri` lands. So a `done` clip had no path back to the render pipeline,
+// and every render-pipeline fix could only reach clips rendered after the deploy.
+describe('YourCall — re-render a rendered clip (Issue 451)', () => {
+  it('exposes the trigger on a clip that has already rendered, and POSTs the render', async () => {
+    const fetchMock = vi.fn(async () => ({ status: 202, ok: true, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderYourCall() // CLIP has render_uri set
+
+    await userEvent.click(screen.getByRole('button', { name: /Re-render this clip/ }))
+
+    await waitFor(() => expect(postsTo(fetchMock, '/clips/c1/render')).toHaveLength(1))
+  })
+
+  it('offers nothing to click on a clip that has never rendered', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ status: 200, ok: true, json: async () => ({}) })))
+    // StagePlaceholder already owns the never-rendered case; a second trigger here would
+    // be a duplicate affordance, not a fix.
+    renderYourCall({ ...CLIP, render_status: 'pending', render_uri: null })
+
+    expect(screen.queryByRole('button', { name: /Re-render this clip/ })).toBeNull()
+  })
+
+  it('explains a purged source instead of offering a button that 409s', async () => {
+    const fetchMock = vi.fn(async () => ({
+      status: 409,
+      ok: false,
+      json: async () => ({ detail: { code: 'source_expired', message: 'Source media expired.' } }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderYourCall()
+
+    await userEvent.click(screen.getByRole('button', { name: /Re-render this clip/ }))
+
+    // The dedicated explanation replaces the control — a retry can never succeed.
+    expect(await screen.findByText(/purged under our retention window/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Re-render this clip/ })).toBeNull()
+  })
+
+  it('does not leave the player looking permanently broken while the re-render runs', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ status: 200, ok: true, json: async () => ({}) })))
+    // Server truth: the worker has picked it up. The control says so rather than going quiet.
+    renderYourCall({ ...CLIP, render_status: 'running' })
+
+    const button = screen.getByRole('button', { name: /Re-rendering…/ })
+    expect(button).toBeDisabled()
+    expect(screen.getByText(/The player comes back when it lands/)).toBeInTheDocument()
+  })
+})

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, ApiError } from '@/lib/api'
 import { CleanedPreviewConfirm } from '@/components/review/CleanedPreviewConfirm'
+import { useClipRender } from '@/hooks/useClipRender'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { FeedbackAction, FeedbackPayload, ReviewClip, TaskQueued } from '@/types'
@@ -70,6 +71,10 @@ export function YourCall({
   const [submitting, setSubmitting] = useState(false)
   const [trimApplying, setTrimApplying] = useState(false)
   const [trimStatus, setTrimStatus] = useState<{ text: string; error: boolean } | null>(null)
+  // Issue 451 — the re-render affordance for an ALREADY-rendered clip. Reuses the shared
+  // ladder rather than reimplementing it; see the control below for why the stage's own
+  // instance and this one cannot contend.
+  const { rendering, renderError, sourceExpired, triggerRender } = useClipRender(clip)
 
   const downloadUrl = `/clips/${clip.id}/download`
 
@@ -239,6 +244,47 @@ export function YourCall({
             {trimStatus.text}
           </p>
         )}
+        {/*
+          Issue 451 — a clip that has ALREADY rendered had no re-render path. The trigger
+          lived only inside StagePlaceholder, which the stage swaps out the moment
+          `render_uri` lands, so every render-pipeline fix (450's framing, 448's mask)
+          could only ever reach clips rendered after the deploy. Verifying 450 on a real
+          clip required replicating the endpoint's reset by hand against prod.
+
+          This is the SAME `useClipRender` ladder the placeholder uses, not a second
+          implementation. The two instances never contend: this control only exists while
+          `render_uri` is set, which is exactly when the stage is showing the player and
+          ignoring its own copy. Once the endpoint clears `render_uri`, the stage takes
+          over and drives its spinner from server `render_status`.
+
+          A celery-direct enqueue is NOT an alternative — the worker skips a clip that
+          already has a `render_uri`. `POST /clips/{id}/render` owns the reset (Issue 353).
+        */}
+        {clip.render_uri &&
+          (sourceExpired ? (
+            <p className="text-xs text-subtle">
+              The source video was purged under our retention window, so this clip can't be
+              re-rendered. Upload it again to make new clips from it.
+            </p>
+          ) : (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-[38px] w-full"
+              disabled={rendering}
+              onClick={() => void triggerRender()}
+            >
+              <RotateCcw className={ICON_SIZE.sm} aria-hidden="true" />
+              {rendering ? 'Re-rendering…' : 'Re-render this clip'}
+            </Button>
+          ))}
+        {clip.render_uri && rendering && !sourceExpired && (
+          <p className="text-xs text-subtle">
+            Rebuilding this clip with the current render settings (~30s). The player comes back
+            when it lands.
+          </p>
+        )}
+        {renderError && <p className="text-xs text-danger">{renderError}</p>}
         {trimApplying && (
           <CleanedPreviewConfirm
             clip={clip}

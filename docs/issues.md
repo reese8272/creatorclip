@@ -2993,13 +2993,25 @@ it warns that the source expires at `SOURCE_MEDIA_RETENTION_HOURS` — after whi
 `source_expired` and the clip can never be re-rendered.
 
 **Acceptance**
-- [ ] A `done` clip can be re-rendered from the UI, and the control is not confusable with the
-      destructive actions around it
-- [ ] The existing `useClipRender` ladder is reused, not reimplemented — including the
-      `source_expired` card and the failed-render retry
-- [ ] The player does not appear permanently broken while the re-render runs
-- [ ] A clip whose source has been purged explains that instead of offering a button that 409s
-- [ ] Regression test: a clip with `render_uri` set exposes the trigger
+- [x] A `done` clip can be re-rendered from the UI, and the control is not confusable with the
+      destructive actions around it — **placement decided 2026-08-12: the actions rail**, beside
+      the existing "Apply trim & re-render", as `variant="secondary" size="sm"` with the same
+      `RotateCcw` icon. Keep/Drop are `success`/`danger` and visually distinct. Chosen over the
+      stage's meta row, which would have shrunk the player unless `STAGE_MEDIA_W`'s measured 7 rem
+      chrome budget (`lib/toolLayout.ts:59`) were re-measured
+- [x] The existing `useClipRender` ladder is reused, not reimplemented. The stage's instance and
+      this one cannot contend: the control only renders while `render_uri` is set, which is exactly
+      when the stage shows the player and ignores its own copy; once the endpoint clears
+      `render_uri` the stage takes over and drives its spinner from server `render_status`
+- [x] The player does not appear permanently broken while the re-render runs — the button reads
+      "Re-rendering…" and the copy says the player comes back when it lands
+      (`does not leave the player looking permanently broken while the re-render runs`)
+- [x] A clip whose source has been purged explains that instead of offering a button that 409s —
+      the `source_expired` branch replaces the control outright
+      (`explains a purged source instead of offering a button that 409s`)
+- [x] Regression test: a clip with `render_uri` set exposes the trigger and POSTs
+      `/clips/{id}/render`; a never-rendered clip offers nothing (StagePlaceholder already owns
+      that case, and a second trigger would be a duplicate affordance)
 
 ### Issue 453: every Stripe call fails — billing has never worked in production
 
@@ -3135,10 +3147,21 @@ did not touch.
 a toggle. The panel gets taller for long values; nothing is ever hidden.
 
 **Acceptance**
-- [ ] Title and caption wrap to as many lines as they need in the focused review view
-- [ ] No native `title=` tooltip is relied on to reveal clipped text
-- [ ] The actions rail does not shift or overflow when a value is long
-- [ ] Regression test with a title longer than the panel width asserts the full string is present
+- [x] Title and caption wrap to as many lines as they need in the focused review view —
+      `truncate` → `break-words` in `ClipMetadataPanel.tsx` (both the value row and the `—`
+      placeholder) and in `AppliedTitleField.tsx`, which had the identical pair
+- [x] No native `title=` tooltip is relied on to reveal clipped text — removed from both files
+- [x] The actions rail does not shift or overflow when a value is long — `items-center` →
+      `items-start` on the metadata row and the applied-title row, so the label and the
+      Applied/Suggested/Edit controls stay top-aligned against a multi-line value. The rail itself
+      was already safe: `min-h-0 flex-col … lg:overflow-y-auto` in a `minmax(300px, 26rem)` grid
+      cell with no fixed child heights, so growth is purely vertical and the stage cell's
+      `100cqh`-derived player size is unaffected
+- [x] Regression test with a title longer than the panel width asserts the full string is present,
+      that no `.truncate` and no `[title]` survive in either row, and that the row is `items-start`
+      (`ClipMetadataPanel.test.tsx` — the old "one truncating row each" assertion was **reversed in
+      place**, naming the old behaviour and the DECISIONS date, per the repo's convention for a
+      deliberate reversal)
 
 ---
 

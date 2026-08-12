@@ -76,12 +76,33 @@ describe('ClipMetadataPanel', () => {
     expect(screen.getAllByText('Applied')).toHaveLength(2)
   })
 
-  it('title and hook are one truncating row each when collapsed', () => {
-    render(<ClipMetadataPanel clip={CLIP} />, { wrapper })
+  // Issue 452 (DECISIONS 2026-08-12) reverses this test's original assertion. It used to
+  // pin "title and hook are one TRUNCATING row each when collapsed" — one `.truncate` per
+  // row plus a native `title=` tooltip as the escape hatch. The creator reported that the
+  // hover "sometimes cuts off too": native tooltips clip long strings themselves, so the
+  // escape hatch failed exactly like the thing it was escaping. Owner decision: expand to
+  // fit. Same fix Issue 445 made to the pile rows.
+  it('title and hook WRAP rather than truncate, with no tooltip escape hatch', () => {
+    const longTitle =
+      'A clip title long enough to overflow the metadata panel several times over, ' +
+      'which is precisely when the creator most needs to read the whole thing'
+    render(<ClipMetadataPanel clip={{ ...CLIP, suggested_title: longTitle }} />, { wrapper })
+
     const titleRow = screen.getByTestId('metadata-row-title')
     const hookRow = screen.getByTestId('metadata-row-hook')
-    expect(titleRow.querySelectorAll('.truncate')).toHaveLength(1)
-    expect(hookRow.querySelectorAll('.truncate')).toHaveLength(1)
+
+    // The full string is present and not clipped by CSS.
+    expect(screen.getByText(longTitle)).toBeInTheDocument()
+    expect(titleRow.querySelectorAll('.truncate')).toHaveLength(0)
+    expect(hookRow.querySelectorAll('.truncate')).toHaveLength(0)
+    expect(titleRow.querySelectorAll('.break-words').length).toBeGreaterThan(0)
+
+    // No native tooltip is relied on to reveal the value — it clipped too.
+    expect(titleRow.querySelector('[title]')).toBeNull()
+    expect(hookRow.querySelector('[title]')).toBeNull()
+
+    // The actions rail must not float against the middle of a wrapped block.
+    expect(titleRow.className).toContain('items-start')
   })
 
   it('Apply on the title row PATCHes the suggested title through the existing hook', async () => {
