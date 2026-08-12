@@ -327,7 +327,7 @@ MODULE_COVERAGE_FLOORS: dict[str, float] = {
     # because the multi-root --cov flattened their files into package "." and
     # _module_line_rate returned None. They were never low-coverage; they were
     # unmeasured. clip_engine is additionally gated by the eval harness.
-    "clip_engine": 91.0,  # measured 92.51
+    "clip_engine": 99.9,  # DRILL (Issue 479): deliberate violation — this PR must FAIL
     "preference": 88.0,  # measured 89.64
     # crypto/limiter measured 100.0 (unchanged from the 2026-07-29 ratchet).
     "crypto": 99.0,  # crypto.py
