@@ -2961,6 +2961,68 @@ there is no speech signal. ~50 lines, no wire-contract change, no frontend work.
 - [x] No-transcript / unmapped / pruned-track spans still use the size vote, so a video without
       diarization behaves exactly as it does today
 
+### Issue 451: a rendered clip has no re-render affordance, so render fixes can never reach it
+
+**Severity: high — it makes every render-pipeline fix unverifiable on existing clips, and it cost
+a live verification attempt on 2026-08-12.**
+
+`ShortStage.tsx:116` is `{clip.render_uri ? <player/> : <StagePlaceholder/>}`, and the render
+button lives inside `StagePlaceholder`. So the trigger exists **only for clips that have never
+rendered**. Once a clip is `done` there is no path in the UI to render it again — the creator
+looked for one and reported it missing.
+
+The backend supports it fully. `POST /clips/{id}/render` treats a request on a `done` clip as an
+explicit re-render (Issue 353): it resets `render_status`/`render_uri` in the same transaction,
+snapshots the previous URI, and restores it if the enqueue throws (Issue 359c). Only the UI is
+missing.
+
+**Why it matters beyond convenience.** Issue 450 fixed the framing on a clip the creator had
+already dropped. With no re-render affordance the fix could never reach that clip — the creator
+could not have seen it no matter what they clicked. Verifying it required replicating the
+endpoint's reset by hand against prod. Every future render-pipeline fix has the same problem:
+**it only ever applies to clips rendered after the deploy.**
+
+Note a celery-direct enqueue is NOT a workaround: the worker skips a clip that already has a
+`render_uri` ("already rendered — skipping"), which is exactly why the endpoint owns the reset.
+
+**Fix direction.** Surface a re-render control on a `done` clip. The state machine already exists
+in `useClipRender` (`rendering`/`renderError`/`sourceExpired`/`triggerRender`) — the work is
+placement and copy, not logic. Two things to decide in CHECK: where it lives so it is discoverable
+without inviting accidental clicks (it blanks the player until the new render lands), and whether
+it warns that the source expires at `SOURCE_MEDIA_RETENTION_HOURS` — after which it 409s
+`source_expired` and the clip can never be re-rendered.
+
+**Acceptance**
+- [ ] A `done` clip can be re-rendered from the UI, and the control is not confusable with the
+      destructive actions around it
+- [ ] The existing `useClipRender` ladder is reused, not reimplemented — including the
+      `source_expired` card and the failed-render retry
+- [ ] The player does not appear permanently broken while the re-render runs
+- [ ] A clip whose source has been purged explains that instead of offering a button that 409s
+- [ ] Regression test: a clip with `render_uri` set exposes the trigger
+
+### Issue 452: clip title and caption truncate in the focused review view
+
+**Severity: medium — the creator hit it, and the fallback is also broken.**
+
+`ClipMetadataPanel.tsx:247` renders the title with `truncate` plus a native `title={value}`
+tooltip. Native tooltips clip long strings themselves, so the escape hatch fails the same way the
+thing it is escaping does — the creator reported "you can hover, but the hover sometimes cuts off
+too".
+
+Issue 445 already fixed this **in the kept/dropped pile rows**, where title and caption wrap
+(`components/review/ClipPiles.tsx`). This is the same fix for the focused review view, which 445
+did not touch.
+
+**Owner decision (2026-08-12):** expand to fit — wrap to multiple lines rather than clamping with
+a toggle. The panel gets taller for long values; nothing is ever hidden.
+
+**Acceptance**
+- [ ] Title and caption wrap to as many lines as they need in the focused review view
+- [ ] No native `title=` tooltip is relied on to reveal clipped text
+- [ ] The actions rail does not shift or overflow when a value is long
+- [ ] Regression test with a title longer than the panel width asserts the full string is present
+
 ---
 
 ## Source index
@@ -3036,4 +3098,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **451**.
+- Next free issue number: **453**.
