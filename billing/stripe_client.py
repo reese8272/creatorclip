@@ -37,17 +37,22 @@ logger = logging.getLogger(__name__)
 
 _STRIPE = stripe.StripeClient(
     settings.STRIPE_SECRET_KEY,
-    # `allow_sync_methods=True` is load-bearing, not optional (Issue 453). HTTPXClient
-    # defaults it to False, which leaves its sync `httpx.Client` unbuilt, so EVERY
-    # synchronous Stripe call raises RuntimeError("...cannot be used for synchronous
-    # requests"). Both of our call sites are sync-offloaded-to-a-thread by design
-    # (`routers/billing.py` asyncio.to_thread, `worker/tasks.py` run_in_executor), so
-    # the sync transport is the one we actually use. Omitting this flag took checkout
-    # and reconcile_stripe_ledger down 100% from 2026-05-31 to 2026-08-12.
-    http_client=stripe.HTTPXClient(
-        timeout=settings.STRIPE_TIMEOUT_S,
-        allow_sync_methods=True,
-    ),
+    # DO NOT switch this back to `stripe.HTTPXClient` (Issues 453 + 455). In
+    # stripe==11.4.0 that transport is unusable for real requests, for two
+    # independent reasons, and it took billing down 100% from 2026-05-31 to
+    # 2026-08-12:
+    #   1. `allow_sync_methods` defaults to False, leaving the sync httpx.Client
+    #      unbuilt, so every sync call raises RuntimeError before the network.
+    #   2. Even with that flag, it builds its SSL context as
+    #      `ssl.create_default_context(capath=stripe.ca_bundle_path)` — but
+    #      `capath` expects a DIRECTORY and `ca_bundle_path` is a .pem FILE, so
+    #      **zero** CA certs load and every TLS handshake fails with a bare
+    #      APIConnectionError ("A ConnectError was raised") that reads like a
+    #      network outage.
+    # RequestsClient takes the timeout directly and passes the bundle as
+    # `verify=<file>`, which is the correct usage. Verified against live Stripe
+    # from the prod container 2026-08-12.
+    http_client=stripe.RequestsClient(timeout=settings.STRIPE_TIMEOUT_S),
     max_network_retries=3,
 )
 
