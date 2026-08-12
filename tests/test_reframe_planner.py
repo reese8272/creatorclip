@@ -646,3 +646,113 @@ class TestComputeDynamicCrop:
         result = self._run(tmp_path, transcript=None, shots=[15.0])
         assert result.mode == "face_pan"
         assert result.track_json["shots"] == [{"t": 5.0}]
+
+
+class TestSpeakingSeatSelection:
+    """Issue 450 — the held seat must be the SPEAKING one, not the biggest face.
+
+    Built from the measured failure on rank 1 of video `7e988321`: two tracks at
+    region-space cx 381.2 (left, silent) and 1257.5 (right, speaking), crop_w
+    309, one shot. `hold_seats` chose 381 via a largest-face vote while
+    `map_speakers_to_tracks` had already assigned the speaker to the right-hand
+    track — mouth-motion energy 0.1456 vs 0.0536.
+    """
+
+    LEFT_CX, RIGHT_CX = 381.2, 1257.5
+    CROP_W = 309
+    START, END = 0.0, 34.55
+
+    def _obs_frames(self, left_bigger: bool = True):
+        """Both seats on screen every sample; the LEFT face is larger.
+
+        Larger-left is the adversarial case: it is what made the size vote pick
+        wrong, so the mapping has to override it rather than merely agree.
+        """
+        frames = []
+        t = self.START
+        while t < self.END:
+            big, small = (140.0, 100.0) if left_bigger else (100.0, 140.0)
+            frames.append(
+                (
+                    t,
+                    [
+                        FaceObs(t=t, cx=self.LEFT_CX, cy=300.0, w=big, h=big),
+                        FaceObs(t=t, cx=self.RIGHT_CX, cy=300.0, w=small, h=small),
+                    ],
+                )
+            )
+            t += 0.25
+        return frames
+
+    def _tracks(self, frames):
+        left = FaceTrack(track_id=0, shot_idx=0, obs=[o[1][0] for o in frames])
+        right = FaceTrack(track_id=1, shot_idx=0, obs=[o[1][1] for o in frames])
+        return [left, right]
+
+    def _plan(self, *, mapping, turns):
+        from clip_engine.reframe import _seat_hold_plan
+
+        frames = self._obs_frames()
+        return _seat_hold_plan(
+            frames,
+            self._tracks(frames),
+            [],
+            self.START,
+            self.END,
+            self.CROP_W,
+            mapping=mapping,
+            turns=turns,
+        )
+
+    def test_holds_the_speaking_seat_even_though_the_other_face_is_larger(self) -> None:
+        """The live defect. Fails against the largest-face vote (picks 381)."""
+        plan = self._plan(
+            mapping=SpeakerMapping(assignments={(0, 0): 1}, confidence=0.084),
+            turns=[Turn(speaker=0, start=self.START, end=self.END)],
+        )
+        assert plan is not None
+        _cuts, points = plan
+        assert len(points) == 1, "one span, one held seat"
+        assert points[0].center_x == pytest.approx(self.RIGHT_CX, abs=1.0)
+
+    def test_low_confidence_does_not_disqualify_the_mapping(self) -> None:
+        """`confidence` is a MARGIN ratio, not a correctness estimate, and it is
+        structurally small when both faces are on screen the whole time."""
+        plan = self._plan(
+            mapping=SpeakerMapping(assignments={(0, 0): 1}, confidence=0.001),
+            turns=[Turn(speaker=0, start=self.START, end=self.END)],
+        )
+        assert plan is not None
+        assert plan[1][0].center_x == pytest.approx(self.RIGHT_CX, abs=1.0)
+
+    def test_falls_back_to_the_size_vote_without_a_mapping(self) -> None:
+        """A no-transcript video must behave exactly as it does today."""
+        for mapping, turns in (
+            (SpeakerMapping(assignments={}, confidence=0.0), []),
+            (SpeakerMapping(assignments={}, confidence=0.0), [Turn(0, 0.0, 34.55)]),
+            (SpeakerMapping(assignments={(0, 0): 1}, confidence=0.5), []),
+        ):
+            plan = self._plan(mapping=mapping, turns=turns)
+            assert plan is not None
+            # Largest face is the LEFT seat in the fixture.
+            assert plan[1][0].center_x == pytest.approx(self.LEFT_CX, abs=1.0)
+
+    def test_a_dangling_assignment_falls_back_rather_than_crashing(self) -> None:
+        plan = self._plan(
+            mapping=SpeakerMapping(assignments={(0, 0): 99}, confidence=0.5),
+            turns=[Turn(speaker=0, start=self.START, end=self.END)],
+        )
+        assert plan is not None
+        assert plan[1][0].center_x == pytest.approx(self.LEFT_CX, abs=1.0)
+
+    def test_the_dominant_speaker_in_the_span_wins(self) -> None:
+        """Two speakers, unequal talk time — the seat follows the majority."""
+        plan = self._plan(
+            mapping=SpeakerMapping(assignments={(0, 0): 0, (0, 1): 1}, confidence=0.4),
+            turns=[
+                Turn(speaker=0, start=0.0, end=5.0),
+                Turn(speaker=1, start=5.0, end=34.55),
+            ],
+        )
+        assert plan is not None
+        assert plan[1][0].center_x == pytest.approx(self.RIGHT_CX, abs=1.0)

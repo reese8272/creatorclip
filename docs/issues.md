@@ -2926,20 +2926,40 @@ a two-shot** (Rio wears wraparound sunglasses and a bucket hat for the whole rec
 standing condition for this creator, not a one-off), and if a second seat cannot be detected,
 prefer a wider framing that contains both seats over a tight crop on an arbitrary one.
 
+**Status: DONE (2026-08-12)** — backend **2975/0**, eval 25 scenarios / 100%, Layer 0 green,
+`clip_engine` coverage **93.03** (floor 91.0). Ruling in `docs/DECISIONS.md` 2026-08-12.
+
+**The approved split-screen approach was REVERSED before any of it was built**, on evidence: the
+speaker mapping had already assigned the speaker to the correct (right) seat, and `hold_seats`
+simply never consulted it. Building a new render mode to route around a signal we compute
+correctly and then discard would have been the wrong fix. Full reasoning in DECISIONS.
+
+**What shipped** — `speaker_map.speaking_track_for_span()` returns the face track of whoever talks
+most inside a span, keyed by the same `shot_index_for` that `build_face_tracks` uses to stamp
+`shot_idx`. `_seat_hold_plan` asks it first and falls back to the largest-face vote only when
+there is no speech signal. ~50 lines, no wire-contract change, no frontend work.
+
 **Acceptance**
 - [x] **Establish which branch ran** — DONE 2026-08-11 in the app container before the source
       purged: `hold_seats` ran with 2 tracks and chose the wrong seat via the largest-face vote.
       Evidence and fixtures in `tests/fixtures/reframe_seats/`
-- [ ] Rank 1 of `7e988321` specifically no longer frames the silent participant (source expires
-      **2026-08-13 19:23 UTC**; capture the frames needed to build a fixture before then)
-- [ ] When a two-shot yields only one usable seat, the fallback framing is justified in
-      `docs/DECISIONS.md` against both alternatives (tight-on-the-one-face vs contain-both)
-- [ ] Issue 440's motion guarantees are preserved — no return to sweeping, no per-utterance
-      cutting on this rung (both rejected with evidence)
-- [ ] A regression test encodes "holds the speaking seat", so this class is caught in CI rather
-      than by the creator. Note this belongs in `tests/test_reframe_planner.py` /
-      `tests/test_speaker_map.py`, **not** `tests/eval/scenarios/` — that harness covers clip-window
-      geometry (setup-before-peak, overlap, openers), not framing
+- [x] Rank 1 of `7e988321` no longer frames the silent participant — **verified on production
+      data**: the same probe over `[754.62, 789.17]` returns `BEFORE [381]` / `AFTER [1258]`, and
+      rendered frames at t=768 s show the silent participant before and the speaking one after
+- [x] The seat choice is justified in `docs/DECISIONS.md` against the alternatives, including why
+      no `mapping.confidence` floor is applied (it is a MARGIN ratio, structurally small on exactly
+      these layouts, so gating on it would restore the size vote where it is worst)
+- [x] Issue 440's motion guarantees preserved — ONE static choice per span, held until a source
+      shot change, so it cannot flip; `test_two_shot_face_pan_holds_seats_instead_of_sweeping`
+      passes unchanged
+- [x] Regression tests encode "holds the speaking seat" in `tests/test_reframe_planner.py`
+      (`TestSpeakingSeatSelection`, built from the measured cx 381.2 / 1257.5 geometry and
+      demonstrated failing first) and `tests/test_speaker_map.py` (`TestSpeakingTrackForSpan`) —
+      **not** `tests/eval/scenarios/`, which covers clip-window geometry, not framing
+- [x] The adversarial case is pinned: the wrong seat having the LARGER face in every sample must
+      not win
+- [x] No-transcript / unmapped / pruned-track spans still use the size vote, so a video without
+      diarization behaves exactly as it does today
 
 ---
 

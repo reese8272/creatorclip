@@ -387,6 +387,62 @@ def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> floa
     return max(0.0, min(a_end, b_end) - max(a_start, b_start))
 
 
+def speaking_track_for_span(
+    mapping: SpeakerMapping,
+    turns: list[Turn],
+    tracks: list[FaceTrack],
+    shot_changes: list[float],
+    span_start: float,
+    span_end: float,
+) -> FaceTrack | None:
+    """The face track of whoever talks MOST inside ``[span_start, span_end)``.
+
+    Issue 450. The framing planner used to choose its seat with a largest-face
+    vote, which is uncorrelated with who is speaking: on video `7e988321` it
+    held the silent participant for a whole 34.55 s clip while this mapping had
+    already assigned the speaker to the OTHER seat correctly (mouth-motion
+    energy 0.1456 vs 0.0536). This exposes that answer to the planner.
+
+    ``None`` when there is nothing to go on — no turns in the span, no
+    assignment for that (shot, speaker), or the assigned track has been pruned.
+    Callers keep their own fallback for that case.
+
+    Deliberately NOT gated on ``mapping.confidence``. That number is a MARGIN
+    ratio ``(best − second)/best``, not a correctness estimate, and it is
+    structurally small on the layouts this exists to fix — when both faces are
+    on screen the whole time, co-occurrence and size carry no signal, so an
+    honest margin is narrow even when the winner is plainly right. Gating on it
+    would restore the size vote precisely where the size vote is worst.
+
+    One choice per span, not per utterance: Issue 440 built and rejected
+    per-utterance following on this rung because the framing flipped five times
+    in ten seconds. A single held choice cannot flip.
+    """
+    if not turns or not tracks or not mapping.assignments:
+        return None
+
+    speech: dict[int, float] = {}
+    for turn in turns:
+        overlap = _overlap(turn.start, turn.end, span_start, span_end)
+        if overlap > 0:
+            speech[turn.speaker] = speech.get(turn.speaker, 0.0) + overlap
+    if not speech:
+        return None
+
+    # Ties break on the lower speaker id so the choice is deterministic across
+    # runs — an unstable seat would reintroduce exactly the flicker 440 removed.
+    speaker = min(speech, key=lambda s: (-speech[s], s))
+
+    # `shot_index_for` is the SAME function `build_face_tracks` uses to stamp
+    # `shot_idx`, so the span's index and the mapping's key are derived
+    # identically. That alignment is what makes the lookup meaningful.
+    shot_idx = shot_index_for(span_start, shot_changes)
+    track_id = mapping.track_for(speaker, shot_idx)
+    if track_id is None:
+        return None
+    return next((t for t in tracks if t.track_id == track_id), None)
+
+
 def map_speakers_to_tracks(
     tracks: list[FaceTrack],
     turns: list[Turn],

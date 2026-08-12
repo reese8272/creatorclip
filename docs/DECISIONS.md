@@ -5,6 +5,54 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-12 — Issue 450: use the speaker mapping for the seat; split-screen REVERSED
+
+**Decision — the framing planner asks who is SPEAKING, and split-screen is not built.** This
+reverses the approach approved earlier in the same session. The reversal was driven by a
+measurement, and the measurement is the whole entry.
+
+**What was approved first.** "Split-screen as the untrusted fallback": when
+`mapping.confidence` sits below `REFRAME_MIN_MAPPING_CONFIDENCE`, stack both speakers rather than
+gamble on one. It matched the industry pattern —
+[Opus Clip's Split layout](https://help.opus.pro/docs/article/layout-and-reframing) (fetched
+2026-08-11), which shows both speakers and states it "will only work when both speakers appear
+together in the original video frame", true of this source.
+
+**What the measurement showed.** Run against the live source before building anything:
+
+| | |
+|---|---|
+| `mapping.assignments` | speaker 0 -> track 1 at cx **1257.5 (RIGHT / Rio)** — **correct** |
+| mouth-motion energy | **0.1456** right vs **0.0536** left — 2.7x on the speaking seat |
+| `hold_seats` output | x = **381** (LEFT / silent) |
+
+The engine already had the right answer. `hold_seats` never consulted the mapping: it ran its own
+`Counter(_nearest_seat(obs[0].cx))` vote where `obs[0]` is the LARGEST face, so the seat went to
+whoever sat closer to their camera. Split-screen would have been a new render mode, a new
+wire-contract mode and frontend work to route around a signal we compute correctly and discard.
+
+**Why `mapping.confidence = 0.084` did not disqualify it — and why no floor is applied.** That
+number is a MARGIN ratio `(best - second)/best`, not a correctness estimate. It is structurally
+small on exactly the layouts this fix targets, which `choose_reframe_mode`'s own docstring already
+records: "co-occurrence and size votes carry no signal when both faces are always on screen, so
+honest confidences run lower on exactly the layouts that most need cuts." Gating the seat choice
+on it would restore the size vote precisely where the size vote is worst. The fallback is a vote
+UNCORRELATED with speech, so any speech-derived choice is at least as good.
+
+**Why this does not re-open what Issue 440 rejected.** 440 built and rejected *cutting per
+utterance* on this rung because the framing flipped five times in ten seconds. This makes ONE
+static choice per span, held until a source shot change. A single held choice cannot flip. Ties
+resolve to the lower speaker id so the result is deterministic across runs.
+
+**Verified end to end on production data**, not only in tests: the same probe over rank 1's window
+`[754.62, 789.17]` returns `BEFORE [381]` / `AFTER [1258]`, and rendered frames at t=768 show the
+silent participant before and the speaking one after.
+
+**Split-screen is not dead, it is re-scoped.** It remains worth offering as a creator-selectable
+*layout* (as Opus does) rather than as an error fallback. Filed as a product option, not a bug fix.
+
+---
+
 ## 2026-08-11 — Issue 448: a separate transient pass, blurred not boxed, failing open
 
 **Context.** A livestream superchat is drawn by the streaming software ON TOP of the camera

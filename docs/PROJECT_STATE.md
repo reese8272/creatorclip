@@ -4,6 +4,60 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-12 — Issues 448 + 450 CLOSED: the two audit defects are fixed
+
+Both defects the 2026-08-10 audit found on delivered media are fixed, tested and proven against
+the live source before it purges 2026-08-13 19:23 UTC.
+
+### Issue 448 — the superchat is masked
+
+A livestream superchat is drawn ON TOP of the camera feed, so it lands inside the camera region
+and the crop cannot remove it. Re-measured against the source: present 885-914 s and 930-1006 s,
+**107 s of 1617 s = 6.6 % of runtime**, reaching rank 3 for 11.6 s and rank 13 for 25.3 s. (The
+filed 5.0 s for rank 13 was wrong — it came from scanning the RENDERED clip for cyan, and burned-in
+captions are themselves a bright lower-frame band. Detection must run on the source.)
+
+New `clip_engine/overlay_bands.py`, deliberately separate from `camera_region`: that module's
+nine-window median is kept only on a strict majority *so a transient cannot move the answer*
+(Issue 443), and this needs exactly those transients. Migration `0058` stores
+`videos.overlay_spans_jsonb`; render inserts `split -> crop -> boxblur -> overlay` with a timeline
+`enable`. A time-varying crop was impossible rather than merely undesirable — ffmpeg reports no
+timeline support for `crop`/`scale`, while `overlay`/`boxblur` have it.
+
+Proven on the real source: rank 3 re-rendered through the production chain is clean before the
+span and has the donor name, amount and message unreadable inside it, framing and captions
+untouched.
+
+### Issue 450 — the framing holds the speaking seat
+
+**The approved split-screen approach was reversed before it was built.** A measurement against the
+live source showed `map_speakers_to_tracks` had ALREADY assigned the speaker to the correct
+(right) seat — mouth-motion energy 0.1456 vs 0.0536 — and `hold_seats` simply never consulted it,
+running its own largest-face `Counter` vote instead. Whoever sat closer to their camera won the
+clip. Split-screen would have been a new render mode, a new wire-contract mode and frontend work
+to route around a signal we compute correctly and discard.
+
+`mapping.confidence = 0.084` looked damning but is a **margin ratio**, structurally small when
+both faces are on screen the whole time — `choose_reframe_mode`'s own docstring already said so.
+No floor is applied to it, deliberately: the fallback is a vote uncorrelated with speech, so any
+speech-derived choice is at least as good.
+
+`speaker_map.speaking_track_for_span()` + ~15 lines in `_seat_hold_plan`. No wire-contract change,
+no frontend work. Verified on production data: `BEFORE [381]` -> `AFTER [1258]`, with rendered
+frames at t=768 s showing the silent participant before and the speaking one after. This does not
+re-open what 440 rejected — that was per-utterance *cutting* (five flips in ten seconds); this is
+one static choice per span, which cannot flip.
+
+**Gates:** backend **2975/0** (baseline 2941 at the start of this work) · eval 25 scenarios /
+100 % · Layer 0 all green · coverage **84.18**, `clip_engine` **93.03** vs floor 91.0 · migration
+`0058` renders clean offline for Squawk.
+
+**Still open on this upload:** 444's idempotency drill (needs the SAME clip triaged twice; the
+creator kept one clip and dropped a different one) and a live re-render of ranks 3/13 with
+`OVERLAY_BAND_DETECT_ENABLED=true`. Both die with the source at **2026-08-13 19:23 UTC**.
+
+---
+
 ## 2026-08-11 — Issue 26 CLOSED: the OAuth consent screen is configured and live-verified
 
 **The last hard blocker before the friend beta is now #28 alone.** #26 was configured on the

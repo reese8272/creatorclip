@@ -30,7 +30,14 @@ The branch question the issue was filed with is **settled: `hold_seats` RAN.** I
 | `shot_changes` | 0 |
 | chosen mode | `face_pan` |
 
-**So the defect is the vote, not a gate.** `hold_seats` picks the per-span seat with
+**FIXED 2026-08-12 (Issue 450).** `_seat_hold_plan` now asks
+`speaker_map.speaking_track_for_span()` first and only falls back to the size vote when there is
+no speech signal. Verified on this exact window against the live source before it purged:
+`BEFORE [381]` -> `AFTER [1258]`, and rendered frames at t=768 s show the silent participant
+before and the speaking one after. The mapping was right all along — it was simply never
+consulted.
+
+**So the defect was the vote, not a gate.** `hold_seats` picks the per-span seat with
 `Counter(_nearest_seat(obs[0].cx))`, and `obs[0]` is the **largest** detected face (cf.
 `_raw_track_largest_face`). "Dominant seat" therefore means *the seat that was the biggest face in
 the most samples* — a quantity uncorrelated with who is speaking. It chose x=381, the LEFT seat
