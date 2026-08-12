@@ -19,7 +19,10 @@ class NoopEventSource {
 // used to build the batched /videos/clips/counts response (Issue 213).
 // Per-video /videos/{id}/clips calls should no longer be made — if they are the
 // test will still return an empty list so it doesn't mask regressions silently.
-function mockFetch(videos: Video[], clips: Record<string, { render_status: string }[]> = {}) {
+function mockFetch(
+  videos: Video[],
+  clips: Record<string, { render_status: string; triage?: string }[]> = {},
+) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
@@ -37,6 +40,11 @@ function mockFetch(videos: Video[], clips: Record<string, { render_status: strin
         video_id,
         total: cs.length,
         rendered: cs.filter((c) => c.render_status === 'done').length,
+        // Triage breakdown (Issue 444). Default `pending` so existing tests
+        // keep their old meaning; tests that care set `triage` explicitly.
+        pending: cs.filter((c) => (c.triage ?? 'pending') === 'pending').length,
+        kept: cs.filter((c) => c.triage === 'kept').length,
+        dropped: cs.filter((c) => c.triage === 'dropped').length,
       }))
       return json({ counts })
     }
@@ -166,11 +174,21 @@ describe('Dashboard', () => {
     expect(screen.getByLabelText('Video files to upload')).toBeInTheDocument()
   })
 
-  it('sidebar shows the review queue with the rendered-clip count + Open review link (Issue 305)', async () => {
+  // RENAMED 2026-08-12 (Issue 445 acceptance): this test was called "with the
+  // rendered-clip count" and its fixture was two untriaged rendered clips — a
+  // case where `rendered` and `pending` are both 2, so it could not tell the
+  // fixed behaviour from the broken one. The card counts clips awaiting a
+  // VERDICT; the fixture now includes a kept clip so the two numbers differ and
+  // the assertion actually pins the contract.
+  it('sidebar shows the review queue with the pending-triage count + Open review link (Issue 305)', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], {
-        vd: [{ render_status: 'done' }, { render_status: 'done' }],
+        vd: [
+          { render_status: 'done', triage: 'pending' },
+          { render_status: 'done', triage: 'pending' },
+          { render_status: 'done', triage: 'kept' },
+        ],
       }),
     )
     renderDashboard()
@@ -183,9 +201,11 @@ describe('Dashboard', () => {
       'href',
       '/app/review',
     )
-    // Scoped to the card — the video table also renders a "2 rendered" cell.
+    // Scoped to the card — the video table renders a "3 rendered" cell, which
+    // is production progress and correctly unaffected by triage.
     const card = screen.getByText('Review queue').parentElement as HTMLElement
     expect(within(card).getByText('2')).toBeInTheDocument()
+    expect(within(card).queryByText('3')).not.toBeInTheDocument()
   })
 
   it('review-queue card offers a way to fill the queue instead of a "0" and a dead button', async () => {
@@ -254,5 +274,46 @@ describe('Dashboard', () => {
       String(url).match(/\/videos\/[^/]+\/clips$/),
     )
     expect(perVideoCalls).toHaveLength(0)
+  })
+})
+
+describe('review-queue card counts clips awaiting a verdict', () => {
+  // The live symptom: after a full review pass the card still read "27 to
+  // review". It summed `rendered`, which never decrements when a creator keeps
+  // or drops, so the number could only ever grow. Issue 444 shipped `pending`
+  // on the counts endpoint for exactly this; the UI had never consumed it.
+  it('shows the pending count, not the rendered count', async () => {
+    const videos = [baseVideo({ id: 'v1', ingest_status: 'done' })]
+    vi.stubGlobal('fetch', mockFetch(videos, {
+      v1: [
+        { render_status: 'done', triage: 'kept' },
+        { render_status: 'done', triage: 'dropped' },
+        { render_status: 'done', triage: 'pending' },
+        { render_status: 'pending', triage: 'pending' },
+      ],
+    }))
+    renderDashboard()
+
+    // 4 clips, 3 rendered, but only 2 still need a decision. Scope the
+    // assertion to the card: "3 rendered" legitimately appears in the video
+    // table, and that figure is production progress, not a review figure.
+    const card = (await screen.findByText('clips ready to review')).closest('div')
+      ?.parentElement as HTMLElement
+    expect(within(card).getByText('2')).toBeInTheDocument()
+    expect(within(card).queryByText('3')).not.toBeInTheDocument()
+  })
+
+  it('reads zero once every clip has been triaged', async () => {
+    const videos = [baseVideo({ id: 'v1', ingest_status: 'done' })]
+    vi.stubGlobal('fetch', mockFetch(videos, {
+      v1: [
+        { render_status: 'done', triage: 'kept' },
+        { render_status: 'done', triage: 'dropped' },
+      ],
+    }))
+    renderDashboard()
+
+    // Zero state replaces the count entirely, so the prompt is the assertion.
+    expect(await screen.findByText('Nothing waiting yet.')).toBeInTheDocument()
   })
 })

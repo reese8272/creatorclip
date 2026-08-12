@@ -105,11 +105,20 @@ export function Dashboard() {
   })
 
   const clipInfoByVideo: Record<string, ClipInfo> = {}
-  let clipsRendered = 0
+  // The review-queue card counts clips still awaiting a verdict, NOT clips that
+  // have rendered. `rendered` never decrements when the creator keeps or drops,
+  // so the badge could only ever grow — it read "27 to review" after a full
+  // review pass. Issue 444 added `pending` for exactly this; this is the UI
+  // finally consuming it.
+  let clipsPending = 0
   const countsLoading = clipCountsQuery.isPending
-  const countsByVideoId: Record<string, { total: number; rendered: number }> = {}
+  const countsByVideoId: Record<string, { total: number; rendered: number; pending: number }> = {}
   for (const row of clipCountsQuery.data?.counts ?? []) {
-    countsByVideoId[row.video_id] = { total: row.total, rendered: row.rendered }
+    countsByVideoId[row.video_id] = {
+      total: row.total,
+      rendered: row.rendered,
+      pending: row.pending ?? 0,
+    }
   }
   for (const v of videos.filter((v) => v.ingest_status === 'done')) {
     const counts = countsByVideoId[v.id]
@@ -118,7 +127,7 @@ export function Dashboard() {
       rendered: counts?.rendered ?? 0,
       loading: countsLoading,
     }
-    clipsRendered += counts?.rendered ?? 0
+    clipsPending += counts?.pending ?? 0
   }
 
   const isEmpty = !videosQuery.isPending && videos.length === 0
@@ -201,7 +210,7 @@ export function Dashboard() {
 
             {/* Sidebar */}
             <div className="flex flex-col gap-4">
-              <ReviewQueueCard count={clipsRendered} />
+              <ReviewQueueCard count={clipsPending} />
               <AnalyticsPanel variant="sidebar" />
               <CreatorDnaCard dna={dnaQuery.data?.profile ?? null} />
             </div>
