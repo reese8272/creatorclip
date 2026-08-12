@@ -37,7 +37,17 @@ logger = logging.getLogger(__name__)
 
 _STRIPE = stripe.StripeClient(
     settings.STRIPE_SECRET_KEY,
-    http_client=stripe.HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S),
+    # `allow_sync_methods=True` is load-bearing, not optional (Issue 453). HTTPXClient
+    # defaults it to False, which leaves its sync `httpx.Client` unbuilt, so EVERY
+    # synchronous Stripe call raises RuntimeError("...cannot be used for synchronous
+    # requests"). Both of our call sites are sync-offloaded-to-a-thread by design
+    # (`routers/billing.py` asyncio.to_thread, `worker/tasks.py` run_in_executor), so
+    # the sync transport is the one we actually use. Omitting this flag took checkout
+    # and reconcile_stripe_ledger down 100% from 2026-05-31 to 2026-08-12.
+    http_client=stripe.HTTPXClient(
+        timeout=settings.STRIPE_TIMEOUT_S,
+        allow_sync_methods=True,
+    ),
     max_network_retries=3,
 )
 

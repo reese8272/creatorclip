@@ -44,6 +44,29 @@ def test_stripe_singleton() -> None:
     assert client is mod._STRIPE, "billing.stripe_client._STRIPE must be a singleton"
 
 
+def test_stripe_http_client_allows_sync_requests() -> None:
+    """Issue 453 — the outage this pins took billing down 100% for 10 weeks.
+
+    Every Stripe call we make is the SYNC API offloaded to a thread
+    (`routers/billing.py` asyncio.to_thread, `worker/tasks.py` run_in_executor).
+    `stripe.HTTPXClient` defaults `allow_sync_methods=False`, which leaves its
+    sync transport unbuilt and makes every such call raise RuntimeError at
+    request time. Every other billing test mocks at or above
+    `create_checkout_session`, so nothing else in the suite touches the
+    transport — this assertion is the only thing standing between a one-word
+    regression and zero revenue.
+    """
+    import billing.stripe_client as mod
+
+    http_client = mod._STRIPE._requestor._get_http_client()
+    # `_client` is the sync httpx.Client; it is None unless allow_sync_methods=True,
+    # and HTTPXClient.request() raises RuntimeError on None before any network call.
+    assert http_client._client is not None, (
+        "Stripe HTTPXClient must be built with allow_sync_methods=True — "
+        "without it every synchronous Stripe call raises RuntimeError"
+    )
+
+
 def test_voyage_singleton_and_timeout(monkeypatch) -> None:
     import dna.embeddings as mod
 

@@ -3001,6 +3001,123 @@ it warns that the source expires at `SOURCE_MEDIA_RETENTION_HOURS` — after whi
 - [ ] A clip whose source has been purged explains that instead of offering a button that 409s
 - [ ] Regression test: a clip with `render_uri` set exposes the trigger
 
+### Issue 453: every Stripe call fails — billing has never worked in production
+
+**Severity: SEV1 — total revenue outage, live for 10 weeks. Found 2026-08-12.**
+
+`billing/stripe_client.py:40` builds the module singleton's transport as
+`stripe.HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S)`. That constructor defaults
+`allow_sync_methods=False` (`stripe/_http_client.py:1227`), which leaves the sync `httpx.Client`
+unbuilt (`:1255`), so `HTTPXClient.request()` raises before any network call (`:1286`):
+
+> `Stripe: HTTPXClient was initialized with allow_sync_methods=False, so it cannot be used for
+> synchronous requests.`
+
+**Both** of our Stripe call sites use the SYNC API, deliberately offloaded to a thread — 
+`routers/billing.py:153` (`asyncio.to_thread`, Wave-3 Fix C) and `worker/tasks.py:4473`
+(`run_in_executor`). So both fail 100 % of the time:
+
+- `POST /billing/checkout` — three identical failures in the prod log at 2026-08-12T20:17:48–49Z
+  (the owner's purchase attempts). `grep -c "billing checkout_session"` over 168 h of prod logs
+  returns **0**: no Checkout Session has ever been created.
+- `reconcile_stripe_ledger` — the beat task raises this same `RuntimeError` on every run
+  (worker log, 2026-08-12T19:22:13Z).
+
+**Introduced by `334d1f7` (2026-05-31, Issue 106)** — the commit that added the timeout. Before it
+the client was `stripe.StripeClient(settings.STRIPE_SECRET_KEY)`, using the default transport,
+which works. The timeout was correct to want; `HTTPXClient` was the wrong way to get it without
+the flag.
+
+**Why nothing caught it.** Every billing test mocks at or above `create_checkout_session`
+(`tests/test_billing.py:604-620`), so no test in the repo exercises the transport.
+`scripts/doctor.py:405` probes Stripe with a raw `httpx.get` rather than our client, so
+`doctor.py --full` reported "stripe auth ok" on 2026-07-29 — which is what `docs/GO_LIVE.md:71`
+cites as "Stripe live-verified" and why `:89` marks billing GREEN. Logged in
+`docs/OFF_COURSE_BUGS.md` (2026-08-12).
+
+**Approach.** Pass `allow_sync_methods=True`. This restores the architecture both call sites
+already document; it does not change the concurrency model.
+
+**Alternatives ruled out:** switching both call sites to Stripe's `*_async` methods and dropping
+the thread offload — defensible and arguably cleaner, but it rewrites two money paths (one of them
+a Celery beat task) during a live outage, and contradicts the documented Wave-3 Fix C design. Worth
+revisiting deliberately, not under an outage. Reverting to the default transport would restore
+billing but re-open Issue 106's 80 s-default-timeout finding.
+
+**Acceptance**
+- [x] `allow_sync_methods=True` on the `HTTPXClient` singleton, with a comment saying why it is
+      load-bearing
+- [x] Regression test pinning that the singleton's sync transport is built
+      (`tests/test_sdk_timeouts.py::test_stripe_http_client_allows_sync_requests`) — demonstrated
+      to discriminate: `HTTPXClient(timeout=10)._client` is `None`, with the flag it is a `Client`
+- [x] `docs/DECISIONS.md` records the deviation and why the async rewrite was declined
+- [ ] Live: a real purchase on prod creates a Checkout Session and credits minutes; the prod log
+      shows `billing checkout_session` and no `allow_sync_methods` RuntimeError
+- [ ] Live: `reconcile_stripe_ledger` completes without raising on its next beat
+- [ ] `docs/GO_LIVE.md:89` corrected — billing cannot be GREEN until a real purchase has settled
+
+### Issue 454: the checkout intent id is scoped to the browser tab, not the purchase
+
+**Severity: high — it breaks the second checkout attempt in any tab. Masked until 453 is fixed.**
+
+`frontend/src/pages/Pricing.tsx:35-43` caches one v4 UUID in
+`sessionStorage['creatorclip_checkout_intent_id']` and never clears it — not after a successful
+purchase (`:51-58` only strips query params), not when a different pack is clicked, not on reload.
+`billing/stripe_client.py:127-130` derives Stripe's `Idempotency-Key` from it as
+`checkout:{creator_id}:{intent_id}`, and the request params include `unit_amount`, which differs
+per pack (`:82`).
+
+Stripe errors when a key is replayed within its 24 h window with different parameters, so clicking
+Starter then Creator in one tab sends the same key with a different `unit_amount` → 400
+`idempotency_error` → `routers/billing.py:161` catch-all → 502 → one generic toast. Second
+symptom: repeating the SAME pack replays Stripe's cached response, handing back an
+already-consumed Session.
+
+**The code contradicts its own documentation in three places** — `Pricing.tsx:33-34`,
+`stripe_client.py:55-56` and `routers/billing.py:62-63` all claim a page load produces a fresh
+intent. `sessionStorage` is scoped to the tab and survives reloads.
+
+**Industry standard checked (Stripe docs, 2026-08-12):**
+- [Idempotent requests](https://docs.stripe.com/api/idempotent_requests) — "The idempotency layer
+  compares incoming parameters to those of the original request and **errors if they're not the
+  same**."
+- [Advanced error handling](https://docs.stripe.com/error-low-level#idempotency) — a key must
+  "unambiguously identify a single operation within your account over the last 24 hours";
+  "**Generate a fresh idempotency key when modifying the original request**"; "the safest strategy
+  where `4xx` errors are concerned is to always generate a new idempotency key."
+- [How Checkout works](https://docs.stripe.com/payments/checkout/how-checkout-works?payment-ui=stripe-hosted)
+  — the application creates a **new** Checkout Session when the customer is ready to pay.
+
+Our per-tab key contradicts all three. Issue 106's `creator_id` prefix is correct and stays; only
+the lifetime of the client half was wrong.
+
+**Approach.** Scope the id to one *purchase attempt*: an entry is created on the first click for a
+pack and cleared when the request settles, so concurrent clicks within one attempt still share a
+key (preserving Issue 106's double-click protection) while the next attempt gets a fresh one. Hold
+it in a `useRef` map, not `sessionStorage` — surviving a page load was the only thing storage
+bought, and that is the bug. Add the in-flight `disabled`/`aria-busy` guard the buy buttons have
+never had (`:139-148`).
+
+**Alternatives ruled out:** a key per pack in `sessionStorage` (fixes the cross-pack 502, not the
+repeat purchase); clearing only after the redirect (fixes the repeat purchase, not the 502 — the
+user can switch packs with no intervening navigation); a fresh UUID per click guarded only by a
+disabled button (regresses Issue 106 — a disabled button is a UI affordance, not a concurrency
+guarantee).
+
+**Acceptance**
+- [ ] A different pack clicked in the same tab starts checkout instead of erroring
+- [ ] A repeat purchase of the same pack gets a new, payable Session — not a consumed one
+- [ ] A double-click still issues exactly ONE `POST /billing/checkout` (Issue 106's guarantee),
+      pinned by a test
+- [ ] `routers/billing.py` maps `stripe.IdempotencyError` to 409 `checkout_conflict` and returns
+      the project's `{code, message}` detail shape on every branch; the client stops flattening
+      every failure into one sentence and tells the user nothing was charged
+- [ ] The Stripe failure log carries `error_class`/`stripe_type`/`stripe_code`/`stripe_request_id`
+      and **never** the idempotency key or `intent_id` (Stripe's own message quotes the key back)
+- [ ] The three lying comments are corrected
+- [ ] `frontend/src/pages/Pricing.test.tsx` exercises `buyPack` at all — today it does not, which
+      is why both 453 and 454 shipped
+
 ### Issue 452: clip title and caption truncate in the focused review view
 
 **Severity: medium — the creator hit it, and the fallback is also broken.**
@@ -3098,4 +3215,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **453**.
+- Next free issue number: **455**.
