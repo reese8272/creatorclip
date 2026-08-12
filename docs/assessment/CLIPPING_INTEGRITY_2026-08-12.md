@@ -208,3 +208,15 @@ Live-prod drills and output review; any fix, refactor, test addition, or flag fl
 ## Method note
 
 Exploration dossier: `/home/reese/.claude/plans/i-need-an-assessment-fluffy-rocket.md` (session-local). Deterministic outputs: session scratchpad (`pytest_default_lane.txt`, `eval_harness.txt`, `layer0.txt`, `phase1_facts.md`). Workflow: 12 agents / 687 tool uses / ~2.28 M subagent tokens; every candidate finding passed one confirmer or hunter AND one adversarial verifier; "new" classification required a fresh grep of `docs/issues.md`, `docs/DECISIONS.md`, and `docs/OFF_COURSE_BUGS.md` beyond the ledger index. Repro scripts live in the session scratchpad, referenced from each filed issue.
+
+## Appendix — W0 preservation snapshot (added 2026-08-12, pre-L29 builds)
+
+Before any L29 fix deployed, the audited video's live state was exported read-only from prod into
+`docs/assessment/exports/7e988321_pre_l29_snapshot.json`: the full 13-clip geometry
+(setup/start/end/peak, score, dna_match, triage, render status/URIs, signals_jsonb) plus the video
+row (camera_region_jsonb v2; `overlay_spans_jsonb` **null** — `OVERLAY_BAND_DETECT_ENABLED` was
+never set on prod, so Issue 466's span-version bump has nothing stale to invalidate for this video).
+All 11 rendered artifacts (ranks 1–9, 13, + rank 1 `_edit`) were HEAD-verified present on R2 — the
+burned-in-superchat "before" renders (ranks 3/13) survive the 2026-08-13 source purge and remain the
+visual A/B baseline for the W6 live back-test. Rank 4's `setup_start_s=1306.43` is the live Issue-449
+case preserved in data.

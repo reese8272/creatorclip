@@ -2816,8 +2816,14 @@ Design rulings in `docs/DECISIONS.md` 2026-08-11.
 - [x] Detector unit-tested on the frozen fixtures — both transitions land on the measured
       seconds (885 / 1006) and the clean control produces no run
 - [x] The emitted graph is compiled by real ffmpeg in CI, not just string-matched
-- [ ] Live: re-render rank 3 and rank 13 through the deployed pipeline with
-      `OVERLAY_BAND_DETECT_ENABLED=true`. **Source expires 2026-08-13 19:23 UTC**
+- [ ] Live: re-render through the deployed pipeline with `OVERLAY_BAND_DETECT_ENABLED=true`.
+      **Re-scoped 2026-08-12 (owner decision, `docs/DECISIONS.md`):** the original source was
+      deliberately allowed to purge (2026-08-13 19:23 UTC) because Issue 466 breaks the sampler
+      on this 1617 s source — the drill would false-fail. The live proof moves to the **W6
+      fresh-upload back-test**: after 466+467 land, the owner re-uploads the SAME recording
+      ("2026-08-05 07-59-55") and the drill runs against the frozen ground truth
+      (885–914 s / 930–1006 s, `tests/fixtures/superchat/README.md`) plus the pre-L29 snapshot
+      (`docs/assessment/exports/7e988321_pre_l29_snapshot.json`)
 
 ### Issue 449: `snap_start`'s inter-sentence-pause exemption bypasses the Issue-441 weak-opener guard
 
