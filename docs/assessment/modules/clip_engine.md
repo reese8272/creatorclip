@@ -1,5 +1,10 @@
 # clip_engine — assessed 2026-07-29 (delta re-assessment, w3/ready-pass-closeout)
 
+> 2026-08-12: cross-cutting clipping-integrity audit filed Lane L29 (Issues 456–482) —
+> see `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md` before the next delta pass.
+> Note: this file's SCENARIO_FLOOR/line refs are stale (floor is 23; sendcmd is at
+> reframe.py:632-675 and the reframe flag is ON in prod).
+
 Slice: candidates.py, captions.py, edits.py, filler.py, ranking.py, reframe.py,
 render.py, scoring.py, summary_select.py, window.py, __init__.py.
 
