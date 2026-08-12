@@ -1,8 +1,9 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-12 · **Branch:** `fix/dashboard-review-count` @ `a01a81f` ·
-**working tree CLEAN** · **4 ahead / 0 behind `origin/main`** (`origin/main` = `643e8d3`).
-**Prod:** `https://autoclip.studio` healthy (200), alembic **`0058 (head)`**.
+**Last updated:** 2026-08-12 · **Branch:** `main` @ `7e3582a` · **working tree CLEAN** ·
+**0 ahead / 0 behind `origin/main`; `origin/staging` at the same SHA; no stray branches.**
+**Prod:** `https://autoclip.studio`, alembic **`0058 (head)`**. Deploy of `7e3582a` was in flight
+at session end — confirm with `gh run list` before assuming it landed.
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source
 > of truth.
@@ -11,17 +12,15 @@
 
 ## CURRENT FOCUS
 
-**PR #81 is open and CI was still running when the session ended.** Everything else is merged and
-deployed.
+**Everything built this session is merged (PR #81, `7e3582a`).** The one thing that matters next is
+that a human actually uses the new review flow on prod — it has never been exercised against a real
+API response.
 
 ## → NEXT ACTION
 
-1. **Check PR #81** — `gh pr checks 81`. It carries Issue 445 (three piles), the Dashboard
-   review-count fix, and the filings for Issues 451/452. If green: `gh pr merge 81 --squash
-   --delete-branch`, then fast-forward staging:
-   `git merge-base --is-ancestor origin/staging origin/main && git push origin origin/main:refs/heads/staging`,
-   then watch the deploy pinned to the merge SHA (a failed image build **silently skips** deploy).
-2. **Then have the creator click through `/review` on prod.** 445's piles read `clip.triage`,
+1. **Confirm the `7e3582a` deploy landed** — `gh run list --limit 5`; a failed image build
+   **silently skips** the deploy step. Then `curl -s https://autoclip.studio/health`.
+2. **Have the creator click through `/review` on prod.** 445's piles read `clip.triage`,
    which the API returns but the frontend type had never declared — **it has only been exercised
    against mocks.** This is the highest-value unverified thing in the repo right now.
 3. **⏰ Time-boxed — video `7e988321`'s source purges 2026-08-13 19:23 UTC** (`ingest_done_at`
@@ -74,6 +73,10 @@ commit runs **zero** of the ~12 gating jobs.
   the span, donor name/amount/message unreadable inside it. **Flag off in prod.**
 - **Issue 450 SHIPPED and PROVEN on delivered media** — rank 1's framing moved **x=230 → x=1104**;
   the clip now holds the person actually speaking. `speaker_map.speaking_track_for_span()`.
+- **Issue 445 SHIPPED (`7e3582a`)** — three piles as tabs in `/review`, active pile in the URL.
+  The queue is now every untriaged clip (the shortlist ORDERS it rather than truncating it —
+  reverses Issue 377, see DECISIONS), and the Dashboard badge counts `pending` instead of
+  `rendered`. Kept/dropped are lists with wrapping titles.
 
 **Stage A beta:** `docs/GO_LIVE.md` is **16 GREEN / 6 CODE-GREEN / 10 OPEN**, and **#28 (friend
 smoke) is the only hard blocker left.**
@@ -104,8 +107,7 @@ smoke) is the only hard blocker left.**
 |---|---|
 | Repo | `github.com/reese8272/creatorclip` · prod = VM (`ssh creatorclip-vm`, standing permission), `/opt/autoclip`, docker-compose, Cloudflare tunnel |
 | Deploy chain | push to `main` → Docker publish → Deploy to production (staging migration gate → prod). **A failed image build silently SKIPS deploy** — `gh run list` after every push |
-| Open PR | **#81** (`fix/dashboard-review-count`) — 445 + dashboard count + 451/452 filings |
-| Merged today | #80 (26/448/450), #79, #78 |
+| Merged today | #81 (445 + dashboard count + 451/452 filings), #80 (26/448/450), #79, #78 |
 | Audited video | `7e988321-2265-4e22-85bd-0e9ffd583f84` — **source expires 2026-08-13 19:23 UTC** |
 | Creator | Backboard Media `eb9af967-5d2f-4063-a05e-9f4f070ce840` |
 | Live flags (VM `.env`) | `ACTIVE_SPEAKER_REFRAME_ENABLED=true` · `CAMERA_REGION_DETECT_ENABLED=true` · `REFRAME_MIN_MAPPING_CONFIDENCE=0.2` · **`OVERLAY_BAND_DETECT_ENABLED` absent → false** |
@@ -136,6 +138,12 @@ smoke) is the only hard blocker left.**
 - **Beware first-occurrence string replaces in large files.** Twice this session a `.replace(…, 1)`
   patched the wrong function (`worker/tasks.py`'s poster backfill; `Review.tsx`'s `ReviewClipView`).
   Verify with a grep for the symbol afterwards.
+- **`npx tsc --noEmit` is NOT the frontend type gate.** CI runs `npm run build` (`tsc -b && vite
+  build`), which type-checks the TEST files too. Local `tsc --noEmit` passed while CI failed on 12
+  errors (2026-08-12). Run `npm run build` before pushing frontend changes.
+- **`EmptyStatePrompt` requires an action** — deliberately, so a dead-end empty state cannot
+  type-check. If a new empty state will not compile, add the way to fill it rather than working
+  around the type.
 - **The cold-first-run vitest flake recurred** (650/651 cold, 651/651 on two immediate re-runs,
   `environment ~300s` vs ~207s). The name went uncaptured *again* — logged in
   `docs/OFF_COURSE_BUGS.md` with the suggestion to make verbose reporting structural.
