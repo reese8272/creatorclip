@@ -5,6 +5,52 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-12 (later) — Issue 445: the shortlist becomes ORDERING, not a filter
+
+**Decision — the review queue is every clip awaiting a verdict; Issue 377's shortlist orders it
+rather than truncating it.** This reverses a shipped, deliberately-designed behaviour, so the
+reasoning is recorded rather than quietly edited.
+
+**What 377 built.** `SHORTLIST_SIZE = 3`: the queue defaulted to the engine's top three argued
+picks, with "show all N candidates" as an escape hatch so an engine miss could be
+"de-prioritized, never hidden". `Review.test.tsx` pinned it, including the assertion that
+reviewing all three shortlisted clips ends the queue "never silently including the 4th,
+unshortlisted candidate".
+
+**What actually happened, 2026-08-12.** The creator kept clip 3 of a 12-clip video. The queue
+announced **"All clips reviewed! Great work."** and offered to generate more — while the dashboard
+simultaneously showed **27 clips to review**. Two surfaces, two contradictory claims, both wrong:
+
+- `reviewed` meant `index >= shortlist.length`, so finishing 3 of 12 read as finishing everything.
+- The dashboard summed `rendered`, which never decrements (fixed separately the same day).
+
+**Why the escape hatch did not save it.** "Show all candidates" is only load-bearing if it is
+found. The failure mode is not "the creator chose to see three" — it is the product *telling them
+there were only three*, in a terminal state with a CTA. A filter that can produce a false
+statement about completeness is not a de-prioritization.
+
+**What changed.** `orderForReview()` sorts pending clips shortlist-first, then by rank, and the
+queue holds all of them. 377's intent — argue the best cases first — is preserved exactly; only
+the truncation is gone. `reviewed` now means the pending queue has been walked.
+
+**Kept/dropped are LISTS, not more carousel.** The question in those piles is "which of these am I
+publishing?", which needs titles and captions readable side by side. Titles WRAP rather than
+truncate there: the previous `truncate` + native `title=` tooltip clipped long values in both the
+row and the tooltip.
+
+**No optimistic updates.** `grep -r 'onMutate|setQueryData|cancelQueries' frontend/src` still
+returns zero hits, and Issue 437's contract is that a failed write must never look like a success.
+A pile move uses `PUT /clips/{id}/triage` (idempotent, Issue 444) and refetches, so what is shown
+is what was actually stored.
+
+**A subtlety worth recording, found while building.** `onAdvance` serves BOTH the verdict path and
+the plain "Next clip" skip (`YourCall.tsx:127` and `:305`). Invalidating `review-clips` there
+drops the just-rated clip out of the pending list while the index also moves — silently skipping
+the next clip. Only `clip-counts` is invalidated; the list stays stable for the session and the
+index walks it.
+
+---
+
 ## 2026-08-12 — Issue 450: use the speaker mapping for the seat; split-screen REVERSED
 
 **Decision — the framing planner asks who is SPEAKING, and split-screen is not built.** This

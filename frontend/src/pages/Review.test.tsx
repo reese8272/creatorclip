@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -296,53 +296,89 @@ function mockFetchWithClips(clips: unknown[]) {
   })
 }
 
-describe('Review — shortlist mode (Issue 377)', () => {
-  it('defaults to the shortlisted clips and offers "show all candidates"', async () => {
-    vi.stubGlobal('fetch', mockFetchWithClips(FOUR_CLIPS))
-    render(
+describe('Review — piles + shortlist ordering (Issue 445, reversing 377)', () => {
+  // Issue 377 used `shortlisted` as a FILTER: the queue was the top 3 and the
+  // rest sat behind "show all candidates". The two tests that stood here pinned
+  // that, including the assertion that finishing 3 of 4 shows "All clips
+  // reviewed".
+  //
+  // The creator hit exactly that on 2026-08-12 — kept clip 3 of 12, was told
+  // they were done and offered more clips, while the dashboard showed 27 to
+  // review. The shortlist now ORDERS the pending queue instead of truncating
+  // it. Ruling in docs/DECISIONS.md 2026-08-12.
+  function renderReview(entry = '/app/review?video_id=v1') {
+    return render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter basename="/app" initialEntries={['/app/review?video_id=v1']}>
+        <MemoryRouter basename="/app" initialEntries={[entry]}>
           <Routes>
             <Route path="review" element={<Review />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     )
-    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
-    expect(screen.getByText('Top 3 picks — the case for each, ranked')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Show all 4 candidates/ })).toBeInTheDocument()
+  }
 
-    // Advance through the shortlist — the queue must be exactly the 3
-    // shortlisted clips, never surfacing #4 by default.
+  it('the pending queue holds EVERY untriaged clip, top picks first', async () => {
+    vi.stubGlobal('fetch', mockFetchWithClips(FOUR_CLIPS))
+    renderReview()
+    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
+
+    // The unshortlisted 4th candidate is reachable by simply continuing —
+    // it is no longer hidden behind a toggle, and reaching it does not
+    // require having discovered a link.
     await userEvent.click(screen.getByRole('button', { name: /Next clip/ }))
     expect(await screen.findByText(/Clip #2/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /Next clip/ }))
     expect(await screen.findByText(/Clip #3/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /Next clip/ }))
-    // Reviewing all 3 shortlisted clips ends the queue (redirect message),
-    // never silently including the 4th, unshortlisted candidate.
+    // THE REVERSAL: this used to assert "All clips reviewed". Four clips are
+    // pending, so three verdicts cannot possibly mean done.
+    expect(await screen.findByText(/Clip #4/)).toBeInTheDocument()
+    expect(screen.queryByText(/All clips reviewed/)).not.toBeInTheDocument()
+  })
+
+  it('"all reviewed" means the pending pile is empty, not the shortlist', async () => {
+    const allTriaged = FOUR_CLIPS.map((c, i) => ({
+      ...c,
+      triage: i % 2 === 0 ? 'kept' : 'dropped',
+    }))
+    vi.stubGlobal('fetch', mockFetchWithClips(allTriaged))
+    renderReview()
     expect(await screen.findByText(/All clips reviewed/)).toBeInTheDocument()
   })
 
-  it('"show all candidates" reveals the full set including non-shortlisted clips', async () => {
-    vi.stubGlobal('fetch', mockFetchWithClips(FOUR_CLIPS))
-    render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter basename="/app" initialEntries={['/app/review?video_id=v1']}>
-          <Routes>
-            <Route path="review" element={<Review />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    )
-    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /Show all 4 candidates/ }))
-    expect(await screen.findByText('Showing all 4 candidates')).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /Show top picks only \(3\)/ }),
-    ).toBeInTheDocument()
-    // Toggling resets to the first clip of the now-active (full) queue.
-    expect(screen.getByText(/Clip #1/)).toBeInTheDocument()
+  it('pile tabs count each pile and switch to the kept list', async () => {
+    const mixed = [
+      { ...makeClip(1, true), triage: 'pending' },
+      { ...makeClip(2, true), triage: 'kept', suggested_title: 'A kept clip title' },
+      { ...makeClip(3, true), triage: 'dropped' },
+      { ...makeClip(4, false), triage: 'pending' },
+    ]
+    vi.stubGlobal('fetch', mockFetchWithClips(mixed))
+    renderReview()
+
+    const tabs = await screen.findByTestId('pile-tabs')
+    expect(within(tabs).getByRole('tab', { name: /Needs review 2/ })).toBeInTheDocument()
+    expect(within(tabs).getByRole('tab', { name: /Keep 1/ })).toBeInTheDocument()
+    expect(within(tabs).getByRole('tab', { name: /Drop 1/ })).toBeInTheDocument()
+
+    await userEvent.click(within(tabs).getByRole('tab', { name: /Keep 1/ }))
+    // The kept pile is a LIST showing the title in full — that is the question
+    // being answered there ("which of these am I publishing?").
+    expect(await screen.findByText('A kept clip title')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Un-keep' })).toBeInTheDocument()
+  })
+
+  it('opening the Keep pile does not claim the queue is finished', async () => {
+    // The kept/dropped views render BEFORE the `reviewed` guard on purpose.
+    const mixed = [
+      { ...makeClip(1, true), triage: 'kept' },
+      { ...makeClip(2, true), triage: 'kept' },
+    ]
+    vi.stubGlobal('fetch', mockFetchWithClips(mixed))
+    renderReview('/app/review?video_id=v1&pile=kept')
+    expect(await screen.findByTestId('pile-tabs')).toBeInTheDocument()
+    expect(screen.queryByText(/All clips reviewed/)).not.toBeInTheDocument()
   })
 
   it('shows no shortlist banner when nothing is shortlisted (e.g. only a creator selection)', async () => {

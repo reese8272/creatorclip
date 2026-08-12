@@ -356,6 +356,10 @@ export interface ReviewClip {
   // null) is never shortlisted — it was never engine-scored, so there is no
   // case to argue for it as a "top pick".
   shortlisted: boolean
+  // Issue 444 — persistent review state, set by PUT /clips/{id}/triage and by
+  // POST /clips/{id}/feedback (the two surfaces cannot diverge). This is what
+  // the three piles partition on; `pending` means "still needs a verdict".
+  triage: 'pending' | 'kept' | 'dropped'
   // L26 Track A (Issue 417) — pipeline-suggested publish metadata. OPTIONAL on
   // purpose: the columns land server-side on a parallel branch, so old payloads
   // must keep parsing and the UI falls back to today's behavior when absent.

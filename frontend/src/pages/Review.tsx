@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useIsMutating, useQuery } from '@tanstack/react-query'
+import { useIsMutating, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { STAGE_CELL } from '@/lib/toolLayout'
@@ -16,6 +16,8 @@ import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { QueryErrorState } from '@/components/QueryErrorState'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { StyleReview } from '@/components/review/StyleReview'
+import { PileList, PileTabs } from '@/components/review/ClipPiles'
+import { orderForReview, partitionByPile, type Pile } from '@/lib/clipPiles'
 import { GenerateMoreClipsButton } from '@/components/review/GenerateMoreClipsButton'
 import { generateMoreMutationKey } from '@/lib/mutationKeys'
 import { GenerateClipsButton, VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
@@ -205,12 +207,23 @@ export function Review() {
   // clip queue — the standalone "explain why this style works" surface.
   const styleMode = params.get('mode') === 'style'
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [index, setIndex] = useState(0)
   // Issue 377 — shortlist mode: default the queue to the engine's argued top
   // picks (WhyThisClip primary content is unchanged — it was already
   // default-open); the full candidate set is one click away via "show all
   // candidates" so an engine miss is never hidden, only de-prioritized.
-  const [showAllCandidates, setShowAllCandidates] = useState(false)
+  // Issue 445 — the active pile lives in the URL so a reload (and the back
+  // button) resume where the creator was, which is half of "reviewed clips stay
+  // visibly reviewed across a reload".
+  const pile = (params.get('pile') as Pile) ?? 'pending'
+  function selectPile(next: Pile) {
+    const p = new URLSearchParams(params)
+    if (next === 'pending') p.delete('pile')
+    else p.set('pile', next)
+    setParams(p)
+    setIndex(0)
+  }
 
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: ['review-clips', videoId],
@@ -229,13 +242,28 @@ export function Review() {
   })
 
   const allClips = data?.clips ?? []
+  // Issue 445 — the queue is now "clips awaiting a verdict", not "the top 3 by
+  // rank". Issue 377's shortlist survives as ORDERING (top picks argued first);
+  // as a FILTER it hid nine of twelve clips and let the queue claim it was
+  // finished. See docs/DECISIONS.md 2026-08-12.
+  const piles = partitionByPile(allClips)
+  const pileCounts = {
+    pending: piles.pending.length,
+    kept: piles.kept.length,
+    dropped: piles.dropped.length,
+  }
+  const pendingClips = orderForReview(piles.pending)
   const shortlistedClips = allClips.filter((c) => c.shortlisted)
   // Fall back to the full set when nothing was shortlisted (e.g. a video with
   // only a creator-made selection, which is never engine-scored/shortlisted —
   // Issue 373) so the queue is never emptier than what actually exists.
-  const hasHiddenCandidates = shortlistedClips.length > 0 && shortlistedClips.length < allClips.length
-  const clips = showAllCandidates || shortlistedClips.length === 0 ? allClips : shortlistedClips
-  const reviewed = clips.length > 0 && index >= clips.length
+  const clips = pendingClips
+  // "Reviewed" means the whole PENDING queue has been walked, or there was
+  // nothing pending to begin with. Previously the queue was the top 3 by rank,
+  // so finishing 3 of 12 announced "All clips reviewed!" — the false statement
+  // the creator hit on 2026-08-12. The queue is now every untriaged clip.
+  const reviewed =
+    allClips.length > 0 && (pendingClips.length === 0 || index >= pendingClips.length)
   const clip = clips[index]
   // Issue 431: an in-flight generate-more request must hold the "all reviewed"
   // redirect open — otherwise the dashboard navigation yanks the creator away
@@ -243,16 +271,11 @@ export function Review() {
   const generatingMore =
     useIsMutating({ mutationKey: generateMoreMutationKey(videoId ?? '') }) > 0
 
-  function toggleShowAllCandidates() {
-    setShowAllCandidates((v) => !v)
-    setIndex(0)
-  }
 
   // Issue 431: appended clips are never shortlisted, so show the full set and
   // land on the first new clip — the pre-append list length is its index.
   function handleMoreClips(newTotal: number, message: string | null) {
     if (message || newTotal <= allClips.length) return
-    setShowAllCandidates(true)
     setIndex(allClips.length)
   }
 
@@ -314,6 +337,22 @@ export function Review() {
         </ToolMain>
       </ToolShell>
     )
+  // Issue 445 — kept/dropped piles are LISTS. Placed before the `reviewed` and
+  // `!clip` guards on purpose: those describe the PENDING queue, and opening
+  // Keep with an empty pending pile must not render "All clips reviewed".
+  if (pile !== 'pending')
+    return (
+      <ToolShell scroll={false} className="flex flex-col gap-3 px-4 py-3 lg:px-6">
+        <div
+          data-testid="pile-tabs"
+          className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted"
+        >
+          <PileTabs counts={pileCounts} active={pile} onSelect={selectPile} />
+          <GenerateMoreClipsButton videoId={videoId} onDone={handleMoreClips} />
+        </div>
+        <PileList pile={pile} clips={piles[pile]} videoId={videoId} />
+      </ToolShell>
+    )
   if (reviewed)
     return (
       <ToolShell>
@@ -365,25 +404,17 @@ export function Review() {
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted">
         {personalization ? <PersonalizationBand status={personalization} /> : <span />}
 
-        {/* Issue 377 — shortlist mode: default queue is the engine's argued top
-            picks; "show all candidates" is the load-bearing escape hatch so an
-            engine miss can never be silently hidden. */}
-        {shortlistedClips.length > 0 && (
-          <div className="flex items-center gap-3" data-testid="shortlist-banner">
-            <span>
-              {showAllCandidates
-                ? `Showing all ${allClips.length} candidates`
-                : `Top ${shortlistedClips.length} picks — the case for each, ranked`}
-            </span>
-            {(hasHiddenCandidates || showAllCandidates) && (
-              <button onClick={toggleShowAllCandidates} className="text-accent-text hover:underline">
-                {showAllCandidates
-                  ? `Show top picks only (${shortlistedClips.length})`
-                  : `Show all ${allClips.length} candidates`}
-              </button>
-            )}
-          </div>
-        )}
+        {/* Issue 445 — the three piles. Replaces Issue 377's shortlist FILTER,
+            which hid unshortlisted clips behind a link and let the queue
+            announce "All clips reviewed!" after 3 of 12. The shortlist now
+            orders the pending queue instead of truncating it, so top picks are
+            still argued first and nothing is ever hidden. */}
+        <div className="flex items-center gap-3" data-testid="pile-tabs">
+          <PileTabs counts={pileCounts} active={pile} onSelect={selectPile} />
+          {pile === 'pending' && shortlistedClips.length > 0 && (
+            <span data-testid="shortlist-banner">top picks first</span>
+          )}
+        </div>
 
         <div className="flex items-center gap-4">
           {/* Issue 370: the whole video's style is reviewable, not just its clips. */}
@@ -402,7 +433,19 @@ export function Review() {
         clip={clip}
         videoId={videoId}
         personalization={personalization}
-        onAdvance={() => setIndex((i) => i + 1)}
+        onAdvance={() => {
+          // YourCall calls this for BOTH a verdict and the plain "Next clip"
+          // skip (YourCall.tsx:127 and :305), so it must always advance.
+          //
+          // Only `clip-counts` is invalidated, NOT `review-clips`: refetching
+          // the clip list mid-queue would drop the just-rated clip out of
+          // `pendingClips` while the index also moved, silently skipping the
+          // next one. The list stays stable for the session and the index walks
+          // it; the pile tabs pick up the new triage on the next load or tab
+          // switch. Honest, and it cannot skip a clip.
+          setIndex((i) => i + 1)
+          void queryClient.invalidateQueries({ queryKey: ['clip-counts'] })
+        }}
       />
     </ToolShell>
   )
