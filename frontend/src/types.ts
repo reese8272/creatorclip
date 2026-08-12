@@ -137,7 +137,15 @@ export interface ClipListResponse {
 export interface VideoClipCount {
   video_id: string
   total: number
+  // Production progress — how many clips finished rendering. NOT a review
+  // figure: it never decrements as the creator rates. Use `pending` for
+  // anything that answers "how much is left to do?".
   rendered: number
+  // Triage breakdown (Issue 444). `pending` is the honest "still needs a
+  // decision" count and is what the review queue is built from.
+  pending: number
+  kept: number
+  dropped: number
 }
 
 export interface ClipCountsResponse {
