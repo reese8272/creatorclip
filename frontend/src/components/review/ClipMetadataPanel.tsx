@@ -238,15 +238,23 @@ function MetadataRow({
   onEdit: () => void
 }) {
   return (
-    <div className="flex items-center gap-2 py-1" data-testid={`metadata-row-${label.toLowerCase()}`}>
+    // Issue 452: `items-start`, not `items-center` — once the value wraps, centering
+    // would float the label and the Applied/Suggested/Edit controls against the middle
+    // of a multi-line block.
+    <div className="flex items-start gap-2 py-1" data-testid={`metadata-row-${label.toLowerCase()}`}>
       <span className="w-9 shrink-0 text-label uppercase tracking-[0.04em] text-subtle">
         {label}
       </span>
       {value ? (
         <>
-          <span className="min-w-0 flex-1 truncate text-xs text-fg" title={value}>
-            {value}
-          </span>
+          {/*
+            Issue 452 — WRAP, do not truncate, and carry no native `title=` tooltip.
+            Same reasoning as the pile rows (Issue 445, ClipPiles.tsx): a title or hook
+            you are about to publish is exactly when you need to read it in full, and
+            the native tooltip clipped long values just like the thing it was escaping.
+            Owner decision 2026-08-12: expand to fit, no clamp toggle.
+          */}
+          <span className="min-w-0 flex-1 break-words text-xs text-fg">{value}</span>
           {applied ? (
             <span className="inline-flex shrink-0 items-center gap-1 text-xs text-success">
               <Check className={ICON_SIZE.xs} aria-hidden="true" /> Applied
@@ -265,7 +273,7 @@ function MetadataRow({
           )}
         </>
       ) : (
-        <span className="min-w-0 flex-1 truncate text-xs text-subtle">—</span>
+        <span className="min-w-0 flex-1 break-words text-xs text-subtle">—</span>
       )}
       <button
         onClick={onEdit}

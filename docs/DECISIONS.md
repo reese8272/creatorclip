@@ -50,6 +50,32 @@ billing gate is reverted to RED until a real purchase settles.
 
 ---
 
+## 2026-08-12 (later still) — Issue 452: the focused review view expands to fit, and drops the tooltip
+
+**Decision — title and caption WRAP in the focused review view; the native `title=` tooltip is
+removed rather than kept as a fallback.** This reverses a shipped assertion
+(`ClipMetadataPanel.test.tsx` pinned "one truncating row each"), so it is recorded.
+
+**Trigger.** The creator reported truncated titles and captions and added that "you can hover, but
+the hover sometimes cuts off too". That second half is the load-bearing part: native tooltips clip
+long strings themselves, so the escape hatch failed in exactly the same way as the thing it was
+escaping. A truncation whose only remedy also truncates is not a de-prioritization, it is a hide.
+
+**Owner decision (2026-08-12):** expand to fit — wrap to as many lines as the value needs, no clamp
+with a toggle. The panel gets taller for long values; nothing is ever hidden. Consistent with what
+Issue 445 already did to the kept/dropped pile rows, and with the same reasoning: a title you are
+about to publish is exactly when you need to read it in full.
+
+**Why the layout is safe rather than merely "probably fine".** The actions rail is
+`min-h-0 flex-col … lg:overflow-y-auto` inside a `minmax(300px, 26rem)` grid cell with no fixed
+child heights, so a taller card pushes its siblings down and the rail scrolls. It is a *sibling*
+grid cell of the stage, and the row is `minmax(0,1fr)`, so the stage's `100cqh`-derived player size
+does not move. The one real hazard was `items-center` on the row, which would have floated the
+label and the Applied/Suggested/Edit controls against the middle of a wrapped block — changed to
+`items-start`, matching the pile rows.
+
+---
+
 ## 2026-08-12 (later) — Issue 445: the shortlist becomes ORDERING, not a filter
 
 **Decision — the review queue is every clip awaiting a verdict; Issue 377's shortlist orders it

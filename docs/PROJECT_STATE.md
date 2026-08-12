@@ -4,6 +4,48 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-12 (latest) — Issue 453 SEV1 found and fixed; 451 + 452 closed
+
+### Issue 453 — billing had never worked, in production, for 10 weeks
+
+Investigating the owner's failed purchase turned up a total revenue outage, not the idempotency
+bug the investigation predicted. `billing/stripe_client.py` built the singleton's transport as
+`stripe.HTTPXClient(timeout=...)`, whose `allow_sync_methods` defaults to False — which leaves the
+sync `httpx.Client` unbuilt, so every synchronous Stripe call raises before touching the network.
+Both of our call sites use the sync API on purpose (`asyncio.to_thread` in the router,
+`run_in_executor` in the worker), so both failed 100 % of the time.
+
+Prod evidence: three identical `RuntimeError`s at 20:17:48–49Z (the owner's clicks),
+`reconcile_stripe_ledger` raising the same error every beat, and **zero** `billing checkout_session`
+lines in 168 h of logs — no Checkout Session has ever been created. Introduced by `334d1f7`
+(2026-05-31, Issue 106), the commit that added the timeout.
+
+Fixed with `allow_sync_methods=True`, restoring the architecture both call sites already document.
+The async rewrite was considered and explicitly declined under an outage (`docs/DECISIONS.md`).
+
+**The part worth carrying forward:** every billing test mocks at or above
+`create_checkout_session`, so nothing in the suite touched the transport — a fully-green suite sat
+alongside a total outage. And `scripts/doctor.py` probes Stripe with a raw `httpx.get` rather than
+our client, so `doctor.py --full` reported "stripe auth ok" and kept the GO_LIVE billing gate GREEN.
+That gate is now **RED** and cannot return to green on code alone — only on a settled purchase.
+Issue **454** was filed for the tab-scoped idempotency key the outage was masking.
+
+### Issues 451 + 452 — the two remaining creator-reported review defects
+
+**451:** a rendered clip now has a re-render control in the actions rail, reusing the shared
+`useClipRender` ladder rather than a second implementation. Before this, the trigger existed only
+inside `StagePlaceholder`, which the stage swaps out the moment `render_uri` lands — so every
+render-pipeline fix could only ever reach clips rendered *after* the deploy. Verifying Issue 450
+had required replicating the endpoint's reset by hand against prod.
+
+**452:** title and caption wrap instead of truncating in the focused review view, and the native
+`title=` tooltip is gone — it clipped long strings exactly like the thing it was escaping. Same fix
+Issue 445 made to the pile rows, applied to `ClipMetadataPanel` and `AppliedTitleField`.
+
+Gates: backend 2976/0, frontend 657/657, `npm run build` clean, Layer 0 all green (coverage 84.18).
+
+---
+
 ## 2026-08-12 — Issues 448 + 450 CLOSED: the two audit defects are fixed
 
 Both defects the 2026-08-10 audit found on delivered media are fixed, tested and proven against
