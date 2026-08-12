@@ -470,6 +470,7 @@ def render_clip_file(
     transcript_segments: list[dict] | None = None,
     peak_s: float | None = None,
     video_camera_region: dict | None = None,
+    video_overlay_spans: dict | None = None,
 ) -> dict | None:
     """
     Cut [start_s, end_s] from source, crop to 9:16 centered on detected face,
@@ -695,13 +696,36 @@ def render_clip_file(
     # target addresses EVERY crop instance in the graph (empirically verified
     # 2026-08-05), including the region pre-crop and the punch-in crop.
     # Static chains keep the unlabeled `crop=` spelling (byte-identical).
+    # Transient overlay mask (Issue 448) goes FIRST, in absolute source
+    # coordinates, so the region pre-crop and the 9:16 crop carry the masked
+    # pixels through by construction — no offset arithmetic, and it works
+    # whether or not a camera region was detected. Empty list when no span
+    # overlaps this clip, which keeps an unaffected clip's chain byte-identical.
+    overlay_parts: list[str] = []
+    if video_overlay_spans:
+        from clip_engine.overlay_bands import overlay_blur_filters, spans_from_video_json
+
+        unpacked = spans_from_video_json(video_overlay_spans, frame_w, frame_h)
+        if unpacked is not None:
+            band_y, band_h, spans = unpacked
+            overlay_parts = overlay_blur_filters(band_y, band_h, spans, start_s, end_s, frame_w)
+            if overlay_parts:
+                logger.info(
+                    "overlay_bands: masking y=%d h=%d over %d span(s) for clip [%.2f–%.2f]",
+                    band_y,
+                    band_h,
+                    len(spans),
+                    start_s,
+                    end_s,
+                )
+
     if sendcmd_path is not None:
-        vf_parts = [f"sendcmd=f={sendcmd_path}"]
+        vf_parts = [f"sendcmd=f={sendcmd_path}", *overlay_parts]
         if has_camera_region:
             vf_parts.append(f"crop={region_w}:{region_h}:{region_x}:{region_y}")
         vf_parts.extend([f"crop@spk={crop_w}:{region_h}:{x_offset}:0", f"scale={out_w}:{out_h}"])
     else:
-        vf_parts = []
+        vf_parts = [*overlay_parts]
         if has_camera_region:
             vf_parts.append(f"crop={region_w}:{region_h}:{region_x}:{region_y}")
         vf_parts.extend([f"crop={crop_w}:{region_h}:{x_offset}:0", f"scale={out_w}:{out_h}"])

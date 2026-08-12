@@ -880,6 +880,9 @@ def _seat_hold_plan(
     start_s: float,
     end_s: float,
     crop_w: int,
+    *,
+    mapping: _sm.SpeakerMapping | None = None,
+    turns: list[_sm.Turn] | None = None,
 ) -> tuple[list[CropCut], list[CropCenterPoint]] | None:
     """Cut between discrete face "seats" instead of panning between them (Issue 440).
 
@@ -932,20 +935,39 @@ def _seat_hold_plan(
     ):
         return None
 
-    # One hold per shot: the seat that owns the most samples in that span. A
-    # source shot change is the only thing that may move the framing.
+    # One hold per shot. A source shot change is the only thing that may move
+    # the framing.
     boundaries = sorted({start_s, *[t for t in shot_changes if start_s < t < end_s], end_s})
     points: list[CropCenterPoint] = []
     cuts: list[CropCut] = []
     for span_start, span_end in zip(boundaries, boundaries[1:], strict=False):
-        counts = Counter(
-            _nearest_seat(obs[0].cx)
-            for ts, obs in obs_frames
-            if obs and span_start <= ts < span_end
-        )
-        if not counts:
-            continue
-        x = int(round(seats[counts.most_common(1)[0][0]]))
+        # Issue 450 — prefer the seat of whoever is SPEAKING in this span. The
+        # size vote below is uncorrelated with speech: on rank 1 of video
+        # `7e988321` it held the silent participant for the whole 34.55 s clip
+        # while the speaker mapping had already assigned the speaker to the
+        # other seat correctly. Whoever sits closer to their camera used to win.
+        seat_idx: int | None = None
+        if mapping is not None and turns:
+            speaking = _sm.speaking_track_for_span(
+                mapping, turns, tracks, shot_changes, span_start, span_end
+            )
+            if speaking is not None:
+                seat_idx = _nearest_seat(speaking.median_cx())
+
+        if seat_idx is None:
+            # Fallback: the seat that owns the most samples as the LARGEST face.
+            # Reached for a no-transcript video, an unmapped span, or a pruned
+            # track — i.e. exactly the cases with no speech signal to use.
+            counts = Counter(
+                _nearest_seat(obs[0].cx)
+                for ts, obs in obs_frames
+                if obs and span_start <= ts < span_end
+            )
+            if not counts:
+                continue
+            seat_idx = counts.most_common(1)[0][0]
+
+        x = int(round(seats[seat_idx]))
         if not points:
             points.append(CropCenterPoint(start_s, x))
         elif x != points[-1].center_x:
@@ -1191,6 +1213,11 @@ def compute_dynamic_crop(
                 start_s,
                 end_s,
                 crop_w,
+                # Issue 450: the mapping already knows which seat is talking.
+                # Passing it here is the whole fix — it was computed above and
+                # then ignored by the planner.
+                mapping=mapping,
+                turns=turns,
             )
             if seat_plan is not None:
                 cuts, planned = seat_plan

@@ -21,6 +21,7 @@ from clip_engine.speaker_map import (
     map_speakers_to_tracks,
     mouth_motion_energy,
     shot_index_for,
+    speaking_track_for_span,
 )
 
 # ---------------------------------------------------------------------------
@@ -418,3 +419,116 @@ class TestPlumbing:
         obs[3] = FaceObs(t=0.6, cx=900.0, cy=500.0, w=100.0, h=100.0)
         track = FaceTrack(track_id=0, shot_idx=0, obs=obs)
         assert track.median_cx() == 400.0  # a mean would read 500
+
+
+class TestSpeakingTrackForSpan:
+    """Issue 450 — expose the mapping's answer to the framing planner."""
+
+    def _tracks(self) -> list[FaceTrack]:
+        left = [FaceObs(t=0.2 * i, cx=381.2, cy=300.0, w=140.0, h=140.0) for i in range(30)]
+        right = [FaceObs(t=0.2 * i, cx=1257.5, cy=300.0, w=100.0, h=100.0) for i in range(30)]
+        return [
+            FaceTrack(track_id=0, shot_idx=0, obs=left),
+            FaceTrack(track_id=1, shot_idx=0, obs=right),
+        ]
+
+    def test_returns_the_assigned_track_for_the_dominant_speaker(self) -> None:
+        tracks = self._tracks()
+        got = speaking_track_for_span(
+            SpeakerMapping(assignments={(0, 0): 1}, confidence=0.084),
+            [Turn(speaker=0, start=0.0, end=6.0)],
+            tracks,
+            [],
+            0.0,
+            6.0,
+        )
+        assert got is not None and got.track_id == 1
+
+    def test_dominant_speaker_is_by_speech_time_inside_the_span(self) -> None:
+        """A speaker who barely talks in this span must not decide its framing."""
+        tracks = self._tracks()
+        turns = [Turn(speaker=0, start=0.0, end=0.5), Turn(speaker=1, start=0.5, end=6.0)]
+        got = speaking_track_for_span(
+            SpeakerMapping(assignments={(0, 0): 0, (0, 1): 1}, confidence=0.4),
+            turns,
+            tracks,
+            [],
+            0.0,
+            6.0,
+        )
+        assert got is not None and got.track_id == 1
+
+    def test_only_speech_overlapping_the_span_counts(self) -> None:
+        """Speaker 1 talks longer overall, but not inside this span."""
+        tracks = self._tracks()
+        turns = [Turn(speaker=0, start=0.0, end=2.0), Turn(speaker=1, start=10.0, end=60.0)]
+        got = speaking_track_for_span(
+            SpeakerMapping(assignments={(0, 0): 0, (0, 1): 1}, confidence=0.4),
+            turns,
+            tracks,
+            [],
+            0.0,
+            3.0,
+        )
+        assert got is not None and got.track_id == 0
+
+    def test_shot_index_is_derived_the_same_way_build_face_tracks_derives_it(self) -> None:
+        """The mapping is keyed (shot_idx, speaker); a mismatch silently misses."""
+        obs = [FaceObs(t=5.0 + 0.2 * i, cx=1257.5, cy=300.0, w=100.0, h=100.0) for i in range(10)]
+        tracks = [FaceTrack(track_id=7, shot_idx=1, obs=obs)]
+        shot_changes = [4.0]
+        assert shot_index_for(5.0, shot_changes) == 1
+        got = speaking_track_for_span(
+            SpeakerMapping(assignments={(1, 0): 7}, confidence=0.3),
+            [Turn(speaker=0, start=5.0, end=7.0)],
+            tracks,
+            shot_changes,
+            5.0,
+            7.0,
+        )
+        assert got is not None and got.track_id == 7
+        # The same assignment keyed to shot 0 must NOT match this span.
+        assert (
+            speaking_track_for_span(
+                SpeakerMapping(assignments={(0, 0): 7}, confidence=0.3),
+                [Turn(speaker=0, start=5.0, end=7.0)],
+                tracks,
+                shot_changes,
+                5.0,
+                7.0,
+            )
+            is None
+        )
+
+    def test_none_when_there_is_nothing_to_go_on(self) -> None:
+        tracks = self._tracks()
+        turn = [Turn(speaker=0, start=0.0, end=6.0)]
+        mapped = SpeakerMapping(assignments={(0, 0): 1}, confidence=0.5)
+        empty = SpeakerMapping(assignments={}, confidence=0.0)
+        assert speaking_track_for_span(mapped, [], tracks, [], 0.0, 6.0) is None
+        assert speaking_track_for_span(empty, turn, tracks, [], 0.0, 6.0) is None
+        assert speaking_track_for_span(mapped, turn, [], [], 0.0, 6.0) is None
+        # No speech overlapping the span.
+        assert speaking_track_for_span(mapped, turn, tracks, [], 50.0, 60.0) is None
+        # Assignment pointing at a track that no longer exists.
+        assert (
+            speaking_track_for_span(
+                SpeakerMapping(assignments={(0, 0): 99}, confidence=0.5),
+                turn,
+                tracks,
+                [],
+                0.0,
+                6.0,
+            )
+            is None
+        )
+
+    def test_ties_are_deterministic(self) -> None:
+        """An unstable seat would reintroduce the flicker Issue 440 removed."""
+        tracks = self._tracks()
+        turns = [Turn(speaker=0, start=0.0, end=3.0), Turn(speaker=1, start=3.0, end=6.0)]
+        mapping = SpeakerMapping(assignments={(0, 0): 0, (0, 1): 1}, confidence=0.4)
+        picks = {
+            speaking_track_for_span(mapping, turns, tracks, [], 0.0, 6.0).track_id for _ in range(5)
+        }
+        assert picks == {0}, "equal speech time must resolve to the lower speaker id, always"

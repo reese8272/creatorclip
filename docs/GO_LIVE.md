@@ -47,7 +47,7 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Does account deletion revoke tokens + purge media/data? | Prod exercise happens inside #28 | build | GREEN | #158 (+#247/#248/#249); verified in-repo 2026-07-02: `routers/auth.py` erasure helper incl. Google `/revoke` POST |
 | Is the `yt-dlp` path guarded (off by default, own-content only)? | None | build | GREEN | Verified in-repo 2026-07-02: `youtube/ingest.py:89` gate on `config.py:421` `YTDLP_ENABLED=False` |
 | Do we request only necessary OAuth scopes? | Keep the login set read-only; `youtube.upload` stays incremental-consent only | build | GREEN | Verified in-repo 2026-07-02: `youtube/oauth.py` `SCOPES` (read-only) + separate `PUBLISH_SCOPE` (#194) |
-| Is the OAuth consent screen configured with beta test users? | Google Cloud Console: Testing status, scopes byte-identical to code, ≥2 test users | operator | OPEN | #26 |
+| Is the OAuth consent screen configured with beta test users? | **Confirm the test-user count is ≥2** — the only unverified part | operator | GREEN (2026-08-11), one residual | #26. Configured on the current "Google Auth Platform" console UI: **Branding** app name **AutoClip** (not "CreatorClip" — every user-facing surface, the ToS and the privacy policy all say AutoClip, and Google's Stage-B review checks that consistency), home/privacy/ToS links live (all 200), authorized domain `autoclip.studio`; **Audience** External + Testing; **Data Access** exactly five scopes, Restricted empty. Verified from the live app rather than the console: `GET /auth/login` 302s to `accounts.google.com` with `client_id=742666675967-…`, `redirect_uri=https://autoclip.studio/auth/callback` (character-exact), `access_type=offline`, and precisely `openid` + `userinfo.email` + `userinfo.profile` + `youtube.readonly` + `yt-analytics.readonly` — **no `youtube.upload`**. Live OAuth round trip completed 2026-08-11: `youtube_tokens.updated_at` advanced `2026-08-10 23:36:45` → `2026-08-11 18:29:58`, still 5 scopes, and `creators` stayed at 6 (the existing row was reused, not duplicated). Protected routes 401 without a session (`/videos`, `/auth/me`, `/clips/counts`, `/videos/clips/counts`). Cross-creator isolation re-verified live: `creatorclip_app`, `BYPASSRLS=false`, tenant tables return **0 rows with the `app.creator_id` GUC unset** (fails closed) and **0 foreign rows** per creator across `videos`/`clips`/`youtube_tokens`/`clip_feedback`. **Residual:** the ≥2-test-user count was never confirmed — if it is currently just the owner, add a friend before #28 |
 | Is the regulatory posture shipped (COPPA age gate, accessibility statement, GPC)? | None | build | GREEN | #300, #301, #302 |
 | Do restores honor prior erasures (backup-erasure stance)? | Confirm R2 lifecycle/Object-Lock numbers in the dashboard | operator | CODE-GREEN | #254; `scripts/reapply_erasures.py`; `docs/RUNBOOKS.md` DR steps |
 | Is lifecycle (commercial-leaning) email CAN-SPAM compliant? | **Set `MAILING_ADDRESS`** to a valid physical postal address — a street address, a USPS-registered PO box, or a registered CMRA mailbox. It is printed in every lifecycle email footer, so it becomes public. **Until it is set, all lifecycle email is intentionally SKIPPED** (`config.py:752`), which is the correct fail-safe, not a bug. Not required for the friend beta. | operator | OPEN (fail-safe active) | #246 code-complete (templates, `run_lifecycle_scan` beat task, shared 48h cap, `email_lifecycle` opt-out, RFC 8058 one-click, 13 tests). CAN-SPAM: opt-out honored ≤10 business days, mechanism live ≥30 days, valid physical postal address required on commercial mail |
@@ -88,11 +88,17 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Does no surface promise virality; is every score estimate-framed? | None — structural test runs in every suite | build | GREEN | `tests/test_compliance_no_virality.py` + `tests/test_static.py` pins; FitBadge tiers (#192) |
 | Is billing wired for the beta (minute packs, verified webhooks, reconciliation)? | Confirm Stripe LIVE keys during #25 | build | GREEN | Issue 21; #205, #206; spend guard #290 |
 
-**Stage A totals:** 32 gates — **15 GREEN · 6 CODE-GREEN · 11 OPEN** (updated 2026-07-29:
-#24 + #25 flipped GREEN with live evidence). The honest distance-to-beta number is **17
-gates not fully green**; the hard blockers for inviting the first friends are now just
-**#26 (OAuth test users, ~5 min console) → #28 (friend smoke)** — plus #282 uptime
-monitoring, which the 2026-07-29 31-hour silent outage proved beta-critical.
+**Stage A totals:** 32 gates — **16 GREEN · 6 CODE-GREEN · 10 OPEN** (updated 2026-08-11:
+#26 flipped GREEN with live evidence; 2026-07-29: #24 + #25). The honest distance-to-beta
+number is **16 gates not fully green**, and the last hard blocker for inviting the first
+friends is now **#28 (friend smoke)** alone.
+
+⚠️ **Correction 2026-08-11.** This paragraph previously named #282 uptime monitoring as a
+blocker "which the 2026-07-29 31-hour silent outage proved beta-critical." That contradicted
+#282's own row, which was corrected 2026-07-31: the outage was an **intentional owner
+poweroff to save cost**, not a silent failure, and the "beta-critical" framing is explicitly
+retracted there. #282 is **deferred for the invite-only beta by owner call** and is not a
+Stage-A blocker. The stale sentence has been removed rather than left to read as a third gate.
 
 ---
 

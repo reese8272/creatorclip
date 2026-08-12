@@ -2743,16 +2743,26 @@ before this upload.
 
 **Severity: high — visible, burned in, on a delivered clip; recurs on every livestream source.**
 
-**Two of nine rendered clips are affected — this is not a one-off.** Measured by sampling the
-bottom 200 px at 2 Hz across every rendered clip:
-- **Rank 3** — `@Drew-l6j $1.99 / "Worried they're gonna bench Mikey"` across the **final 11.5 s**
-  (73.0 → 84.4 s of an 84.4 s clip), running to the clip's end.
-- **Rank 13** — `@jacobcortes93` across the **opening 5.0 s** (0.0 → 4.5 s), i.e. burned into the
-  hook, the most damaging possible placement. Found 2026-08-10 23:45 UTC when the creator rendered
-  this clip; it is also the clip they **kept**.
+**Measured against the source, 2026-08-11 (supersedes the first estimate — see below).** A 1 Hz
+scan of all 1617 s of source found a superchat present in **two spans — 885–914 s (30 s) and
+930–1006 s (77 s) — 107 s total, 6.6 % of the runtime.**
 
-Ranks 1, 2, 4, 5, 6, 7, 8 are clean. A superchat lands wherever it lands, so the base rate here is
-**~22% of rendered clips**, and the two hits bracket the clip (end and start).
+Two of the nine rendered clips overlap those spans:
+- **Rank 3** — `@Drew-l6j $1.99 / "Worried they're gonna bench Mikey"` for **11.6 s (13.8 % of the
+  clip)**, running to the clip's end.
+- **Rank 13** — `@jacobcortes939 $1.99 / "how did the center position look"` for **25.3 s (28.1 %)**,
+  starting at frame one, so it is burned into the hook. It is also the clip the creator **kept**.
+
+Ranks 1, 2, 4, 5, 6, 7, 8 are clean, as are the four unrendered clips.
+
+⚠️ **The first revision of this issue said rank 13 carried the band for 5.0 s. That was wrong —
+it is 25.3 s.** The original figure came from scanning the *rendered* clip for cyan pixels in the
+bottom 200 px, which caught only the portion where the banner sat in that strip at that hue. Two
+lessons, both now encoded in `tests/fixtures/superchat/README.md`: measure on the **source**, and
+do not key on colour. Rank 3's 11.5 s estimate was close (11.6 s actual).
+
+**Never measure this on a rendered clip.** The burned-in captions are themselves a bright
+lower-frame band; a rendered-clip scan on 2026-08-11 flagged ranks 1 and 6, both visually clean.
 
 **This is not a regression of 439 or 443 — the region is correct.** The stored consensus rect is
 `(169, 326, 1704, 551)`, height fraction **0.5102**, from 9 windows detected with 8 agreeing. A
@@ -2773,16 +2783,41 @@ the affected span, (b) letterbox/blur the band, or (c) surface it as a flagged c
 can re-cut. Option (c) is cheapest and matches the honesty constraint. Note the render's crop is
 a single static `crop=` for the whole clip today, so (a) is a real architectural change.
 
+**Status: DONE (2026-08-11)** — backend **2960/0**, eval 25 scenarios / 100%, Layer 0 clean.
+Design rulings in `docs/DECISIONS.md` 2026-08-11.
+
+**What shipped**
+- `clip_engine/overlay_bands.py` — detection over the whole source at ingest, reusing
+  `camera_region`'s samplers and analysis-to-source scaling. Feature: per frame, rows in the
+  lower 40 % whose mean exceeds *that frame's own* lower-region median by 25. Fixture separation
+  is 14-20 clean vs 26-28 band; the threshold sits between.
+- Migration **`0058`** — `videos.overlay_spans_jsonb`, additive nullable JSONB (Template A, no
+  offline-mode branch needed). `OVERLAY_SPANS_VERSION` carries the same bump-on-semantic-change
+  contract as `VIDEO_REGION_VERSION`.
+- Ingest resolves it with the same never-fails-ingest posture as the camera region; the existing
+  hourly sweep backfills it, sharing ONE source download rather than paying egress twice.
+- `clip_engine/render.py` inserts `split` -> `crop` -> `boxblur` -> `overlay` with
+  `enable='between(t,…)'` FIRST in the chain, in absolute source pixels, so the region pre-crop
+  and the 9:16 crop carry the masked pixels through by construction.
+- `OVERLAY_BAND_DETECT_ENABLED` (default false) in `config.py` + `.env.example`.
+
 **Acceptance**
-- [ ] A clip whose region contains a transient overlay for part of its span does not ship it
-      burned in without the creator knowing
-- [ ] The chosen mechanism is proven on **both** rank 3 (overlay at the end) and rank 13 (overlay
-      over the opening hook) of `7e988321` — they are different placements and a start-of-clip
-      overlay may deserve different handling from an end-of-clip one (source expires
-      **2026-08-13 19:23 UTC** — after that these exact cases are unreproducible)
-- [ ] Whatever is chosen, `detect_video_camera_region`'s consensus is NOT loosened to chase it —
-      the median's outlier rejection is correct and load-bearing (Issue 443)
-- [ ] No regression on the 8 clean clips of this upload
+- [x] A clip whose region contains a transient overlay does not ship it burned in — **proven on
+      the real source**: rank 3 re-rendered through the production filter chain, masked from
+      72.78 s to the clip end, donor name/amount/message unreadable, framing and captions
+      untouched. Clean before the span at t=70 s
+- [x] Proven on both placements: rank 3 (11.6 s at the end) and rank 13 (25.3 s from frame one).
+      The mask is one time-gated overlay, so start-of-clip and end-of-clip need no special-casing
+- [x] `detect_video_camera_region` is untouched — this is a separate module and a separate
+      column, precisely because 443's outlier rejection is correct and load-bearing
+- [x] No regression on clean clips: `test_no_overlay_mask_is_byte_identical` asserts a clip that
+      misses every span renders the exact vf string it renders today, and all pre-existing
+      render/camera-region tests pass unchanged
+- [x] Detector unit-tested on the frozen fixtures — both transitions land on the measured
+      seconds (885 / 1006) and the clean control produces no run
+- [x] The emitted graph is compiled by real ffmpeg in CI, not just string-matched
+- [ ] Live: re-render rank 3 and rank 13 through the deployed pipeline with
+      `OVERLAY_BAND_DETECT_ENABLED=true`. **Source expires 2026-08-13 19:23 UTC**
 
 ### Issue 449: `snap_start`'s inter-sentence-pause exemption bypasses the Issue-441 weak-opener guard
 
@@ -2848,40 +2883,36 @@ t = 758 / 768 / 780 s all show the right seat (Rio) mid-sentence, mouth open, le
 mic, and the left seat (Carter) silent and looking down. Deepgram attributes **all 31.0 s** of
 speech inside the window to a single speaker.
 
-**Which branch produced this is UNDETERMINED — settle it before fixing anything.** *(Corrected
-2026-08-10: an earlier revision of this issue asserted that `hold_seats` bailed at
-`if len(tracks) < 2: return None`. That was inferred from `speakers.count = 1` in the stored
-track, but that field is `speaker_count = len({t.speaker for t in turns})` — the number of
-**diarized speakers**, not face tracks. The claim was unverified and has been withdrawn.)*
+**SETTLED 2026-08-11 — `hold_seats` RAN, and the defect is its vote.** Measured in the app
+container against the source before it purged; full numbers in
+`tests/fixtures/reframe_seats/README.md`:
 
-No recorded artifact answers it. The track JSON (`_build_track_json`, `reframe.py:1015`) stores
-`keyframes`, `cuts`, `shots` and `speakers`, and **never the face-track count**; the summary log
-line at `reframe.py:1259` logs `speakers=`/`confidence=`/`coverage=` but not `len(tracks)` — and
-that log is gone regardless (worker retention starts 2026-08-10 20:42; rank 1 rendered ~19:2x).
-The observed `keyframes = 1, cuts = 0, shots = 0` is consistent with **both** paths:
+| Quantity | Value |
+|---|---|
+| `len(tracks)` | **2** — gate 1 passed, it did not bail |
+| track `median_cx` | **381.2** and **1257.5** (region space, width 1704) |
+| `crop_w` | 309 — seats 876 px apart, so no collapse to one framing |
+| occupancy gate | passed (most sampled frames detect 2 faces) |
+| `_seat_hold_plan` | **1 hold point at x = 381**, 0 cuts |
+| `n_speakers` / `coverage` | **1** / **1.0** |
+| `mapping.confidence` | **0.084** vs `REFRAME_MIN_MAPPING_CONFIDENCE = 0.2` |
 
-1. **`hold_seats` ran** — one shot span, and the dominant seat won the per-span vote; or
-2. **`hold_seats` returned `None`** at one of its three gates (`len(tracks) < 2`, seats collapsing
-   to one framing under `crop_w`, or the simultaneous-occupancy check) and the clip fell through
-   to `plan_pan_holds`, which held the largest face.
+**The defect is `Counter(_nearest_seat(obs[0].cx))`.** `obs[0]` is the **largest** detected face
+(cf. `_raw_track_largest_face` directly below), so "dominant seat" means *the seat that was the
+biggest face in the most samples* — uncorrelated with who is talking. It chose x = 381, the LEFT
+seat, and the right seat is the one speaking. Whoever sits closer to their camera wins the clip.
 
-**If (1), the defect is the vote itself.** The per-span choice is
-`Counter(_nearest_seat(obs[0].cx) ...)`, and `obs[0]` is the **largest** detected face (cf.
-`_raw_track_largest_face` directly below it) — so "dominant seat" means *the seat that was the
-biggest face in the most samples*, a quantity uncorrelated with who is talking. Whoever sits
-closer to their camera wins the whole clip.
+**What was available and unused:** diarization had **full coverage (1.0) and exactly one speaker**
+for the entire window. The engine knew someone was talking throughout; it could not map that
+speaker to a face confidently, and fell back to a size vote rather than a speech-aware one.
 
-**If (2), the defect is upstream** in whichever gate rejected the two-shot, and fixing the vote
-would be fixing the wrong function.
+**Issue 440 behaved exactly as designed** — it made this rung stop sweeping; it never claimed to
+pick the right seat.
 
-Either way **Issue 440 behaved exactly as designed** — it made this rung stop sweeping; it never
-claimed to pick the right seat. Ranks 4/6/7 of this same video reached `speaker_cut` with two
-speakers, so both faces are detectable in general.
-
-**Settling it is time-boxed.** The only way is to re-run `build_face_tracks` + `_seat_hold_plan`
-over the window `[754.62, 789.17]` against the source, which purges **2026-08-13 19:23 UTC**.
-Note `mediapipe` is absent from the local venv (only `cv2` 4.13.0), so this must run in the app
-container — the `scripts/clip_audit.py` stdin pattern is the shape to copy.
+*(Two corrections closed here. The first revision asserted `hold_seats` bailed at
+`len(tracks) < 2`, inferred from `speakers.count = 1` — which is the diarized-speaker count, not
+the face-track count. That claim was withdrawn 2026-08-10 as unverified, and this measurement
+confirms the withdrawal was right: there were two tracks all along.)*
 
 **The accepted tradeoff is now falsified.** `reframe.py:900-904` justifies the hold with *"a still
 frame on the wrong person is far cheaper than a cut to the wrong person, and stillness is what the
@@ -2895,21 +2926,40 @@ a two-shot** (Rio wears wraparound sunglasses and a bucket hat for the whole rec
 standing condition for this creator, not a one-off), and if a second seat cannot be detected,
 prefer a wider framing that contains both seats over a tight crop on an arbitrary one.
 
+**Status: DONE (2026-08-12)** — backend **2975/0**, eval 25 scenarios / 100%, Layer 0 green,
+`clip_engine` coverage **93.03** (floor 91.0). Ruling in `docs/DECISIONS.md` 2026-08-12.
+
+**The approved split-screen approach was REVERSED before any of it was built**, on evidence: the
+speaker mapping had already assigned the speaker to the correct (right) seat, and `hold_seats`
+simply never consulted it. Building a new render mode to route around a signal we compute
+correctly and then discard would have been the wrong fix. Full reasoning in DECISIONS.
+
+**What shipped** — `speaker_map.speaking_track_for_span()` returns the face track of whoever talks
+most inside a span, keyed by the same `shot_index_for` that `build_face_tracks` uses to stamp
+`shot_idx`. `_seat_hold_plan` asks it first and falls back to the largest-face vote only when
+there is no speech signal. ~50 lines, no wire-contract change, no frontend work.
+
 **Acceptance**
-- [ ] **FIRST:** establish which branch ran (`hold_seats` vs the `plan_pan_holds` fallback) by
-      re-running detection over `[754.62, 789.17]` in the app container, capturing the track count,
-      the collapsed seat list, the occupancy-gate result and the per-span `Counter`. Everything
-      below depends on the answer. **Deadline 2026-08-13 19:23 UTC**
-- [ ] Rank 1 of `7e988321` specifically no longer frames the silent participant (source expires
-      **2026-08-13 19:23 UTC**; capture the frames needed to build a fixture before then)
-- [ ] When a two-shot yields only one usable seat, the fallback framing is justified in
-      `docs/DECISIONS.md` against both alternatives (tight-on-the-one-face vs contain-both)
-- [ ] Issue 440's motion guarantees are preserved — no return to sweeping, no per-utterance
-      cutting on this rung (both rejected with evidence)
-- [ ] A regression test encodes "holds the speaking seat", so this class is caught in CI rather
-      than by the creator. Note this belongs in `tests/test_reframe_planner.py` /
-      `tests/test_speaker_map.py`, **not** `tests/eval/scenarios/` — that harness covers clip-window
-      geometry (setup-before-peak, overlap, openers), not framing
+- [x] **Establish which branch ran** — DONE 2026-08-11 in the app container before the source
+      purged: `hold_seats` ran with 2 tracks and chose the wrong seat via the largest-face vote.
+      Evidence and fixtures in `tests/fixtures/reframe_seats/`
+- [x] Rank 1 of `7e988321` no longer frames the silent participant — **verified on production
+      data**: the same probe over `[754.62, 789.17]` returns `BEFORE [381]` / `AFTER [1258]`, and
+      rendered frames at t=768 s show the silent participant before and the speaking one after
+- [x] The seat choice is justified in `docs/DECISIONS.md` against the alternatives, including why
+      no `mapping.confidence` floor is applied (it is a MARGIN ratio, structurally small on exactly
+      these layouts, so gating on it would restore the size vote where it is worst)
+- [x] Issue 440's motion guarantees preserved — ONE static choice per span, held until a source
+      shot change, so it cannot flip; `test_two_shot_face_pan_holds_seats_instead_of_sweeping`
+      passes unchanged
+- [x] Regression tests encode "holds the speaking seat" in `tests/test_reframe_planner.py`
+      (`TestSpeakingSeatSelection`, built from the measured cx 381.2 / 1257.5 geometry and
+      demonstrated failing first) and `tests/test_speaker_map.py` (`TestSpeakingTrackForSpan`) —
+      **not** `tests/eval/scenarios/`, which covers clip-window geometry, not framing
+- [x] The adversarial case is pinned: the wrong seat having the LARGER face in every sample must
+      not win
+- [x] No-transcript / unmapped / pruned-track spans still use the size vote, so a video without
+      diarization behaves exactly as it does today
 
 ---
 

@@ -5,6 +5,111 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-12 — Issue 450: use the speaker mapping for the seat; split-screen REVERSED
+
+**Decision — the framing planner asks who is SPEAKING, and split-screen is not built.** This
+reverses the approach approved earlier in the same session. The reversal was driven by a
+measurement, and the measurement is the whole entry.
+
+**What was approved first.** "Split-screen as the untrusted fallback": when
+`mapping.confidence` sits below `REFRAME_MIN_MAPPING_CONFIDENCE`, stack both speakers rather than
+gamble on one. It matched the industry pattern —
+[Opus Clip's Split layout](https://help.opus.pro/docs/article/layout-and-reframing) (fetched
+2026-08-11), which shows both speakers and states it "will only work when both speakers appear
+together in the original video frame", true of this source.
+
+**What the measurement showed.** Run against the live source before building anything:
+
+| | |
+|---|---|
+| `mapping.assignments` | speaker 0 -> track 1 at cx **1257.5 (RIGHT / Rio)** — **correct** |
+| mouth-motion energy | **0.1456** right vs **0.0536** left — 2.7x on the speaking seat |
+| `hold_seats` output | x = **381** (LEFT / silent) |
+
+The engine already had the right answer. `hold_seats` never consulted the mapping: it ran its own
+`Counter(_nearest_seat(obs[0].cx))` vote where `obs[0]` is the LARGEST face, so the seat went to
+whoever sat closer to their camera. Split-screen would have been a new render mode, a new
+wire-contract mode and frontend work to route around a signal we compute correctly and discard.
+
+**Why `mapping.confidence = 0.084` did not disqualify it — and why no floor is applied.** That
+number is a MARGIN ratio `(best - second)/best`, not a correctness estimate. It is structurally
+small on exactly the layouts this fix targets, which `choose_reframe_mode`'s own docstring already
+records: "co-occurrence and size votes carry no signal when both faces are always on screen, so
+honest confidences run lower on exactly the layouts that most need cuts." Gating the seat choice
+on it would restore the size vote precisely where the size vote is worst. The fallback is a vote
+UNCORRELATED with speech, so any speech-derived choice is at least as good.
+
+**Why this does not re-open what Issue 440 rejected.** 440 built and rejected *cutting per
+utterance* on this rung because the framing flipped five times in ten seconds. This makes ONE
+static choice per span, held until a source shot change. A single held choice cannot flip. Ties
+resolve to the lower speaker id so the result is deterministic across runs.
+
+**Verified end to end on production data**, not only in tests: the same probe over rank 1's window
+`[754.62, 789.17]` returns `BEFORE [381]` / `AFTER [1258]`, and rendered frames at t=768 show the
+silent participant before and the speaking one after.
+
+**Split-screen is not dead, it is re-scoped.** It remains worth offering as a creator-selectable
+*layout* (as Opus does) rather than as an error fallback. Filed as a product option, not a bug fix.
+
+---
+
+## 2026-08-11 — Issue 448: a separate transient pass, blurred not boxed, failing open
+
+**Context.** A livestream superchat is drawn by the streaming software ON TOP of the camera
+feed, so it lands INSIDE the camera region Issues 439/443 resolve and the region crop cannot
+exclude it. Measured on video `7e988321`: superchat present 885-914 s and 930-1006 s — 107 s of
+1617 s, **6.6 % of runtime** — reaching two of nine rendered clips (rank 3 for 11.6 s, rank 13
+for 25.3 s, the latter from frame one).
+
+**1 — A separate detector, not a change to `camera_region`.** The obvious move is to widen the
+camera region so the band falls outside it. Rejected: `detect_video_camera_region` takes a
+component-wise median across nine windows and keeps it only on a strict majority *precisely so a
+transient overlay cannot move the answer* (Issue 443). Its blindness to transients is the
+property that makes it correct, and this problem needs the opposite measurement. New module
+`clip_engine/overlay_bands.py` reuses that module's samplers and its analysis-to-source scaling,
+and changes none of its logic.
+
+**2 — Masked at render, not cropped out.** A time-varying crop was ruled out on capability, not
+taste: `ffmpeg -h filter=crop` reports **no timeline support**, while `overlay` and `boxblur`
+have it, so the mask can be gated by `enable='between(t,a,b)'` and a moving crop cannot. Source:
+[FFmpeg Filters — Timeline editing](https://ffmpeg.org/ffmpeg-filters.html#toc-Timeline-editing)
+(fetched 2026-08-11). Shrinking the region for the whole video instead would cost ~16 % of frame
+height permanently to fix 11 s.
+
+**3 — Blur, not a solid box.** Owner decision. `boxblur` alone cannot do it — it has no geometry
+and blurs the entire frame — so the shape is `split` -> full-width `crop` of the band ->
+`boxblur` -> `overlay` with the timeline `enable`
+([OTTVerse](https://ottverse.com/blur-a-video-using-ffmpeg-boxblur/), fetched 2026-08-11).
+Verified against the real source: the donor name, amount and message are unreadable while framing
+and captions are untouched. A `drawbox` fill would hide it just as well but reads as a rendering
+error to a viewer.
+
+**4 — Fail OPEN.** A span is emitted only after `_MIN_RUN_SAMPLES` consecutive positive samples.
+A false positive blurs a speaker's face in an otherwise good clip, which is worse than the defect
+being removed, so an uncertain signal masks nothing. Same posture as the camera-region gates.
+
+**5 — Band extent is measured PER RUN and unioned, never as a whole-video majority.** Found
+while building, against the frozen fixtures: the two real banners differ in height (analysis rows
+199-243 and 217-242). A majority across every positive frame collapses to their **intersection**,
+217-242, and renders the taller banner with ~72 source pixels still showing. One run is one
+banner instance, so the majority is sound within a run and wrong across runs.
+`tests/test_overlay_bands.py::test_extent_is_per_run_so_two_banner_sizes_are_both_covered` pins
+it, and asserts the naive form would under-cover so the test cannot silently stop proving
+anything.
+
+**6 — Detection runs on the SOURCE at ingest, never on a rendered clip.** Burned-in captions are
+themselves a bright lower-frame band: a rendered-clip scan on 2026-08-11 flagged ranks 1 and 6,
+both visually clean. Ingest is also where `alocal_path` has already materialised the source, so
+no second download is paid.
+
+**7 — It rides the existing backfill sweep rather than adding one.** Each candidate costs a full
+source download; two sweeps would pay that egress twice for the same file. The camera-region
+sweep's predicate widened to "either measurement missing" and its body computes whichever is
+absent, with an independent, version-keyed failure marker per measurement so a fix to one
+detector cannot un-skip the other.
+
+---
+
 ## 2026-08-10 (later) — Issue 444: triage is a verdict, and a clip carries exactly one label
 
 **Decision 1 — `clips.triage` is a NATIVE PG enum, not VARCHAR + CHECK.** This reverses the

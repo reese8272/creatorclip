@@ -443,7 +443,14 @@ def test_render_cleaned_clip_file_chains_loudnorm_into_graph(tmp_path):
 _PUNCH_MARKER = "max(0\\,1-abs(t-"
 
 
-def _render_vf(tmp_path, *, style_preset=None, peak_s=None, video_camera_region=None) -> str:
+def _render_vf(
+    tmp_path,
+    *,
+    style_preset=None,
+    peak_s=None,
+    video_camera_region=None,
+    video_overlay_spans=None,
+) -> str:
     """Render with mocked ffmpeg/cv2 and return the -vf filter string."""
     src = tmp_path / "v.mp4"
     src.touch()
@@ -471,6 +478,7 @@ def _render_vf(tmp_path, *, style_preset=None, peak_s=None, video_camera_region=
             style_preset=style_preset,
             peak_s=peak_s,
             video_camera_region=video_camera_region,
+            video_overlay_spans=video_overlay_spans,
         )
     render_cmd = next((c for c in captured if "-vf" in c), None)
     assert render_cmd is not None
@@ -633,6 +641,57 @@ def test_camera_region_composes_with_reframe(tmp_path):
     assert kwargs["frame_height"] == 900
     assert kwargs["crop_w"] == crop_w
     assert kwargs["region"] == (200, 100, 1400, 900)
+
+
+def test_overlay_mask_precedes_the_region_pre_crop(tmp_path):
+    """Issue 448: the mask runs FIRST, in absolute source coordinates.
+
+    Everything downstream (region pre-crop, 9:16 crop, scale) then carries the
+    masked pixels through by construction, so no offset arithmetic exists and
+    the mask works whether or not a camera region was detected.
+    """
+    spans = {
+        "version": 1,
+        "y": 785,
+        "height": 202,
+        "frame": {"width": 1920, "height": 1080},
+        "spans": [{"start_s": 20.0, "end_s": 40.0}],
+    }
+    vf = _render_vf(tmp_path, video_overlay_spans=spans)  # clip window is 10-70s
+    # NB: do NOT split on "," — `between(t,10.000,30.000)` contains commas.
+    assert vf.startswith(
+        "split[ob_bg][ob_fg];"
+        "[ob_fg]crop=1920:202:0:785,boxblur=12:2[ob_bl];"
+        # Clip-relative: span 20-40s against a clip starting at 10s -> 10-30s.
+        "[ob_bg][ob_bl]overlay=0:785:enable='between(t,10.000,30.000)',"
+    )
+    # ...and the ordinary chain still follows, unchanged.
+    assert vf.endswith("crop=607:1080:657:0,scale=1080:1920")
+
+
+def test_no_overlay_mask_is_byte_identical(tmp_path):
+    """A clip that misses every span must render exactly what it renders today."""
+    spans = {
+        "version": 1,
+        "y": 785,
+        "height": 202,
+        "frame": {"width": 1920, "height": 1080},
+        "spans": [{"start_s": 900.0, "end_s": 950.0}],  # nowhere near the 10-70s clip
+    }
+    assert _render_vf(tmp_path, video_overlay_spans=spans) == _render_vf(tmp_path)
+    assert _render_vf(tmp_path, video_overlay_spans=None) == _render_vf(tmp_path)
+
+
+def test_overlay_mask_ignored_when_measured_against_other_dimensions(tmp_path):
+    """Masking the wrong rows is worse than not masking at all."""
+    spans = {
+        "version": 1,
+        "y": 785,
+        "height": 202,
+        "frame": {"width": 1280, "height": 720},  # source here is 1920x1080
+        "spans": [{"start_s": 20.0, "end_s": 40.0}],
+    }
+    assert _render_vf(tmp_path, video_overlay_spans=spans) == _render_vf(tmp_path)
 
 
 def test_reframe_without_region_calls_compute_with_full_frame(tmp_path):
