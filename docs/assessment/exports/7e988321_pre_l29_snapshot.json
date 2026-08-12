@@ -1,0 +1,430 @@
+{
+  "clips": [
+    {
+      "id": "180aa407-5378-45ce-ac77-0c088c28236a",
+      "rank": 1,
+      "end_s": 789.17,
+      "score": 0.5,
+      "format": "short",
+      "peak_s": 769,
+      "triage": "dropped",
+      "start_s": 694,
+      "dna_match": 0.52,
+      "render_uri": "s3://autoclip-studio/clips/180aa407-5378-45ce-ac77-0c088c28236a.mp4",
+      "render_status": "done",
+      "setup_start_s": 754.62,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": -0.045454545454545456,
+          "has_laughter": false,
+          "silence_ratio": 0.04167872648336238,
+          "setup_length_s": 14.379999999999995,
+          "signal_density": -0.04285714285714286,
+          "clip_duration_s": 34.549999999999955,
+          "has_retention_spike": false
+        },
+        "principle": "Clean Context Boundary",
+        "reasoning": "This starts on a complete, self-contained thought \u2014 no verdict on the corner room until Trey Amos plays \u2014 which fits the creator's stated preference for concepts that stand alone, even though the follow-on Sainristil critique is left in [AFTER]."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": "s3://autoclip-studio/clips/180aa407-5378-45ce-ac77-0c088c28236a_edit.mp4"
+    },
+    {
+      "id": "3c72dbec-51bf-4978-bdf7-9282687eaf8e",
+      "rank": 2,
+      "end_s": 212.28,
+      "score": 0.47,
+      "format": "short",
+      "peak_s": 149.2,
+      "triage": "pending",
+      "start_s": 149.1,
+      "dna_match": 0.5,
+      "render_uri": "s3://autoclip-studio/clips/3c72dbec-51bf-4978-bdf7-9282687eaf8e.mp4",
+      "render_status": "done",
+      "setup_start_s": 149.1,
+      "signals_jsonb": {
+        "origin": "llm",
+        "features": {
+          "hook_energy": 0.0,
+          "has_laughter": false,
+          "silence_ratio": 0.005064893953783184,
+          "setup_length_s": 0.09999999999999432,
+          "signal_density": -0.007874015748031496,
+          "clip_duration_s": 63.18000000000001,
+          "has_retention_spike": false
+        },
+        "principle": "One idea per Short",
+        "reasoning": "A single clean opinion \u2014 Mariota doesn't need preseason snaps, give Daniels the starters \u2014 is exactly the kind of Commanders QB take this channel's news-driven Shorts win with, though 63s runs far past the creator's 11\u201315s sweet spot."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "a8ae9a34-1573-4b39-b65a-a2992f5defe5",
+      "rank": 3,
+      "end_s": 896.63,
+      "score": 0.44,
+      "format": "short",
+      "peak_s": 892.5,
+      "triage": "kept",
+      "start_s": 817.5,
+      "dna_match": 0.46,
+      "render_uri": "s3://autoclip-studio/clips/a8ae9a34-1573-4b39-b65a-a2992f5defe5.mp4",
+      "render_status": "done",
+      "setup_start_s": 812.22,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": 0.0,
+          "has_laughter": false,
+          "silence_ratio": 0.0,
+          "setup_length_s": 80.27999999999997,
+          "signal_density": 0.0,
+          "clip_duration_s": 84.40999999999997,
+          "has_retention_spike": false
+        },
+        "principle": "Audience-fit over generic virality",
+        "reasoning": "A concrete Commanders depth-chart opinion (Douglas and Amos outside, Amik inside) is precisely the roster-storyline content this audience engages with, but the closing question is truncated so the idea doesn't fully land."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "6b93e7b8-7282-4c11-9bd6-13f210c28d88",
+      "rank": 4,
+      "end_s": 1346.62,
+      "score": 0.42,
+      "format": "short",
+      "peak_s": 1326,
+      "triage": "pending",
+      "start_s": 1251,
+      "dna_match": 0.44,
+      "render_uri": "s3://autoclip-studio/clips/6b93e7b8-7282-4c11-9bd6-13f210c28d88.mp4",
+      "render_status": "done",
+      "setup_start_s": 1306.43,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": -0.045454545454545456,
+          "has_laughter": false,
+          "silence_ratio": 0.013535705399349873,
+          "setup_length_s": 19.569999999999936,
+          "signal_density": -0.018292682926829267,
+          "clip_duration_s": 40.18999999999983,
+          "has_retention_spike": false
+        },
+        "principle": "Front-load value",
+        "reasoning": "The bold claim that the Week 1 free safety isn't on the roster yet is a strong hot take for Commanders fans, but it arrives mid-sentence instead of leading the clip."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "314645de-2085-4a57-a56c-0416bf7c8cb7",
+      "rank": 5,
+      "end_s": 612.14,
+      "score": 0.4,
+      "format": "short",
+      "peak_s": 600.5,
+      "triage": "pending",
+      "start_s": 525.5,
+      "dna_match": 0.42,
+      "render_uri": "s3://autoclip-studio/clips/314645de-2085-4a57-a56c-0416bf7c8cb7.mp4",
+      "render_status": "done",
+      "setup_start_s": 523.34,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": 0.0,
+          "has_laughter": false,
+          "silence_ratio": 0.0,
+          "setup_length_s": 77.15999999999997,
+          "signal_density": 0.0,
+          "clip_duration_s": 88.79999999999995,
+          "has_retention_spike": false
+        },
+        "principle": "Front-load value",
+        "reasoning": "The \"weakest group last year, now one of the strongest\" pass-rush take is a quotable fan-relevant claim, but it opens as a mid-conversation reply rather than leading with the punch."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "862ec50f-266e-4e98-9872-ee1350896b3e",
+      "rank": 6,
+      "end_s": 1176.79,
+      "score": 0.38,
+      "format": "short",
+      "peak_s": 1155.5,
+      "triage": "pending",
+      "start_s": 1080.5,
+      "dna_match": 0.4,
+      "render_uri": "s3://autoclip-studio/clips/862ec50f-266e-4e98-9872-ee1350896b3e.mp4",
+      "render_status": "done",
+      "setup_start_s": 1139.51,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": -0.045454545454545456,
+          "has_laughter": false,
+          "silence_ratio": 0.009442060085833209,
+          "setup_length_s": 15.990000000000009,
+          "signal_density": -0.02,
+          "clip_duration_s": 37.27999999999997,
+          "has_retention_spike": false
+        },
+        "principle": "Pattern interrupt",
+        "reasoning": "\"He's the Tasmanian devil\" is a vivid line that could stop a scroll, but the window opens mid-comparison and the roster-spot payoff is pushed into [AFTER]."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "7958e95a-b485-45a6-aaa6-73e242e32676",
+      "rank": 7,
+      "end_s": 1480.83,
+      "score": 0.33,
+      "format": "short",
+      "peak_s": 1460.5,
+      "triage": "pending",
+      "start_s": 1385.5,
+      "dna_match": 0.35,
+      "render_uri": "s3://autoclip-studio/clips/7958e95a-b485-45a6-aaa6-73e242e32676.mp4",
+      "render_status": "done",
+      "setup_start_s": 1440.03,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": -0.045454545454545456,
+          "has_laughter": false,
+          "silence_ratio": 0.0,
+          "setup_length_s": 20.470000000000027,
+          "signal_density": -0.006097560975609756,
+          "clip_duration_s": 40.799999999999955,
+          "has_retention_spike": false
+        },
+        "principle": "Clip the setup, not the aftermath",
+        "reasoning": "The newsy Terry McLaurin\u2013Diggs hook is set up in [BEFORE] and the fun payoff lands in [AFTER], leaving the window with only hedged middle commentary."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "e5970026-b27b-4d66-b3f0-1426929a3789",
+      "rank": 8,
+      "end_s": 146.3,
+      "score": 0.3,
+      "format": "short",
+      "peak_s": 58,
+      "triage": "pending",
+      "start_s": 57.76,
+      "dna_match": 0.34,
+      "render_uri": "s3://autoclip-studio/clips/e5970026-b27b-4d66-b3f0-1426929a3789.mp4",
+      "render_status": "done",
+      "setup_start_s": 57.76,
+      "signals_jsonb": {
+        "origin": "llm",
+        "features": {
+          "hook_energy": -0.045454545454545456,
+          "has_laughter": false,
+          "silence_ratio": 0.01807092839394617,
+          "setup_length_s": 0.240000000000002,
+          "signal_density": -0.019662921348314606,
+          "clip_duration_s": 88.54000000000002,
+          "has_retention_spike": false
+        },
+        "principle": "Clip the setup, not the aftermath",
+        "reasoning": "The window is all question and no answer \u2014 the Jayden Daniels verdict this audience actually clicks for lands in [AFTER], so the clip ends right before the value."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "6cf95143-42c3-467e-b978-0245500a0bfd",
+      "rank": 9,
+      "end_s": 1413.43,
+      "score": 0.28,
+      "format": "short",
+      "peak_s": 1393,
+      "triage": "pending",
+      "start_s": 1318,
+      "dna_match": 0.3,
+      "render_uri": "s3://autoclip-studio/clips/6cf95143-42c3-467e-b978-0245500a0bfd.mp4",
+      "render_status": "done",
+      "setup_start_s": 1346.94,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": -0.045454545454545456,
+          "has_laughter": false,
+          "silence_ratio": 0.0,
+          "setup_length_s": 46.059999999999945,
+          "signal_density": -0.0037313432835820895,
+          "clip_duration_s": 66.49000000000001,
+          "has_retention_spike": false
+        },
+        "principle": "One idea per Short",
+        "reasoning": "The window drifts across Percy Butler, Reeves, and Will Harris without settling on a single takeaway, diluting the kind of one-claim Short that performs here."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "10313dce-2607-4351-b7ca-8a5989dbaa64",
+      "rank": 10,
+      "end_s": 1274.86,
+      "score": 0.25,
+      "format": "short",
+      "peak_s": 1257,
+      "triage": "pending",
+      "start_s": 1182,
+      "dna_match": 0.26,
+      "render_uri": null,
+      "render_status": "pending",
+      "setup_start_s": 1208.48,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": -0.045454545454545456,
+          "has_laughter": false,
+          "silence_ratio": 0.0,
+          "setup_length_s": 48.51999999999998,
+          "signal_density": -0.0037313432835820895,
+          "clip_duration_s": 66.37999999999988,
+          "has_retention_spike": false
+        },
+        "principle": "Hook in the first 3 seconds",
+        "reasoning": "Opening on a stammered \"that's that's he's not the free\" is the abrupt mid-flow entry this creator explicitly dislikes."
+      },
+      "has_reframe_track": false,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "23eadede-9182-44be-b1fd-52b1ea96c695",
+      "rank": 11,
+      "end_s": 518.71,
+      "score": 0.22,
+      "format": "short",
+      "peak_s": 483.93,
+      "triage": "pending",
+      "start_s": 449.16,
+      "dna_match": 0.24,
+      "render_uri": null,
+      "render_status": "pending",
+      "setup_start_s": 449.16,
+      "signals_jsonb": {
+        "origin": "llm",
+        "features": {
+          "hook_energy": 0.0,
+          "has_laughter": false,
+          "silence_ratio": 0.0,
+          "setup_length_s": 34.76999999999998,
+          "signal_density": 0.0,
+          "clip_duration_s": 69.55000000000001,
+          "has_retention_spike": false
+        },
+        "principle": "Hook in the first 3 seconds",
+        "reasoning": "Opening mid-phrase on \"standing out\" gives scrollers no reason to stay, and the number-specific sack prediction promised in the setup never appears inside the window."
+      },
+      "has_reframe_track": false,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "203d50ac-b611-45e9-ba26-e2acbebd67d7",
+      "rank": 12,
+      "end_s": 1566.64,
+      "score": 0.19,
+      "format": "short",
+      "peak_s": 1546.5,
+      "triage": "pending",
+      "start_s": 1471.5,
+      "dna_match": 0.2,
+      "render_uri": null,
+      "render_status": "pending",
+      "setup_start_s": 1481.33,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": -0.09090909090909091,
+          "has_laughter": false,
+          "silence_ratio": 0.0,
+          "setup_length_s": 65.17000000000007,
+          "signal_density": -0.005813953488372093,
+          "clip_duration_s": 85.31000000000017,
+          "has_retention_spike": false
+        },
+        "principle": "Retention curve is ground truth",
+        "reasoning": "This is low-energy mutual agreement at the tail of a 25-minute stream \u2014 the flattest possible region for a channel whose wins come from front-loaded urgency."
+      },
+      "has_reframe_track": false,
+      "cleaned_render_uri": null
+    },
+    {
+      "id": "a1543dfe-7d03-45ec-a8a2-63603f02dac3",
+      "rank": 13,
+      "end_s": 1070.53,
+      "score": 0.16,
+      "format": "short",
+      "peak_s": 1056.5,
+      "triage": "kept",
+      "start_s": 981.5,
+      "dna_match": 0.18,
+      "render_uri": "s3://autoclip-studio/clips/a1543dfe-7d03-45ec-a8a2-63603f02dac3.mp4",
+      "render_status": "done",
+      "setup_start_s": 980.73,
+      "signals_jsonb": {
+        "origin": "signal",
+        "features": {
+          "hook_energy": 0.0,
+          "has_laughter": false,
+          "silence_ratio": 0.0,
+          "setup_length_s": 75.76999999999998,
+          "signal_density": 0.0,
+          "clip_duration_s": 89.79999999999995,
+          "has_retention_spike": false
+        },
+        "principle": "Dead-air elimination",
+        "reasoning": "The window is hedging and repetition about who was on the field with no opinion or news value, the opposite of the urgency-first framing that drives this channel."
+      },
+      "has_reframe_track": true,
+      "cleaned_render_uri": null
+    }
+  ],
+  "video": {
+    "id": "7e988321-2265-4e22-85bd-0e9ffd583f84",
+    "kind": "long",
+    "title": "2026-08-05 07-59-55",
+    "created_at": "2026-08-10T19:19:45.04383+00:00",
+    "duration_s": 1617.216667,
+    "archived_at": null,
+    "audio_present": true,
+    "ingest_status": "done",
+    "source_present": true,
+    "youtube_video_id": null,
+    "camera_region_jsonb": {
+      "x": 169,
+      "y": 326,
+      "frame": {
+        "width": 1920,
+        "height": 1080
+      },
+      "width": 1704,
+      "height": 551,
+      "version": 2,
+      "windows": 9,
+      "sample_frames": 10,
+      "window_span_s": 60.0,
+      "windows_agreeing": 8,
+      "windows_detected": 9
+    },
+    "overlay_spans_jsonb": null
+  },
+  "exported_at": "2026-08-12T23:43:53.339741+00:00",
+  "_provenance": {
+    "purpose": "W0 preservation snapshot before Lane L29 builds (Issue 466 bumps overlay_spans version; source purges 2026-08-13 19:23 UTC). Golden BEFORE record for the W6 live A/B back-test.",
+    "source": "prod autoclip-postgres-1, read-only, RLS creator eb9af967-5d2f-4063-a05e-9f4f070ce840",
+    "r2_artifacts_verified": "all 11 rendered artifacts (ranks 1-9, 13 + rank1 _edit) HEAD-verified present on R2 2026-08-12",
+    "notes": "overlay_spans_jsonb is null because OVERLAY_BAND_DETECT_ENABLED was never set on prod. Ground truth for overlay bands lives in tests/fixtures/superchat/README.md (885-914 s, 930-1006 s). Rank 4 setup_start_s=1306.43 is the live Issue-449 case; ranks 3/13 carry the burned-in superchat (Issue 448)."
+  }
+}

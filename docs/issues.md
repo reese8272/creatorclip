@@ -2816,8 +2816,14 @@ Design rulings in `docs/DECISIONS.md` 2026-08-11.
 - [x] Detector unit-tested on the frozen fixtures — both transitions land on the measured
       seconds (885 / 1006) and the clean control produces no run
 - [x] The emitted graph is compiled by real ffmpeg in CI, not just string-matched
-- [ ] Live: re-render rank 3 and rank 13 through the deployed pipeline with
-      `OVERLAY_BAND_DETECT_ENABLED=true`. **Source expires 2026-08-13 19:23 UTC**
+- [ ] Live: re-render through the deployed pipeline with `OVERLAY_BAND_DETECT_ENABLED=true`.
+      **Re-scoped 2026-08-12 (owner decision, `docs/DECISIONS.md`):** the original source was
+      deliberately allowed to purge (2026-08-13 19:23 UTC) because Issue 466 breaks the sampler
+      on this 1617 s source — the drill would false-fail. The live proof moves to the **W6
+      fresh-upload back-test**: after 466+467 land, the owner re-uploads the SAME recording
+      ("2026-08-05 07-59-55") and the drill runs against the frozen ground truth
+      (885–914 s / 930–1006 s, `tests/fixtures/superchat/README.md`) plus the pre-L29 snapshot
+      (`docs/assessment/exports/7e988321_pre_l29_snapshot.json`)
 
 ### Issue 449: `snap_start`'s inter-sentence-pause exemption bypasses the Issue-441 weak-opener guard
 
@@ -3212,6 +3218,614 @@ a toggle. The panel gets taller for long values; nothing is ever hidden.
 
 ---
 
+## Lane L29 — Clipping-integrity audit (Issues 456–482)
+
+**Filed 2026-08-12** from the four-dimension clipping-integrity audit — full report, per-dimension
+verdicts, refutations, and the 88-row disposition table live in
+**`docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md`**. Baseline at `41012fc`: backend 2975/0,
+eval 24 scenarios / 100 %, Layer 0 green. Method: 12-agent workflow (4 confirmers over the
+exploration dossier, 4 hunters, 3 adversarial verifiers whose charter was to refute), every SEV1
+re-adjudicated by hand with reruns of the repros. Every issue below is verified **new** — 6
+already-tracked, 6 DECISIONS-accepted, and 2 refuted candidates were filtered out upstream.
+Batches: **A** selection geometry 456–460 · **B** scoring & prompts 461–465 · **C** pipeline &
+render 466–471 · **D** learning loop 472–475 · **E** eval & CI integrity 476–482.
+
+### Batch A — Selection geometry (456–460)
+
+### Issue 456: unbounded backward sentence-snap can ship a clip whose peak is outside the window
+
+**Severity: SEV1 — the detected moment and its entire payoff can be silently absent from the
+delivered clip; the degenerate case collapses a whole video's output to one clip.**
+
+`snap_start`'s absolute rule ("never leave a start mid-sentence", `clip_engine/sentence_snap.py:191-193`)
+takes the backward target **with no distance bound** when forward is unusable (`:226-229`). The 90 s
+clamp's payoff guard (`:315-319`) assumes the snap moved the start ≤ ~10 s; its fallback
+`new_end = setup_start_s + CLIP_TARGET_MAX_S` is itself ≤ peak whenever the start was dragged
+further, and the result is **never re-checked against the peak**. Related: the same tail can end a
+clip before its peak after a long run-on backward snap (same missing re-check).
+
+**Repro (rerun 2026-08-12):** candidate `{setup 225, peak 300, end 320}` + a 30 s unpunctuated
+utterance spanning the setup → shipped window `[204.7, 294.7]`, `peak_s=300` outside. Degenerate:
+with the Deepgram no-utterance fallback (whole video = ONE unterminated sentence,
+`ingestion/transcribe.py:248-259`), every candidate collapses to `[0, 90]`, all peaks excluded,
+`suppress_contained` leaves ONE clip for the entire video.
+
+**Root cause:** two rules with incompatible assumptions — the absolute never-mid-sentence rule vs
+a clamp guard written for the 10 s budget — and no post-snap `peak inside [setup, end]` invariant.
+
+**Fix direction (needs its own CHECK phase — do not build from this sketch):** add the missing
+invariant (drop or re-anchor a candidate whose peak exits the window post-snap), and bound the
+absolute rule or fall back to the raw start when the backward target is further than the peak
+allows. The no-utterance degenerate case needs its own handling (see also Issue 481).
+
+**Acceptance**
+- [ ] Post-snap invariant: `setup_start_s < peak_s < end_s` (with the 0.1 margin) holds for every
+      persisted candidate, enforced in code, not only in tests
+- [ ] Eval fixture: run-on-utterance scenario modeled on the repro geometry, red before / green after
+- [ ] Eval fixture: no-utterance (single-segment) transcript does not collapse to one [0, 90] clip
+- [ ] `SCENARIO_FLOOR` raised only with the fixtures added
+
+### Issue 457: laughter/energy double-count biases peak detection toward the aftermath
+
+**Severity: SEV2 — systematic bias against the product's core "clip the setup" promise.**
+
+A loud laugh satisfies both detectors in `ingestion/audio.py:127-133` (`rms >= 0.6` → energy_spike,
+weight 1.5; `rms >= 0.3 & zcr >= 0.5` → laughter, weight 2.0), so overlapping events stack up to
+3.5× value on the **same samples** in `clip_engine/window.py`. The loud reaction — the aftermath —
+becomes the most peak-shaped thing in the timeline; the 75 s backward look is the only counterweight.
+
+**Fix direction (CHECK phase):** de-overlap event classes at emission (a sample contributes to one
+class) or cap the composite per-sample; re-run the eval geometry suite + a fixture where the setup
+precedes a loud reaction and the peak must not land on the reaction alone.
+
+**Acceptance**
+- [ ] One sample contributes to at most one event class (or a documented per-sample cap)
+- [ ] Fixture: laughter-after-joke timeline — peak lands within the joke+reaction complex and the
+      setup window still opens at the joke's setup (red/green documented)
+- [ ] `docs/CLIPPING_PRINCIPLES.md` unchanged or updated to match the actual weighting story
+
+### Issue 458: a silence-only timeline fabricates clip candidates
+
+**Severity: SEV2 — phantom clips from videos with no positive signal at all.**
+
+The composite array is 0 everywhere except −0.5 inside silences (`clip_engine/window.py:13`). The
+flat 0 region **between** two silences is then a local maximum with prominence 0.5 —
+`find_peaks(prominence=0.5)` emits it as a peak. Repro (rerun): a timeline containing only two
+silences yields 2 candidates with peaks at 155 s and 255 s from literally nothing.
+
+**Fix direction (CHECK phase):** require positive evidence for a peak (e.g. minimum absolute
+height > 0, or skip-with-reason when the composite has no positive mass) — and make the skip
+reason honest (`derive_skip_reason` currently cannot express "no positive signal").
+
+**Acceptance**
+- [ ] Silence-only (and all-zero) timelines produce zero candidates and a truthful skip reason
+- [ ] Eval fixture added; `SCENARIO_FLOOR` raised with it
+
+### Issue 459: `find_peaks` cannot see a peak in the first or last signal sample
+
+**Severity: SEV2 — a retention spike at the video's start/end (the ground-truth signal, weight
+3.0) is invisible to candidate extraction.**
+
+`scipy.signal.find_peaks` never reports array endpoints as peaks. A retention_spike inside the
+first/last 0.5 s bucket (`clip_engine/window.py:42`; spikes have a ~2-sample footprint) produces
+no candidate — cold-opens with instant retention pops are exactly the content this misses.
+
+**Fix direction (CHECK phase):** pad the composite array (standard practice) or explicitly test
+endpoints; verify interaction with the 75 s backward window at t≈0.
+
+**Acceptance**
+- [ ] Fixture: retention spike in the first sample and in the last sample each yield a candidate
+- [ ] No regression in the existing 24 scenarios
+
+### Issue 460: setup fallback picks the EARLIEST energy spike in the window, docstring says "nearest"
+
+**Severity: SEV2 — systematically over-long setups on silence-free segments; code contradicts its
+own contract.**
+
+`_find_setup_start` (`clip_engine/candidates.py:140-173`): silence fallback uses `max(...)` (most
+recent — correct); the energy-spike fallback uses `min(...)` (`:170`) — the **earliest** spike in
+the 75 s lookback — while the docstring (`:146`) promises the "nearest". One of the two is wrong;
+behaviorally the earliest-spike choice drags setups toward the window edge on energetic segments.
+
+**Fix direction (CHECK phase):** decide the intended semantics (most-recent spike before the peak
+mirrors the silence rule), fix code or docstring accordingly, and pin with a unit test whose
+timeline has two spikes in-window.
+
+**Acceptance**
+- [ ] Code and docstring agree; unit test with two in-window spikes pins the chosen semantics
+- [ ] Eval geometry suite green; any changed scenario expectations justified in the issue
+
+### Batch B — Scoring & prompts (461–465)
+
+### Issue 461: `score_candidates` trusts the model's response — unvalidated principle, unguarded floats, silent full-batch discard
+
+**Severity: SEV2 — three response-handling defects in the one function that decides what ships.**
+
+1. `clip_engine/scoring.py:505` writes the model-emitted `principle` with **no registry check**
+   (`analysis/video_context.py:271` drops unknown principles; `knowledge/clip_explain.py:199`
+   raises — the primary scorer alone trusts the model). CLAUDE.md requires every score to cite a
+   named principle; here that is enforced only by the prompt.
+2. `:502-504` — `float(hit.get("score", 0.5))` / `float(_dna)` are unguarded; a non-numeric value
+   raises `ValueError` out of `score_candidates` and fails the **whole generation task**, unlike
+   every other malformed-response path in the file which degrades gracefully.
+3. A model that emits `"index": "0"` (string) fails the `item["index"]`-keyed lookup shape at
+   `:491-495` — every LLM score is silently discarded and all clips fall back to signal-only,
+   logged as a normal fallback.
+
+**Fix direction (CHECK phase):** validate against `_PRINCIPLES` with a safe default, wrap numeric
+coercion per-item (bad item → cold-start annotate that item only), coerce `index` via
+`int(...)`-with-guard. Consider structured output (`output_config.format`) as video_context
+already uses — that removes the whole class.
+
+**Acceptance**
+- [ ] Off-registry principle → replaced with a valid default + warning log (unit test)
+- [ ] Non-numeric score/dna_score on ONE item degrades that item only (unit test)
+- [ ] String `index` values are accepted (unit test)
+- [ ] No behavior change on well-formed responses (existing `test_scoring.py` green)
+
+### Issue 462: scoring's `[BEFORE]` transcript context keeps the wrong end
+
+**Severity: SEV2 — the LLM judges "does this start at the setup?" without the sentence adjacent
+to the cut.**
+
+`_transcript_context` (`clip_engine/scoring.py:235+`) caps `[BEFORE]` at 200 chars but truncates
+keeping the **head** of the 60 s pre-window — i.e. text ~60 s away — and drops the text
+immediately before the clip start, which is precisely what the setup judgment needs. Repro
+(rerun): with a long pre-window, the emitted `[BEFORE]` contains t=0–15 s text and omits the
+sentence at the cut.
+
+**Fix direction (CHECK phase):** truncate keeping the tail for `[BEFORE]` (and audit `[AFTER]`
+for the mirror-image bug: it should keep its head).
+
+**Acceptance**
+- [ ] Unit test: `[BEFORE]` ends with the words nearest the cut; `[AFTER]` starts with the words
+      nearest the clip end
+- [ ] Prompt-size caps unchanged
+
+### Issue 463: `video_context` prompt-security diverges from the Issue-224 rules
+
+**Severity: SEV2 — creator-authored and model-authored text reach trusted positions.**
+
+(a) `analysis/video_context.py:321-330` places creator-authored identity text (niches, mission,
+free-text) in a **system** block. `dna/brief.py:92-115` documents the opposite rule for the same
+data ("stated_identity is creator-authored… must NOT go in the system role", Issue 224) and routes
+it through `wrap_untrusted` in the user turn. (b) The context pass's model-authored summary —
+derived from the untrusted transcript — is re-used downstream content-unwrapped (second-order
+injection surface).
+
+**Fix direction (CHECK phase):** align video_context with the brief's placement rules; wrap the
+summary where it is re-consumed. Check DECISIONS Issue 224/371 rulings for the exact contract.
+
+**Acceptance**
+- [ ] Creator-authored text appears only via `wrap_untrusted` in the user turn (structural test,
+      mirroring `tests/test_prompt_safety.py` patterns)
+- [ ] Model-authored summary wrapped at every downstream consumption site
+- [ ] Prompt-cache behavior unchanged (cache-floor gates still hit)
+
+### Issue 464: Principle 10 "Native length" is computed, stored, surfaced — and never used
+
+**Severity: SEV2 — a documented product promise ("the engine learns YOUR optimal length") is
+structurally unimplemented.**
+
+`dna/builder.py` computes `optimal_clip_len_s` + `best_source_region`; `models.py:633-634` stores
+them; `routers/creators.py:83-84` surfaces them — and **no clip-geometry code reads either**.
+Every creator gets the fixed 30/90 band (`MIN_CLIP_S`, `CLIP_TARGET_MAX_S`). The only consumer is
+prose inside the DNA brief, so the scorer may cite Principle 10 while geometry cannot honor it.
+
+**Fix direction (CHECK phase):** either wire `optimal_clip_len_s` into the target-length clamp
+(bounded by platform limits) — or descope: remove the fields and the principle's "native length"
+claim from docs/UI. An explicit `[DEC]` either way.
+
+**Acceptance**
+- [ ] `[DEC]` recorded in `docs/DECISIONS.md`
+- [ ] If wired: geometry test showing a creator with `optimal_clip_len_s=45` gets ≈45 s targets;
+      if descoped: fields removed + docs/PRINCIPLES updated
+
+### Issue 465: preference rerank overwrites the persisted composite score
+
+**Severity: SEV2 — the stored `score` silently changes meaning once personalization activates.**
+
+`rerank_with_preference` writes the blend back into `clip.score` and commits
+(`clip_engine/ranking.py:214`), so the persisted value is no longer the DNA/LLM composite that
+`dna_match` was deliberately separated from (Issue 103 #5). Downstream, generate-more's recap
+candidates read `Clip.score` as if it were the fit score (`routers/clips.py:2415`). Related
+context (register, not re-filed): `append_ranked_clips` skips the blend by design, so one video
+holds blended ranks 1–12 and raw ranks 13+ on the same column.
+
+**Fix direction (CHECK phase):** persist the blend separately (e.g. `blended_score` or recompute
+at read time) and keep `score` stable as the fit composite; migrate readers deliberately.
+
+**Acceptance**
+- [ ] `clip.score` semantics documented and stable across the rerank
+- [ ] Recap/generate-more readers explicitly choose fit vs blended (test each)
+- [ ] Migration/backfill decision recorded if a column is added
+
+### Batch C — Pipeline & render (466–471)
+
+### Issue 466: overlay-band detection is broken on every source longer than ~500 s
+
+**Severity: SEV1 — the Issue-448 fix cannot work on the livestream sources superchats occur on;
+spans are computed over a scrambled, time-dilated timeline.**
+
+Three compounding defects when `detect_overlay_spans` runs on a > 120 s source (which routes to
+`_sample_by_seeking`): (1) frames are named `f'{i:03d}.png'` (`clip_engine/camera_region.py:568`)
+and read back `sorted(glob('f*.png'))` (`:619`) — **lexicographic**, so past 999 samples the stack's
+temporal order is scrambled (repro rerun: `f1000` sorts to index 101). At the 0.5 s cadence
+(`overlay_bands.py:174`) any source > ~500 s crosses that line; the 1617 s drill video needs 3234.
+(2) `step = duration_s/len(stack)` (`overlay_bands.py:214`) assumes a complete stack, but the
+sampler silently skips failed frames (`camera_region.py:588-589`) and truncates at the 240 s budget
+(`:556-566`, `overlay_bands.py:81`) — surviving indices map to **inflated times** (a real 300–330 s
+banner maps to ~606–668 s) and the un-sampled tail is never scanned. (3) Every test monkeypatches
+`_sample_gray_frames` with dense complete stacks, so nothing catches any of this (the real-frame
+fixture tests cover only the pure band-detection functions).
+
+**Root cause:** the seek-sampler was built for camera-region consensus (≤ 9 windows × few frames,
+n always ≪ 999, complete-by-construction) and reused for whole-source scanning without revisiting
+its assumptions.
+
+**Fix direction (CHECK phase):** zero-pad names to the actual sample count (or sort numerically),
+carry per-frame timestamps through the stack instead of inferring from index, and make truncation
+explicit (either extend the budget for this caller or record the scanned range and mask only
+within it). Then re-verify against the real 448 measurements if any drill artifact survives.
+
+**Acceptance**
+- [ ] Frame read-back order proven correct for n > 999 (unit test with synthetic names)
+- [ ] Span times derived from real timestamps, not `duration/len(stack)`; truncation is explicit
+      in the stored spans (scanned-range field or log + metric)
+- [ ] An integration-shaped test drives `detect_overlay_spans` through the REAL sampler on a
+      generated long synthetic source (testsrc + drawtext band), asserting span times ±1 s
+- [ ] `videos.overlay_spans_jsonb` version bumped so stale spans are invalidated on read
+
+### Issue 467: the Punch-in toggle produces an invalid ffmpeg filter — every render fails while enabled
+
+**Severity: SEV1 — a shipped UI feature bricks the creator's render loop with a generic error.**
+
+`_punch_in_filter` (`clip_engine/render.py:453-461`) emits a time-dependent expression in crop's
+`w`/`h`. ffmpeg evaluates crop `out_w`/`out_h` **once at filter-configuration time**, where `t` is
+NaN → "Error when evaluating the expression … Error reinitializing filters!". Repro (rerun on
+ffmpeg 8.1.2, production-shaped chain): rc=234; control with the same `t` expression in crop `x`/`y`
+runs rc=0 — mechanism pinned, version-stable semantics. Reachability: `zoom_on_peak` flows from
+`CaptionStylePanel.tsx` and the brand kit (`routers/creators.py:255-256`), the kit is seeded onto
+every generated clip (`worker/tasks.py:3630-3638`) and merged on every render
+(`routers/clips.py:915-917`); `render_clip` classifies the failure transient, burns 3 retries, and
+the UI shows "Render failed." with nothing pointing at the checkbox. Only argv-string tests exist
+(`tests/test_render.py:489-506`) — the filter has never been executed by any test. The feature
+(Issue 184) has never worked.
+
+**Fix direction (CHECK phase):** implement punch-in with config-time-legal parameters (e.g.
+constant `w/h` + animated `x/y`, or `zoompan`/`scale` approaches), and add the real-ffmpeg
+execution test that would have caught this (see Issue 478's lane).
+
+**Acceptance**
+- [ ] Punch-in chain executes rc=0 through real ffmpeg in a test (testsrc source)
+- [ ] Visual behavior verified on one real render (frame-extract: zoom present around peak)
+- [ ] A render with `zoom_on_peak=true` completes end-to-end in the worker path
+
+### Issue 468: `POST /clips/{id}/render` lacks the pending-edit 409 guard its siblings have
+
+**Severity: SEV2 — re-render races the clean/edit artifact swap.**
+
+The cuts/trim/clean endpoints all 409 when an edit job is pending; the plain re-render endpoint
+(`routers/clips.py:844` area) does not, so a re-render fired mid-clean can interleave with
+`/clean/confirm`'s `render_uri` swap and clobber or resurrect artifacts.
+
+**Fix direction (CHECK phase):** add the same guard; audit the confirm path for a
+compare-and-swap on the URI it replaces.
+
+**Acceptance**
+- [ ] 409 test mirroring the existing sibling-endpoint tests
+- [ ] Confirm path verified race-safe (test or documented DB-level guarantee)
+
+### Issue 469: two duration authorities — audio-derived clamp vs container-derived hard reject
+
+**Severity: SEV2 — a duration mismatch becomes a PERMANENT render failure with no retry.**
+
+`sentence_snap` clamps `end_s` to the librosa 16 kHz audio duration (`timeline.duration_s`,
+capped at `AUDIO_ANALYSIS_MAX_DURATION_S=14400`); `clip_engine/render.py:517-526` hard-rejects
+`end_s >` the ffprobe **container** duration with a `ValueError` that `render_clip` treats as
+terminal. Any source where audio duration exceeds container duration (VFR, stream VODs, container
+metadata quirks) yields clips that can never render. The dead word-level path documents exactly
+this hazard (`candidates.py:357-363`); the live path doesn't handle it.
+
+**Fix direction (CHECK phase):** pick ONE authority at candidate-persist time (ffprobe is what the
+render enforces), clamp there, and keep the render check as a safety net that logs loudly instead
+of failing permanently for sub-second overshoots.
+
+**Acceptance**
+- [ ] Candidates clamped against the same duration the render enforces
+- [ ] Sub-second overshoot at render → clamped + logged, not permanent failure (unit test)
+- [ ] > 14400 s source behavior documented (analysis cap vs container)
+
+### Issue 470: trim/clean leaves stale clip geometry behind the swapped artifact
+
+**Severity: SEV2 — captions/crops/duration/transcript compute against a window that no longer
+matches the delivered video.**
+
+`_edit_clip_async` (`worker/tasks.py:2867,2901-2911`) writes only `cleaned_render_uri`;
+`clip.start_s/end_s/setup_start_s` keep the pre-trim geometry. After `POST /clips/{id}/clean/confirm`
+swaps it into `render_uri`, `_clip_duration_s` (`routers/clips.py:1578`), the `/transcript` origin,
+and any re-render/caption pass still use the original window.
+
+**Fix direction (CHECK phase):** persist the effective geometry (cut list is already stored —
+derive and store effective duration + segment map at confirm time) and route every reader through
+it. Interacts with Issue 465 (score semantics) and 468 (race guard) — sequence them.
+
+**Acceptance**
+- [ ] After a trim+confirm, `/transcript`, duration, and captions all reflect the delivered video
+      (integration-lane test)
+- [ ] Re-render of a confirmed-clean clip does not resurrect the pre-trim window
+
+### Issue 471: right-to-erasure misses exports, extracted audio, and recap artifacts
+
+**Severity: SEV2 — compliance-relevant storage survives account deletion (beyond the known
+Issue-446 `clips/` gap).**
+
+`erase_creator` (`routers/auth.py:486-495`) deletes known prefixes, but: GDPR export bundles,
+extracted-audio WAVs (`audio_uri`), and recap render artifacts are written under keys/prefixes the
+erasure never touches (audit each write site in `worker/tasks.py` / recap path). Issue 446 covers
+`clips/{clip_id}.mp4`; this issue is the sweep for everything else.
+
+**Fix direction (CHECK phase):** inventory every R2 write key in the codebase, converge on
+creator-scoped prefixes, make `erase_creator` enumerate from the DB rather than prefix-guessing.
+Fold into 446's build if that lands first.
+
+**Acceptance**
+- [ ] Written-key inventory in the issue (grep-verified)
+- [ ] Erasure test (integration lane, mocked storage) asserting every write site's key is covered
+- [ ] `docs/COMPLIANCE.md` updated
+
+### Batch D — Learning loop (472–475)
+
+### Issue 472: feedback `skip` silently retracts the creator's latest real label
+
+**Severity: SEV1 — the shipped Trim→Skip UI flow erases keep labels from the training set while
+the pile keeps the verdict; the 444 invariant ("rating and pile cannot disagree") is violated.**
+
+`models.py:185-191` omits `skip` from `TRIAGE_BY_FEEDBACK_ACTION` ("skipping is not a verdict") so
+`submit_feedback` leaves `clip.triage` unchanged on skip — but still inserts the
+`ClipFeedback(action=skip)` row (`routers/review.py:223-244`). `preference/train.py:41` puts skip
+inside `_VERDICT_ACTIONS`, so that row **wins the per-clip partition** and drops at the TRAINABLE
+filter (`:126`) — retracting whatever label preceded it. The UI makes this the natural flow:
+"Save trim" (a keep label) deliberately does not advance (`YourCall.tsx:132`); the always-visible
+Skip button (`:204`) is the obvious next click. Result: feedback rows trim(t1)+skip(t2) → clip
+contributes NO label, `triage` stays `kept`, UI flashes success. The skip-as-retraction design was
+built for `PUT /triage`'s back-to-pending transition (`train.py:103-109` documents it) — the
+feedback surface reuses the action with different intent.
+
+**Fix direction (CHECK phase):** distinguish "advance past this clip" (UI navigation — should
+write NO feedback row) from "retract my verdict" (the triage-pending transition). Either stop
+POST /feedback accepting `skip`, or exclude feedback-surface skips from the verdict partition.
+
+**Acceptance**
+- [ ] Trim → Skip in the UI leaves the trim label trained (integration-lane test on the partition)
+- [ ] PUT /triage → pending still retracts (existing test stays green)
+- [ ] UI: skip after a same-session rating either warns or is a pure navigation no-op
+- [ ] The 444 docstring's invariant is true again (test that pile state implies training state)
+
+### Issue 473: retrain debounce watermark is blind to retractions and outcome arrivals
+
+**Severity: SEV2 — the model can keep training on labels the creator retracted.**
+
+The debounce/watermark that decides "new labels since last train" counts only TRAINABLE feedback
+rows. A pure skip retraction (which REMOVES a label from the effective set) and a
+`performed_well` outcome arrival (which changes sample weights 3×) advance nothing, so no retrain
+fires and `load_latest` keeps serving the stale model indefinitely.
+
+**Fix direction (CHECK phase):** watermark on the full verdict-action set + outcome writes, or on
+a monotonic feedback/outcome sequence id.
+
+**Acceptance**
+- [ ] Skip-only retraction triggers a retrain (test at the debounce layer)
+- [ ] Outcome arrival triggers a retrain within the debounce window
+- [ ] No retrain storm: debounce still coalesces (existing behavior pinned)
+
+### Issue 474: personalization threshold honesty — `active=true` at weight 0.0, and two different label counts
+
+**Severity: SEV2 — the UI can claim personalization is on while the blend weight is zero; the
+count shown is not the count trained on.**
+
+`preference_weight(label_count)` returns 0.0 at exactly `PERSONALIZATION_THRESHOLD_LABELS` (the
+ramp is `(n−T)/T`), while the status surface reports `active=true` at `n ≥ T`. Separately, the
+surfaced label count is computed pre-dedup (raw feedback rows) while training counts post-dedup
+(one per clip) — a creator who flip-flopped shows a count that can be far above what the model
+actually saw. CLAUDE.md: "Personalization threshold is communicated honestly."
+
+**Fix direction (CHECK phase):** one count (post-dedup) everywhere; `active` means `weight > 0`;
+show the weight ramp if useful.
+
+**Acceptance**
+- [ ] At exactly T labels the UI does not claim active personalization (API test)
+- [ ] Surfaced count == trained count basis (test)
+
+### Issue 475: efficacy/lift harness diverges from what production trains and serves
+
+**Severity: SEV2 — the offline numbers used to judge the personalization loop are computed on a
+different dataset and a different geometry origin than production.**
+
+(a) The efficacy eval set lets `performed_well=True` override skip/format retractions that
+`latest_verdict_subquery` honors in training — the harness scores a model on labels production
+would have discarded. (b) The Proof-of-Lift panel computes `duration_s`/`setup_lead_s` from
+`start_s`, while every other surface uses the `setup_start_s ?? start_s` origin
+(`routers/review.py:113-114`) — lift features mis-measure every clip with a distinct setup point.
+Related register item: `efficacy.py` hand-copies the production blend formula (C2-13).
+
+**Fix direction (CHECK phase):** share the exact training-set query (it already imports
+`latest_verdict_subquery` — extend to the outcome-join semantics), share the origin helper, and
+pin blend parity with a test.
+
+**Acceptance**
+- [ ] Efficacy set == training set for identical inputs (test against the shared query)
+- [ ] Lift geometry uses the shared origin (test with `setup_start_s != start_s`)
+- [ ] Blend parity test between `efficacy._blend_scores` and `rerank_with_preference`
+
+### Batch E — Eval & CI integrity (476–482)
+
+### Issue 476: the LLM clip scorer is evaluated end-to-end nowhere
+
+**Severity: SEV1 — the single decision-maker for what ships and which principle it cites has no
+behavioral gate of any kind.**
+
+`score_candidates` is the one call that turns candidates into ranked, principle-cited clips. Every
+test patches `clip_engine.scoring._ANTHROPIC`; no eval scenario invokes the function; the nightly
+live-LLM lane (`.github/workflows/llm-e2e-nightly.yml`) covers titles/hooks/DNA-brief/cache only;
+mutmut touches scoring.py weekly and non-gating (`mutation.yml` — `mutmut run || true`). A prompt,
+rubric, or model change that systematically prefers aftermath windows or ignores the DNA brief
+passes 100 % of every gate in the repo. (This is simultaneously a limitation of this audit — there
+was no harness to run.)
+
+**Fix direction (CHECK phase):** a scored-fixture lane — recorded real responses (goldens) for
+parser/pipeline regressions + a small nightly live set with behavioral assertions (setup-window
+preference over aftermath-window on constructed pairs, principle ∈ registry, dna_score ordering on
+a fixed brief). Research current LLM-eval practice (LLM-judge vs fixed assertions) in Phase 1.
+
+**Acceptance**
+- [ ] Recorded-response goldens exercise the REAL `score_candidates` parse/annotate path in CI
+- [ ] A nightly behavioral eval hits the live model with ≥ 3 assertion classes and posts a status
+- [ ] `docs/DECISIONS.md` entry for the chosen eval design
+
+### Issue 477: eval-runner assertion integrity — dead scenarios, vacuous minimums, permissive matching
+
+**Severity: SEV2 — the "24 adversarial scenarios, all pass" gate materially overstates itself;
+two scenarios assert nothing.**
+
+Verified: (a) `injection_in_transcript.yaml` — its `expected` keys (`injection_window_score_max`,
+`clean_window_score_gte_injected`) are read by **no code**; `input.injected_transcript_segment` is
+never fed anywhere; no `min_candidates` → the geometry branch asserts nothing; it passes vacuously
+and counts toward the floor and the landing-page claim. (b) `false_peak_single_spike.yaml` —
+`min_candidates: 0` is `assert len >= 0`. (c) No upper-bound-on-count assertion exists in the
+geometry branch — a spurious-clip flood is invisible to 13 of 15 geometry scenarios. (d) Expected
+candidates match by nearest peak (`tests/test_clip_engine.py:575-580`) — two expectations can match
+the same candidate; spurious extras are never rejected. (e) The core `all_setup_before_peak`
+invariant is opt-in; 10 of 15 geometry scenarios don't opt in. (f) `SCENARIO_FLOOR` guards
+deletion but nothing stops it being lowered in the same commit that deletes a fixture.
+
+**Fix direction (CHECK phase):** make the runner REJECT unknown/unread expectation keys (that one
+change would have caught (a) at authoring time); add `max_candidates` support and set it in the
+flood-shaped scenarios; make setup-before-peak unconditional; one-to-one candidate matching;
+either implement injection_in_transcript against the real scorer path (needs 476's lane) or
+rewrite it to assert what the cold-start path CAN prove; pin the floor value in a second location
+(e.g. transparency test) so lowering it requires two deliberate edits.
+
+**Acceptance**
+- [ ] Runner fails on any expectation key it does not read (proven by a fixture with a typo'd key)
+- [ ] Both dead scenarios either assert something real or are replaced (floor maintained)
+- [ ] `max_candidates` asserted in ≥ 3 flood-shaped scenarios; setup-before-peak unconditional
+- [ ] Landing-page claim re-verified by `test_eval_transparency.py` after the changes
+
+### Issue 478: no real-media verification lane — empty marker, no boundary ffprobe, orphaned real fixtures
+
+**Severity: SEV2 — an off-by-N in the actual cut, seek, or filter chain is invisible to the whole
+suite; the only real frames from a live defect are consumed by nothing.**
+
+Verified: the `render-env` marker is registered (`pytest.ini:17`) but **zero tests carry it** —
+the declared real-media lane is empty (measured: 3217 deselected / 0 selected). No test anywhere
+ffprobes a rendered clip's duration/PTS against the requested `[start_s, end_s]` — `test_render.py`
+asserts argv strings (one test asserts nothing at all); the integration-lane setup-start test mocks
+`render_clip_file`. `tests/fixtures/reframe_seats/` (12 real frames from Issue 450 — the only
+surviving repro once the 2026-08-13 source purge lands) is referenced by zero tests; the 450
+regression test hand-supplies the `SpeakerMapping` the fixture exists to prove. Nothing in CI
+asserts the ffmpeg-gated tests actually executed (the apt install is best-effort `|| warning`).
+
+**Fix direction (CHECK phase):** populate the lane: (1) a testsrc-source render through the REAL
+`render_clip_file` asserting ffprobe duration ≈ `end−start` ±1 frame and stream geometry; (2) the
+punch-in and sendcmd chains executed for parse+init (catches Issue 467's class); (3) wire
+`reframe_seats` through the real mouth-motion → mapping path; (4) a CI step that fails if the
+ffmpeg-gated tests were skipped (count assertion or `--strict-markers`-style guard).
+
+**Acceptance**
+- [ ] `pytest -m render-env` selects ≥ 3 tests locally and in CI
+- [ ] Boundary ffprobe test red/green demonstrated by mutating `-ss` handling
+- [ ] `reframe_seats` fixtures consumed by a test that computes the mapping from the frames
+- [ ] CI fails when the ffmpeg lane silently skips
+
+### Issue 479: the gates that never ran — per-module coverage floors, diff-cover, and the pre-push hook
+
+**Severity: SEV2 — Issue 269's headline controls have enforced nothing in CI since 2026-06-23,
+while printing "All runnable gates passed".**
+
+`run_layer0.py:527` unconditionally deletes `docs/assessment/_coverage.xml` at the end of EVERY
+invocation; `ci.yml` runs `--gates coverage --require-coverage` and
+`--gates module_coverage,diff_cover` as **two invocations** (`:213-225`). Invocation 2 finds no
+XML → both gates return "skipped" → exit 0. Confirmed in the live CI log of a run merged
+2026-08-12 ("module_coverage skipped coverage.xml not found … All runnable gates passed"). The
+global 83 % floor IS enforced (invocation 1) — what never ran is the clip_engine 91 / preference
+88 floors and the 80 % changed-line patch gate. The 2026-07-20 fix (`2279720`) fixed only the
+single-invocation local path. Compounding: `scripts/ci_local.sh` (the Layer-1 pre-push gate)
+requires Postgres unnecessarily for the unit lane and the hook is not installed on this box, so
+the local backstop doesn't run either.
+
+**Fix direction (CHECK phase):** either single-invocation the CI job (`--gates
+coverage,module_coverage,diff_cover --require-coverage`) or stop deleting the XML in main() (move
+cleanup to the producing gate's start). Add `--require` semantics to module_coverage/diff_cover in
+CI so "skipped" fails there. Fix ci_local.sh's precondition; install the hook.
+
+**Acceptance**
+- [ ] CI log shows module floors + diff-cover actually evaluating (numbers, not "skipped")
+- [ ] A deliberate floor-violation branch fails the job (drill on a scratch PR)
+- [ ] "skipped" is a failure in CI context for these two gates
+- [ ] `ci_local.sh` runs the unit lane with Redis only; hook installation documented/verified
+
+### Issue 480: preference-model evaluation gap — the DNA fixture proves a sort, the rerank has no eval
+
+**Severity: SEV2 — "ranking reflects DNA + preference" (a Phase-4 checklist line) is not proven by
+any test.**
+
+`rank_candidates` is a pure score sort — it never reads `dna_match`; the DNA→score coupling lives
+inside the mocked LLM, so `ranking_dna_preferred_first.yaml` proves descending sort only.
+`rerank_with_preference` is tested with stub scorers (blend math) but no eval fixture ever runs a
+TRAINED model over a candidate set — a personalization regression that worsens rank 1 for a mature
+creator is invisible.
+
+**Fix direction (CHECK phase):** a deterministic trained-model fixture (fit on a fixed synthetic
+label set, seeded) + an eval asserting the blend reorders a candidate set the right way at
+threshold weights; rename or strengthen the DNA fixture to test what it names (needs 476 for the
+LLM leg).
+
+**Acceptance**
+- [ ] Eval fixture with a real fitted scorer flips an ordering at w=cap (deterministic, seeded)
+- [ ] The DNA fixture either exercises real coupling or its name/claim is corrected
+
+### Issue 481: transcription timing fidelity is untested — every boundary depends on it
+
+**Severity: SEV2 — a systematic word-timestamp offset would shift every clip boundary and every
+eval would stay green (they supply hand-typed timings).**
+
+`tests/ingestion/test_transcribe.py` + `tests/test_ingest.py` verify normalizer JSON shape only.
+No test checks Deepgram/AssemblyAI/WhisperX word timings against known speech; `sentence_snap`
+anchors every clip opening on those timings. Also: the no-utterance degenerate fallback
+(`transcribe.py:248-259`) silently produces one whole-video segment (see Issue 456's collapse) with
+no warning log.
+
+**Fix direction (CHECK phase):** a small recorded real-audio fixture (a few seconds of known
+speech, checked-in WAV + expected word windows with tolerance) run through each normalizer's
+parsing AND through one recorded provider response; add a WARNING log + metric on the one-segment
+fallback so silent degradation becomes visible.
+
+**Acceptance**
+- [ ] Recorded-fixture test asserts word timings within tolerance for the default backend
+- [ ] One-segment fallback logs a warning and sets a video-visible degradation flag
+- [ ] Fixture documented in `tests/fixtures/` README (provenance, license)
+
+### Issue 482: doc↔code accuracy sweep (roll-up)
+
+**Severity: cleanup — none of these change behavior; all of them misdirect the next reader.**
+
+- `docs/CLIPPING_PRINCIPLES.md` / `docs/SOT.md:140` / `docs/PIPELINE.md:81` / CLAUDE.md describe a
+  "rolling 60–90 s context window"; code is a fixed `WINDOW_S = 75.0` backward look
+- `docs/PIPELINE.md` omits `analyze_video_context` from the chain; `worker/tasks.py` line refs
+  drift 65–855 lines (measured)
+- CLAUDE.md says `SCENARIO_FLOOR=21`; code is 23 (`tests/test_clip_engine.py:204`); the ratchet
+  comment omits the 21→23 raise
+- `models.py` Clip.triage comment contradicts shipped Issue-444 behavior
+- No test parses `docs/CLIPPING_PRINCIPLES.md` against the four code copies of the registry — add
+  the cross-check test (registry is intentionally duplicated; the DOC is the uncovered copy)
+
+**Acceptance**
+- [ ] Each doc corrected in one pass; registry cross-check test added
+- [ ] `docs/SOT.md` window.py description matches reality
+
+---
+
 ## Source index
 
 Collected from the 2026-08-03 research pass. Cited inline above; listed here so a future pass can
@@ -3285,4 +3899,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **456**.
+- Next free issue number: **483**.

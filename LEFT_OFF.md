@@ -1,9 +1,10 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-12 · **Branch:** `main` @ `7e3582a` · **working tree CLEAN** ·
-**0 ahead / 0 behind `origin/main`; `origin/staging` at the same SHA; no stray branches.**
-**Prod:** `https://autoclip.studio`, alembic **`0058 (head)`**. Deploy of `7e3582a` was in flight
-at session end — confirm with `gh run list` before assuming it landed.
+**Last updated:** 2026-08-12 · **Branch:** `docs/close-out-455` @ `41012fc` · working tree has
+**4 uncommitted audit-deliverable files** (see NEXT ACTION 1) · branch is **1 ahead of
+`origin/main`** (the open docs PR; its CI passed 2026-08-12 21:43).
+**Prod:** `https://autoclip.studio`, alembic **`0058 (head)`** — no migrations this session.
+The previously-in-flight `c138e93` deploy **landed** (Deploy to production run: success, 21:45 UTC).
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source
 > of truth.
@@ -12,92 +13,95 @@ at session end — confirm with `gh run list` before assuming it landed.
 
 ## CURRENT FOCUS
 
-**Everything built this session is merged (PR #81, `7e3582a`).** The one thing that matters next is
-that a human actually uses the new review flow on prod — it has never been exercised against a real
-API response.
+**A full clipping-integrity audit was completed and filed as Lane L29 (Issues 456–482) — the next
+session's job is to BUILD those fixes, starting with the five SEV1s.** The audit was
+assessment-only: zero production code changed; every filed finding survived adversarial
+verification plus hand adjudication (repros rerun) of all SEV1s.
+
+**Read these two files before writing any code:**
+1. `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md` — verdicts, evidence, the 88-row
+   disposition table (what was confirmed / refuted / already-tracked / deliberately-accepted).
+2. `docs/issues.md` **Lane L29** — 27 self-contained issue bodies with evidence, root cause,
+   fix direction, and acceptance boxes. Repro details are embedded in the issue bodies
+   (the audit session's scratchpad scripts are ephemeral and already gone).
 
 ## → NEXT ACTION
 
-1. **Confirm the `7e3582a` deploy landed** — `gh run list --limit 5`; a failed image build
-   **silently skips** the deploy step. Then `curl -s https://autoclip.studio/health`.
-2. **Have the creator click through `/review` on prod.** 445's piles read `clip.triage`,
-   which the API returns but the frontend type had never declared — **it has only been exercised
-   against mocks.** This is the highest-value unverified thing in the repo right now.
-3. **⏰ Time-boxed — video `7e988321`'s source purges 2026-08-13 19:23 UTC** (`ingest_done_at`
-   2026-08-10 19:23 + 72 h). Two things die with it:
-   - **444's idempotency box** — needs the SAME clip triaged twice with the same verdict. The
-     creator kept one clip and dropped a *different* one, which tests the sync path, not the no-op.
-     Current triage on that video: **10 pending / 2 kept / 1 dropped**.
-   - **A live superchat-mask render.** `OVERLAY_BAND_DETECT_ENABLED` is **not in the VM `.env`**
-     (defaults false) and `videos.overlay_spans_jsonb` is **NULL** for this video — detection runs
-     at ingest and this video predates 448. Sequence: set the flag → restart app+worker → trigger
-     (or wait for) the hourly backfill → re-render ranks 3/13. The owner deferred this
-     ("let's change the superchat blur after we figure everything else out").
-4. **Then Issues 452 → 451** (both filed today, small): title/caption still truncate in the
-   FOCUSED review view (445 only fixed the pile rows), and a rendered clip has no re-render
-   affordance.
+1. **Commit + push the audit deliverables on THIS branch** (they belong in the open docs PR):
+   `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md` (new), `docs/issues.md` (Lane L29 +
+   next-free→483), `docs/assessment/modules/clip_engine.md` + `preference.md` (cross-ref lines).
+   Ship via the PR — **never direct to `main`** (ci.yml has no push trigger; zero gates run).
+2. **Start Lane L29.** Recommended order (each issue still gets its Phase-1 CHECK per CLAUDE.md):
+   - **467** (Punch-in emits invalid ffmpeg — feature has never worked) and **472** (feedback
+     `skip` after "Save trim" erases the training label) — small, surgical, highest
+     user-harm-to-effort ratio.
+   - **479** (CI per-module coverage floors + diff-cover have NEVER run — `run_layer0.py:527`
+     deletes `_coverage.xml` between ci.yml's two invocations) — one-line-ish fix, restores two
+     supposedly-active gates for every subsequent PR. Do it early so the rest of the lane is
+     actually gated.
+   - **456** (backward snap can ship the peak outside the clip) and **466** (overlay-band sampler
+     broken on >~500 s sources) — the two big engine SEV1s; need real CHECK phases.
+   - **476** (LLM scorer evaluated nowhere) — largest design surface; research eval patterns first.
+3. **Issue 448's live drill window expires 2026-08-13 19:23 UTC** (source purge). Given Issue 466
+   (the sampler the drill depends on is broken on this 1617 s source), letting it lapse is now the
+   defensible default — the owner already deferred it once. Decide, don't drift.
+4. **Billing live-proof is still owed** (carried from the previous handoff): buy the smallest pack
+   on prod for real; minutes must credit; `docs/GO_LIVE.md` billing gate stays **RED** until then.
+   Expect Issue 454 (tab-scoped intent id) on a second Buy click — filed, not built.
 
 ### Local gate incantations
 
 ```bash
 export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH && hash -r   # node 26 = 35 phantom jsdom fails
 redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
-# backend:  .venv/bin/python -m pytest -m "not integration" -p no:langsmith -q   # baseline 2975/0
-# frontend: run from frontend/ — npx vitest run                                  # baseline 653/653
-#           AND `npm run build` — that is `tsc -b && vite build` and it TYPE-CHECKS THE TESTS.
-#           `npx tsc --noEmit` does NOT, and passed while CI failed on 12 type errors (2026-08-12).
-# Layer 0:  .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py
-# ruff:     CI runs `ruff check .` AND `ruff format --check .` — Layer 0 only runs the first
-# eval:     any clip_engine/ change → tests/test_clip_engine.py (SCENARIO_FLOOR=23, 25 fixtures)
+# backend:  .venv/bin/python -m pytest -m "not integration" -p no:langsmith -q
+#           audit baseline at 41012fc: 2975 passed / 0 failed / 64 skipped (60.6 s)
+# frontend: run from frontend/ — npx vitest run; AND `npm run build` (tsc -b type-checks TESTS;
+#           `npx tsc --noEmit` does NOT and has lied before)
+# Layer 0:  PATH="$PWD/.venv/bin:$PATH" .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py
+# eval:     any clip_engine/ change → tests/test_clip_engine.py (SCENARIO_FLOOR=23, 24+1 fixtures)
 ```
-
-**Ship via a PR, never a direct commit to `main`** — `ci.yml` has no `push` trigger, so a direct
-commit runs **zero** of the ~12 gating jobs.
 
 ---
 
 ## WHAT WORKS NOW (verified — do not re-investigate)
 
-**Merged + deployed today (`643e8d3`, prod alembic `0058`):**
+**The audit itself (2026-08-12, commit `41012fc`):**
+- Baseline measured before any finding: backend **2975/0**, eval **61 passed** (24 scenarios,
+  100 %), Layer 0 green (clip_engine 93.03 vs floor 91.0, preference 90.24 vs 88.0).
+- **Verdicts:** selection core / mechanical pipeline / learning loop = **SOUND-WITH-CAVEATS**;
+  **eval/test integrity = COMPROMISED** (the green dashboard overstates what is proven).
+- All five SEV1s were re-adjudicated by hand — repros rerun (456, 466, 467) or full code trace
+  re-read (472, 476). The essential repro inputs are embedded in each issue body.
+- **Do NOT re-derive these — they were REFUTED with evidence** (disposition table): the
+  sentence-snap "clamp-order wrongful drop" (C1-10 — unreachable defensive code) and the
+  "float-noise setup_start_s" (C1-11 — a 0.5-grid peak −0.1 is already 2 dp-exact). Ten more
+  items carry material corrections (e.g. diarization does NOT collapse on the no-utterance
+  fallback; PIPELINE.md line drift is 65–855 lines, not 1500+).
+- **Six items are DECISIONS-accepted — do not re-file or "fix" them:** word-level snap tripwire
+  (2026-08-05 r.1), NMS-before-snap ordering (2026-08-07), containment-threshold inertness
+  (2026-08-07 D.1), skip-reason taxonomy (Issue 217), mutmut 3-module scope (Issue 273),
+  style-notes third-block placement (Issue 371).
 
-- **Issue 26 CLOSED** — OAuth consent screen configured and **verified from the live app, not the
-  console**: `/auth/login` 302s to Google with `redirect_uri=https://autoclip.studio/auth/callback`
-  (character-exact) and exactly five scopes (`openid`, `userinfo.email`, `userinfo.profile`,
-  `youtube.readonly`, `yt-analytics.readonly`) — **no `youtube.upload`**. A live round trip advanced
-  `youtube_tokens.updated_at`; `creators` stayed at 6 (row reused). Protected routes 401.
-  Cross-creator isolation re-verified (`creatorclip_app`, `BYPASSRLS=false`, 0 rows with the GUC
-  unset, 0 foreign rows). **Residual: the ≥2-test-user count was never confirmed by the operator.**
-- **Issue 448 SHIPPED (inert)** — `clip_engine/overlay_bands.py` + migration `0058`
-  (`videos.overlay_spans_jsonb`). Masks a superchat with a time-gated
-  `split → crop → boxblur → overlay`. Proven on the real source: rank 3 re-rendered clean before
-  the span, donor name/amount/message unreadable inside it. **Flag off in prod.**
-- **Issue 450 SHIPPED and PROVEN on delivered media** — rank 1's framing moved **x=230 → x=1104**;
-  the clip now holds the person actually speaking. `speaker_map.speaking_track_for_span()`.
-- **Issue 445 SHIPPED (`7e3582a`)** — three piles as tabs in `/review`, active pile in the URL.
-  The queue is now every untriaged clip (the shortlist ORDERS it rather than truncating it —
-  reverses Issue 377, see DECISIONS), and the Dashboard badge counts `pending` instead of
-  `rendered`. Kept/dropped are lists with wrapping titles.
-
-**Stage A beta:** `docs/GO_LIVE.md` is **16 GREEN / 6 CODE-GREEN / 10 OPEN**, and **#28 (friend
-smoke) is the only hard blocker left.**
-
-**Measured, not estimated** (keep — the source is about to vanish):
-- Superchat occupies **885–914 s and 930–1006 s = 107 s of 1617 s (6.6 % of runtime)**; rank 3
-  carries it 11.6 s, rank 13 **25.3 s**.
-- Rank 1: 2 face tracks at cx **381.2** / **1257.5**, `crop_w` 309, `mapping.confidence` 0.084,
-  mouth energy **0.1456** (right, speaking) vs **0.0536** (left).
+**From previous sessions, still true:** Issues 451/452/453/455 shipped and deployed (billing
+transport = `stripe.RequestsClient`; **never** revert to `HTTPXClient` — two stacked defects,
+documented in `billing/stripe_client.py` and DECISIONS 2026-08-12). Issues 26, 445, 448 (code
+inert, flag off), 450 shipped; prod alembic `0058`.
 
 ---
 
 ## THE ARC THAT LED HERE
 
-1. A fresh upload (`7e988321`) was audited — it is the **same recording** as the 2026-08-07
-   baseline (`duration_s = 1617.216667` on both), making it a true A/B. 438/440/443 verified;
-   441's cold-open half and 440's framing half failed → Issues 449/450; a superchat defect → 448.
-2. 26 → 448 → 450 built and shipped in that order, evidence frozen first because of the 72 h clock.
-3. The creator then reviewed clips on prod and reported three things: no re-render button, the
-   review queue claiming "all reviewed" after 3 clips while the dashboard said 27, and truncated
-   titles/captions. All three were real; two are fixed in PR #81, two are filed as 451/452.
+1. Post-#84 handoff: billing outage fixed in code, live purchase proof still owed.
+2. Owner asked for a full integrity assessment of the auto-clipping capabilities — all four
+   dimensions (selection core, mechanical pipeline, learning loop, eval integrity), multi-agent.
+3. Audit ran: 3 exploration agents → deterministic baseline → 12-agent workflow (ledger, 4
+   confirmers, 4 hunters, 3 adversarial verifiers) → hand adjudication of every SEV1.
+4. 87 verdicts distilled: 72 confirmed-new → 27 issues filed (5 SEV1 / 21 SEV2 / 1 roll-up) as
+   Lane L29; 6 already tracked; 6 deliberate; 2 refuted. Report + lane written; docs-only diff.
+5. One full-suite re-run failure post-filing was root-caused to the kernel OOM-killing ffmpeg
+   (memory-starved WSL2 box, other sessions) — **not a regression**; logged as
+   ISSUE-2026-08-12-01 in `~/.claude/ISSUES_LOG.md`.
 
 ---
 
@@ -106,55 +110,52 @@ smoke) is the only hard blocker left.**
 | Thing | Value |
 |---|---|
 | Repo | `github.com/reese8272/creatorclip` · prod = VM (`ssh creatorclip-vm`, standing permission), `/opt/autoclip`, docker-compose, Cloudflare tunnel |
-| Deploy chain | push to `main` → Docker publish → Deploy to production (staging migration gate → prod). **A failed image build silently SKIPS deploy** — `gh run list` after every push |
-| Merged today | #81 (445 + dashboard count + 451/452 filings), #80 (26/448/450), #79, #78 |
-| Audited video | `7e988321-2265-4e22-85bd-0e9ffd583f84` — **source expires 2026-08-13 19:23 UTC** |
+| Prod containers | `autoclip-app-1`, `autoclip-worker-1`, `autoclip-beat-1`, `autoclip-render-worker-1` (no compose file in `/opt/autoclip` — use `docker exec`/`docker logs` directly) |
+| Deploy chain | push to `main` → Docker publish → Deploy to production. **A failed image build silently SKIPS deploy** — `gh run list` after every push |
+| Audit report | `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md` (audited commit `41012fc`) |
+| Lane L29 | `docs/issues.md` — Issues **456–482**; batches: A geometry 456-460 · B scoring 461-465 · C pipeline 466-471 · D learning loop 472-475 · E eval/CI 476-482 |
+| Next free issue number | **483** |
+| Audited video | `7e988321-2265-4e22-85bd-0e9ffd583f84` — **source purges 2026-08-13 19:23 UTC** |
 | Creator | Backboard Media `eb9af967-5d2f-4063-a05e-9f4f070ce840` |
 | Live flags (VM `.env`) | `ACTIVE_SPEAKER_REFRAME_ENABLED=true` · `CAMERA_REGION_DETECT_ENABLED=true` · `REFRAME_MIN_MAPPING_CONFIDENCE=0.2` · **`OVERLAY_BAND_DETECT_ENABLED` absent → false** |
-| Next free issue number | **453** |
-| Frozen fixtures | `tests/fixtures/superchat/` (36 frames) + `tests/fixtures/reframe_seats/` (12), both with provenance READMEs — the ONLY reproduction once the source purges |
-| Baselines | backend **2975/0** · frontend **653/653** · eval 25 scenarios/100 % · coverage 84.18, `clip_engine` 93.03 (floor 91.0) |
+| Frozen fixtures | `tests/fixtures/superchat/` (36 frames) + `tests/fixtures/reframe_seats/` (12 — **used by ZERO tests**; wiring them is part of Issue 478). Only reproductions once the source purges |
 | Secrets | `.env` on the VM — names only, never values |
 
 ---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **RLS blindness.** Prod connects as `creatorclip_app` with no `BYPASSRLS` and `FORCE ROW LEVEL
-  SECURITY` on every tenant table, so a query with `app.creator_id` unset returns **zero rows and
-  no error**. `creators` is the RLS-exempt bootstrap — read it first, then
-  `SELECT set_config('app.creator_id', <uuid>, false)` before every query. Bit this session again.
-- **A celery-direct re-render CANNOT re-render.** The worker skips a clip that already has a
-  `render_uri` ("already rendered — skipping"). `POST /clips/{id}/render` owns the reset (Issue
-  353 sets `render_status=pending`, `render_uri=NULL`; 359c restores on enqueue failure). To force
-  one by hand, replicate that reset — and snapshot the prior URI first.
-- **Never detect overlay bands on a RENDERED clip.** Burned-in captions are themselves a bright
-  lower-frame band; a rendered-clip scan flagged two visually-clean clips. Detect on the source.
-- **`mapping.confidence` is a MARGIN ratio** `(best−second)/best`, not a correctness estimate. It
-  is structurally small when both faces are on screen the whole time. Do not gate on it (450).
-- **`onAdvance` in `YourCall` serves BOTH a verdict and the plain "Next clip" skip**
-  (`YourCall.tsx:127` and `:305`). Invalidating `review-clips` there drops the rated clip while the
-  index also moves — silently skipping a clip. Only `clip-counts` is invalidated.
-- **Beware first-occurrence string replaces in large files.** Twice this session a `.replace(…, 1)`
-  patched the wrong function (`worker/tasks.py`'s poster backfill; `Review.tsx`'s `ReviewClipView`).
-  Verify with a grep for the symbol afterwards.
-- **`npx tsc --noEmit` is NOT the frontend type gate.** CI runs `npm run build` (`tsc -b && vite
-  build`), which type-checks the TEST files too. Local `tsc --noEmit` passed while CI failed on 12
-  errors (2026-08-12). Run `npm run build` before pushing frontend changes.
-- **`EmptyStatePrompt` requires an action** — deliberately, so a dead-end empty state cannot
-  type-check. If a new empty state will not compile, add the way to fill it rather than working
-  around the type.
-- **The cold-first-run vitest flake recurred** (650/651 cold, 651/651 on two immediate re-runs,
-  `environment ~300s` vs ~207s). The name went uncaptured *again* — logged in
-  `docs/OFF_COURSE_BUGS.md` with the suggestion to make verbose reporting structural.
-- **Do not "restore" things DECISIONS deliberately removed:** the EMA smoothing (436), the
-  camera-region height ceiling (439), speaker following on the `face_pan` rung (440), coordinators/
-  pronouns in the weak-opener list (441), re-validating the consensus median (443), a `triage=`
-  filter on `GET /videos/{id}/clips` (444 — it would corrupt `ClipImpression`), **and the shortlist
-  as a FILTER (445 — it is now ordering only)**.
-- **Migrations:** any DATA-manipulating migration needs an `if context.is_offline_mode():` branch —
-  CI renders every migration with `alembic upgrade --sql`, which has no connection. `0058` is
-  additive so it needed none.
+- **Ship via a PR, never a direct commit to `main`** — `ci.yml` has no `push` trigger; a direct
+  commit runs zero gating jobs.
+- **Two CI gates you think are protecting you are NOT (until Issue 479 lands):** per-module
+  coverage floors and diff-cover post "skipped" → exit 0 in CI. The global 83 % floor IS enforced.
+- **The eval harness passing proves less than it looks** (until Issue 477): two scenarios assert
+  nothing; the runner ignores unknown expectation keys; setup-before-peak is opt-in.
+- **ffmpeg tests on this box can be OOM-killed** when other sessions eat the 7.6 GiB WSL2 VM: the
+  failure reads as a generic "ffmpeg failed" with a truncated stderr and **returncode −9**. Check
+  `free -h` / `dmesg | grep -i oom` BEFORE debugging (ISSUE-2026-08-12-01 in the global log).
+- **A green test suite proved nothing about billing** — every billing test mocks the transport.
+  Only a real settled purchase flips `docs/GO_LIVE.md`. `scripts/doctor.py --full` green-lights
+  Stripe without exercising our client (logged OFF_COURSE 2026-08-12).
+- **RLS blindness on prod:** queries with `app.creator_id` unset return zero rows, no error.
+  `creators` is the exempt bootstrap; `SELECT set_config('app.creator_id', <uuid>, false)` first.
+- **A celery-direct re-render CANNOT re-render** (worker skips clips with `render_uri`);
+  `POST /clips/{id}/render` owns the reset, surfaced in the UI since Issue 451.
+- **Never detect overlay bands on a RENDERED clip** — burned captions are themselves a band.
+  Detect on the source. (And per Issue 466, the source-side sampler itself is broken > ~500 s.)
+- **`mapping.confidence` is a margin ratio, not correctness** — do not gate on it (450).
+- **`onAdvance` in `YourCall` serves BOTH verdicts and plain skip** — and per **Issue 472** the
+  Skip button also writes a training-retracting feedback row; don't "clean up" that area without
+  reading 472 first.
+- **Do not "restore" things DECISIONS deliberately removed:** EMA smoothing (436), camera-region
+  height ceiling (439), speaker-following on `face_pan` (440), coordinators/pronouns in the
+  weak-opener list (441), consensus-median re-validation (443), a `triage=` filter on
+  `GET /videos/{id}/clips` (444), the shortlist as a FILTER (445), `stripe.HTTPXClient` (455) —
+  **plus the six audit-classified deliberate items listed in WHAT WORKS NOW.**
+- **Migrations:** data-manipulating migrations need an `if context.is_offline_mode():` branch
+  (CI renders with `alembic upgrade --sql`, no connection).
+- `docs/assessment/modules/clip_engine.md` carries stale line refs / floor values — its header now
+  says so; trust the 2026-08-12 report for current facts.
 - Owner sometimes powers the droplet off intentionally — check before treating prod-down as an
   incident.
 
@@ -162,15 +163,16 @@ smoke) is the only hard blocker left.**
 
 ## OPEN, LOGGED, NOT FIXED
 
-Canonical list: `docs/OFF_COURSE_BUGS.md` + `docs/issues.md`. Top:
-- **Issue 449** — `snap_start`'s inter-sentence-pause exemption bypasses 441's weak-opener guard
-  (rank 4 opens on "Yeah."). Diagnosed and reproducible; **not built**.
-- **Issues 451 / 452** — no re-render affordance; truncation in the focused review view.
-- **Issue 447** — the Keep pile needs a finish line (rendered → downloaded → published). 445 built
-  the pile; this is what makes it a destination.
-- **Direct-to-main bypasses CI entirely** — structural fix still unfixed.
-- **Issue 442** (`style_preset["background"]` accepted, never applied) · **502 root cause on the VM**
-  never investigated · pre-migration safety dump unset (Issue 256).
+Canonical list: `docs/issues.md` + `docs/OFF_COURSE_BUGS.md`. Top of the stack:
+
+- **Lane L29 (456–482)** — the audit lane; nothing built yet. Five SEV1s: 456, 466, 467, 472, 476.
+- **Issue 454** — tab-scoped checkout intent id; will surface the moment billing works.
+- **Issue 449** — snap_start pause exemption bypasses the weak-opener guard (related to, but
+  distinct from, 456 — read both before touching `sentence_snap.py`).
+- **Issues 442, 446, 447** — background style accepted-never-applied; render erasure gap
+  (Issue 471 extends it); Keep-pile finish line.
+- Owed live drills: 448 re-render (expiring, see NEXT ACTION 3), 444 idempotency, 437
+  failure-path, 427 frame check, 424–426 Playwright baselines.
 
 ---
 
@@ -178,11 +180,12 @@ Canonical list: `docs/OFF_COURSE_BUGS.md` + `docs/issues.md`. Top:
 
 | Doc | Purpose |
 |---|---|
-| `docs/issues.md` | Work queue — 445 done in PR #81; **449, 451, 452 open**; next free number **453** |
-| `docs/GO_LIVE.md` | Go/no-go scorecard — Stage A 16 GREEN / 6 CODE-GREEN / 10 OPEN; **#28 is the last blocker** |
-| `docs/DECISIONS.md` | Three 2026-08-12 entries (450 seat mapping + split-screen reversal, 448, 445 shortlist reversal) + 2026-08-11 (448) |
-| `docs/PROJECT_STATE.md` | Close-outs for 26, 448, 450 |
-| `docs/SOT.md` | Architecture — `overlay_bands.py` and `overlay_spans_jsonb` documented |
-| `docs/ACCESS.md` | Beta tester setup — updated for the new Google Auth Platform console UI |
+| `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md` | **The audit** — verdicts, evidence, disposition table |
+| `docs/issues.md` | Work queue — Lane L29 is the active front; next free number **483** |
+| `docs/GO_LIVE.md` | Go/no-go scorecard — billing still RED pending a real purchase |
+| `docs/DECISIONS.md` | Deviation log — check before "fixing" anything the audit classified deliberate |
+| `docs/PROJECT_STATE.md` | Issue close-outs |
+| `docs/SOT.md` | Architecture |
 | `docs/OFF_COURSE_BUGS.md` | Incidental-defect log |
-| Memory dir | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` |
+| `~/.claude/ISSUES_LOG.md` | Cross-project solved-problem log (grep FIRST on weird failures) |
+| Memory dir | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` — see `project_clipping_integrity_audit.md` |

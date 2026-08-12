@@ -1,5 +1,9 @@
 # preference — assessed 2026-07-20 (post-fix)
 
+> 2026-08-12: cross-cutting clipping-integrity audit filed Lane L29 (Issues 456–482;
+> learning-loop findings 472–475) — see `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md`
+> before the next delta pass.
+
 Slice: `preference/__init__.py`, `preference/_scorer_cache.py`, `preference/decay.py`,
 `preference/efficacy.py`, `preference/features.py`, `preference/model.py`,
 `preference/style_learn.py`, `preference/train.py`.
