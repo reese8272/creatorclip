@@ -44,27 +44,54 @@ def test_stripe_singleton() -> None:
     assert client is mod._STRIPE, "billing.stripe_client._STRIPE must be a singleton"
 
 
-def test_stripe_http_client_allows_sync_requests() -> None:
-    """Issue 453 — the outage this pins took billing down 100% for 10 weeks.
+def test_stripe_http_client_can_actually_issue_requests() -> None:
+    """Issues 453 + 455 — the outage this pins took billing down 100% for 10 weeks.
 
     Every Stripe call we make is the SYNC API offloaded to a thread
-    (`routers/billing.py` asyncio.to_thread, `worker/tasks.py` run_in_executor).
-    `stripe.HTTPXClient` defaults `allow_sync_methods=False`, which leaves its
-    sync transport unbuilt and makes every such call raise RuntimeError at
-    request time. Every other billing test mocks at or above
-    `create_checkout_session`, so nothing else in the suite touches the
-    transport — this assertion is the only thing standing between a one-word
-    regression and zero revenue.
+    (`routers/billing.py` asyncio.to_thread, `worker/tasks.py` run_in_executor),
+    and every other billing test mocks at or above `create_checkout_session`, so
+    NOTHING else in the suite touches the transport. A fully-green suite sat
+    alongside zero possible revenue from 2026-05-31 to 2026-08-12.
+
+    `stripe.HTTPXClient` (stripe==11.4.0) fails such calls two independent ways:
+      1. `allow_sync_methods` defaults to False, leaving the sync httpx.Client
+         unbuilt, so every sync call raises RuntimeError before the network.
+      2. It builds its SSL context via
+         `ssl.create_default_context(capath=stripe.ca_bundle_path)` — but
+         `capath` expects a DIRECTORY and the bundle is a .pem FILE, so zero CA
+         certs load and every TLS handshake dies as a bare APIConnectionError
+         that reads like a network outage.
+
+    Fixing only the first surfaces the second, so this asserts the property that
+    actually matters — the configured transport can issue a real request — rather
+    than either individual bug.
     """
+    import ssl
+
+    import stripe
+
     import billing.stripe_client as mod
+    from config import settings
 
     http_client = mod._STRIPE._requestor._get_http_client()
-    # `_client` is the sync httpx.Client; it is None unless allow_sync_methods=True,
-    # and HTTPXClient.request() raises RuntimeError on None before any network call.
-    assert http_client._client is not None, (
-        "Stripe HTTPXClient must be built with allow_sync_methods=True — "
-        "without it every synchronous Stripe call raises RuntimeError"
+
+    assert not isinstance(http_client, stripe.HTTPXClient), (
+        "stripe.HTTPXClient is unusable in this SDK version: it cannot make sync "
+        "requests by default AND it loads an empty CA trust store. Use RequestsClient."
     )
+
+    # The trust store the transport presents must be non-empty, or TLS to Stripe
+    # cannot succeed. RequestsClient passes the bundle as `verify=<file>`, which is
+    # the correct usage of that path; this pins that the bundle really is loadable
+    # as a cafile, which is the thing HTTPXClient got wrong.
+    assert len(ssl.create_default_context(cafile=stripe.ca_bundle_path).get_ca_certs()) > 0, (
+        "Stripe's CA bundle must load as a cafile — an empty trust store makes every "
+        "Stripe call fail as an opaque APIConnectionError"
+    )
+
+    # Issue 106's reason for configuring a transport at all: the SDK default is ~80s,
+    # and one stuck call would pin an asyncio.to_thread executor slot for that long.
+    assert http_client._timeout == settings.STRIPE_TIMEOUT_S
 
 
 def test_voyage_singleton_and_timeout(monkeypatch) -> None:

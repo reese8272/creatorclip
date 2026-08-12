@@ -48,6 +48,61 @@ billing gate is reverted to RED until a real purchase settles.
 **Sources:** `stripe==11.4.0` `_http_client.py:1218-1290` (constructor + raise site, read directly);
 [Stripe Python SDK](https://github.com/stripe/stripe-python).
 
+> **CORRECTION (same day, Issue 455) — this fix was necessary but NOT sufficient.** Fixing
+> `allow_sync_methods` moved the failure from a `RuntimeError` to an `APIConnectionError`: in
+> stripe==11.4.0 `HTTPXClient` ALSO builds its SSL context as
+> `ssl.create_default_context(capath=stripe.ca_bundle_path)`, and `capath` expects a *directory*
+> while the bundle is a *.pem file* — so **zero CA certificates load** and every TLS handshake to
+> Stripe fails. Measured: `capath` → 0 certs, `cafile` → 135. `HTTPXClient` is therefore unusable
+> for real requests in this SDK version regardless of the flag, and the singleton moved to
+> `stripe.RequestsClient(timeout=...)`. See the Issue 455 entry below.
+
+---
+
+## 2026-08-12 (latest, superseding the 453 entry above) — Issue 455: drop `HTTPXClient` entirely
+
+**Decision — the Stripe transport is `stripe.RequestsClient(timeout=STRIPE_TIMEOUT_S)`, and
+`stripe.HTTPXClient` must not be used in this SDK version.**
+
+**Why this exists as a separate decision.** Issue 453 fixed a real defect and was verified green in
+CI and live in the prod container — and billing was *still* completely broken. The `allow_sync_methods`
+bug was masking a second, independent one underneath it. This is the more important lesson of the
+two: a fix that makes the known error disappear is not the same as a fix that makes the feature work.
+
+**The second defect.** `HTTPXClient.__init__` does
+`ssl.create_default_context(capath=stripe.ca_bundle_path)`. `capath` takes a **directory** of hashed
+CA files; `stripe.ca_bundle_path` is a **.pem file**. Measured directly:
+
+```
+ca_bundle_path = .../stripe/data/ca-certificates.crt   is_file: True  is_dir: False
+CA certs via capath (what the SDK does): 0
+CA certs via cafile (correct):         135
+```
+
+An empty trust store means every TLS handshake fails, surfacing as a bare
+`APIConnectionError("Unexpected error communicating with Stripe … A ConnectError was raised")` —
+which reads like a Stripe outage or a firewall, not a client-config bug. From the prod app container,
+plain `httpx.get("https://api.stripe.com/v1/balance")` returned **401** (reachable) at the same moment
+the SDK client could not connect at all, which is what isolated it.
+
+**Why `RequestsClient`.** It takes `timeout` directly (preserving Issue 106's reason for configuring a
+transport at all — the SDK default is ~80 s and one stuck call pins an `asyncio.to_thread` executor
+slot), and it passes the bundle as `verify=<file>`, which is the correct usage of that path. It is
+also the SDK's own default transport, so this is a return to the well-trodden path rather than a
+clever choice. **Verified against live Stripe from the prod container** (`checkout.sessions.list`,
+read-only) before the change was written — not inferred.
+
+**Alternatives ruled out:** keeping `HTTPXClient` and passing a hand-built `httpx.Client` with a
+correct SSL context (works, but re-implements transport plumbing to route around an SDK bug, and
+the sync-methods flag would still be required); `verify_ssl_certs=False` (never — it disables TLS
+verification on a payment path); upgrading `stripe` (a major-version bump on a revenue path, during
+an outage, on no evidence the newer SDK fixes this specific line — worth evaluating deliberately).
+
+**Consequences recorded:** `requests` is now a DIRECT dependency and is pinned in
+`requirements.txt` (it was already present transitively). The regression test was rewritten to assert
+the property that matters — *the configured transport can issue a real request* — rather than either
+individual bug, because pinning only the first is exactly what let the second through.
+
 ---
 
 ## 2026-08-12 (later still) — Issue 452: the focused review view expands to fit, and drops the tooltip

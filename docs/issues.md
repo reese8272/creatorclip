@@ -3068,6 +3068,53 @@ billing but re-open Issue 106's 80 s-default-timeout finding.
 - [ ] Live: `reconcile_stripe_ledger` completes without raising on its next beat
 - [ ] `docs/GO_LIVE.md:89` corrected — billing cannot be GREEN until a real purchase has settled
 
+### Issue 455: 453's fix was necessary but not sufficient — HTTPXClient's CA trust store is empty
+
+**Severity: SEV1 — billing was STILL 100 % broken after 453 shipped and deployed clean.**
+
+453 fixed `allow_sync_methods` and was verified green in CI and live in the prod container. Billing
+still did not work. The first bug was masking a second, independent one in the same constructor.
+
+`stripe.HTTPXClient.__init__` (stripe==11.4.0) builds its SSL context as
+`ssl.create_default_context(capath=stripe.ca_bundle_path)`. `capath` takes a **directory** of hashed
+CA files; `ca_bundle_path` is a **.pem file**. Measured:
+
+```
+ca_bundle_path = .../stripe/data/ca-certificates.crt   is_file: True   is_dir: False
+CA certs via capath (what the SDK does): 0
+CA certs via cafile (correct):         135
+```
+
+Zero CAs ⇒ every TLS handshake to Stripe fails, surfacing as a bare
+`APIConnectionError("… A ConnectError was raised")` that reads like an outage or a firewall rather
+than a client-config bug.
+
+**How it was isolated.** From inside the prod app container, `socket.gethostbyname("api.stripe.com")`
+resolved and plain `httpx.get("https://api.stripe.com/v1/balance")` returned **401** — reachable —
+at the same moment the SDK client could not connect at all. That ruled out network/DNS/egress and
+pointed at the client's own SSL context.
+
+**Approach.** Drop `HTTPXClient`; use `stripe.RequestsClient(timeout=settings.STRIPE_TIMEOUT_S)`,
+the SDK's default transport, which takes the timeout directly and passes the bundle as
+`verify=<file>` (correct usage). **Verified against live Stripe from the prod container with a
+read-only `checkout.sessions.list` BEFORE the change was written.**
+
+**Alternatives ruled out:** a hand-built `httpx.Client` with a correct SSL context (re-implements
+transport plumbing to route around an SDK bug, and still needs the sync flag);
+`verify_ssl_certs=False` (never — disables TLS verification on a payment path); a `stripe`
+major-version bump (during an outage, on no evidence it fixes this line).
+
+**Acceptance**
+- [x] `_STRIPE` uses `RequestsClient`; `HTTPXClient` is gone, with a comment naming BOTH defects so
+      it cannot be "tidied" back
+- [x] The regression test asserts the property that matters — the configured transport can issue a
+      real request (not-HTTPXClient + non-empty trust store + timeout preserved) — rather than
+      either individual bug, since pinning only the first is what let the second through
+- [x] `requests` pinned in `requirements.txt`, now a direct dependency
+- [x] `docs/DECISIONS.md` carries a CORRECTION on the 453 entry plus its own entry
+- [ ] Live: a real purchase settles end to end and credits minutes
+- [ ] Live: `reconcile_stripe_ledger` completes without raising on its next beat
+
 ### Issue 454: the checkout intent id is scoped to the browser tab, not the purchase
 
 **Severity: high — it breaks the second checkout attempt in any tab. Masked until 453 is fixed.**
@@ -3238,4 +3285,4 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **455**.
+- Next free issue number: **456**.
