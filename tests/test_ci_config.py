@@ -374,3 +374,32 @@ def test_notify_backend_is_console_in_test_env() -> None:
         f"accidental Resend API calls; got {settings.NOTIFY_BACKEND!r}. "
         "Check that no .env file is setting NOTIFY_BACKEND=resend for tests."
     )
+
+
+def test_coverage_job_runs_all_three_gates_in_one_required_invocation() -> None:
+    """The coverage job must run coverage+module_coverage+diff_cover as ONE
+    run_layer0.py invocation with all three in --require (Issue 479).
+
+    The gates share docs/assessment/_coverage.xml. When ci.yml split them into
+    two invocations, the script's end-of-run cleanup deleted the XML between
+    steps, so the per-module floors and the diff/patch gate reported "skipped"
+    with exit 0 on every PR from 2026-06-23 to 2026-08-12 — two supposedly
+    active controls enforced nothing. This test pins both halves of the fix:
+    the single invocation, and the skip-is-failure requirement.
+    """
+    ci = _load_workflow("ci.yml")
+    layer0_lines = [
+        ln.strip() for ln in ci.splitlines() if "run_layer0.py" in ln or "--gates" in ln
+    ]
+    gates_flags = [ln for ln in layer0_lines if ln.startswith("--gates")]
+    coverage_invocations = [ln for ln in gates_flags if "coverage" in ln]
+    assert coverage_invocations == ["--gates coverage,module_coverage,diff_cover"], (
+        "ci.yml must invoke run_layer0.py exactly once for the coverage family, "
+        "with --gates coverage,module_coverage,diff_cover — a split invocation "
+        f"re-introduces the Issue-479 silent skip. Found: {coverage_invocations}"
+    )
+    assert "--require coverage,module_coverage,diff_cover" in ci, (
+        "ci.yml's coverage job must pass --require coverage,module_coverage,diff_cover "
+        "so a skipped gate fails the job instead of printing 'All runnable gates "
+        "passed' (Issue 479)."
+    )

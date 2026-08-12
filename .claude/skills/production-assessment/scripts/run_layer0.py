@@ -14,6 +14,10 @@ Usage:
     python3 run_layer0.py                  # run all gates, fail on regression
     python3 run_layer0.py --update-baseline  # capture current results as the new floor
     python3 run_layer0.py --require-coverage # treat a skipped coverage run as failure (CI)
+    python3 run_layer0.py --gates coverage,module_coverage,diff_cover \
+        --require coverage,module_coverage,diff_cover  # CI coverage job (Issue 479):
+        # one invocation so the shared _coverage.xml exists for all three, and a
+        # skip of ANY of them is a hard failure, never a green "skipped".
     python3 run_layer0.py --gates freshness --require-fresh  # scheduled staleness check
 """
 
@@ -182,6 +186,15 @@ def gate_coverage() -> dict:
     # tests/ and alembic/ are already excluded by [tool.coverage.run] omit in
     # pyproject.toml, so "." does not widen the measured set to test code.
     xml_out = ASSESS_DIR / "_coverage.xml"
+    # Remove any stale XML from a previous run BEFORE producing a fresh one, and
+    # never remove it afterwards (Issue 479). The old shape — produce here, unlink
+    # at the end of main() — silently broke ci.yml's split invocation: invocation 1
+    # (--gates coverage) deleted the XML on exit, so invocation 2
+    # (--gates module_coverage,diff_cover) found nothing and both gates reported
+    # "skipped" with exit 0. Per-module floors and the patch gate never ran in CI
+    # from 2026-06-23 to 2026-08-12. Cleanup-at-producer-start makes the script
+    # order-independent across invocations; the file is gitignored.
+    xml_out.unlink(missing_ok=True)
     proc = _run(
         [
             "pytest",
@@ -198,9 +211,6 @@ def gate_coverage() -> dict:
         # failure of the harness — coverage simply could not be measured here.
         tail = "\n".join(proc.stdout.splitlines()[-5:])
         return {"status": "skipped", "detail": f"no coverage.xml; tail: {tail}"}
-    # NOTE: _coverage.xml is deliberately left on disk — gate_module_coverage and
-    # gate_diff_cover parse it next; main() removes it after all gates have run.
-    # (Unlinking here made the Issue-269 per-module floors gate skip on every run.)
     rate = float(ET.parse(xml_out).getroot().get("line-rate", "0")) * 100
     return {
         "status": "ok",
@@ -496,6 +506,17 @@ def main() -> int:
     ap.add_argument("--update-baseline", action="store_true")
     ap.add_argument("--require-coverage", action="store_true")
     ap.add_argument(
+        "--require",
+        default="",
+        metavar="GATES",
+        help=(
+            "comma-separated gates that MUST evaluate: a 'skipped' status on any of "
+            "them becomes a hard failure (Issue 479 — CI must never green-light a "
+            "gate that did not run). --require-coverage is shorthand for including "
+            "'coverage'."
+        ),
+    )
+    ap.add_argument(
         "--require-fresh",
         action="store_true",
         help="fail if any skill's last_verified is stale (scheduled job)",
@@ -519,12 +540,22 @@ def main() -> int:
             ap.error(f"unknown gate(s): {', '.join(unknown)}")
         selected = {name: GATES[name] for name in wanted}
 
+    required = {g.strip() for g in args.require.split(",") if g.strip()}
+    if args.require_coverage:
+        required.add("coverage")
+    unknown_required = required - GATES.keys()
+    if unknown_required:
+        ap.error(f"unknown gate(s) in --require: {', '.join(sorted(unknown_required))}")
+    not_selected = required - selected.keys()
+    if not_selected:
+        ap.error(f"--require names gates not in --gates: {', '.join(sorted(not_selected))}")
+
     ASSESS_DIR.mkdir(parents=True, exist_ok=True)
     baselines = _load_baselines()
     results = {name: fn() for name, fn in selected.items()}
-    # Coverage XML is shared by the coverage → module_coverage → diff_cover
-    # gates; clean it up only after every selected gate has run.
-    (ASSESS_DIR / "_coverage.xml").unlink(missing_ok=True)
+    # _coverage.xml is NOT removed here (Issue 479): gate_coverage clears any stale
+    # copy before regenerating, so leaving it on disk is safe (and gitignored) while
+    # end-of-run cleanup is exactly what made ci.yml's second invocation find nothing.
     status, measured = _evaluate(results, baselines)
 
     if args.update_baseline:
@@ -555,9 +586,10 @@ def main() -> int:
             skipped.append(name)
     print(f"\nWrote {MACHINE_PATH.relative_to(REPO_ROOT)}")
 
-    if args.require_coverage and "coverage" in skipped:
-        print(f"FAIL: coverage required but was skipped ({results['coverage'].get('detail')})")
-        failed.append("coverage")
+    for name in sorted(required):
+        if name in skipped:
+            print(f"FAIL: {name} required but was skipped ({results[name].get('detail')})")
+            failed.append(name)
 
     if status.get("freshness") == "stale":
         stale = results["freshness"]["value"]["stale"]
