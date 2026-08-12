@@ -41,6 +41,16 @@ esac
 [ -d "$REPO_ROOT/.venv/bin" ] && export PATH="$REPO_ROOT/.venv/bin:$PATH"
 LAYER0=".claude/skills/production-assessment/scripts/run_layer0.py"
 
+# ── Node: honor .nvmrc when that version is installed via nvm (mirrors the .venv
+#    PATH prefix above). Without this the hook runs whatever node is default —
+#    node 26's jsdom breaks vitest with ~35 phantom failures (OFF_COURSE
+#    2026-08-05), which would fail every push on a box that never chose node 26.
+#    CI pins node 22 in actions/setup-node; this keeps the hook consistent. ──────
+if [ -f "$REPO_ROOT/.nvmrc" ]; then
+  NVM_NODE="$HOME/.nvm/versions/node/v$(tr -d 'v[:space:]' < "$REPO_ROOT/.nvmrc")/bin"
+  [ -d "$NVM_NODE" ] && export PATH="$NVM_NODE:$PATH"
+fi
+
 # ── Change base: what are we about to push? Diff against origin/main, falling back
 #    gracefully so a missing remote ref never errors the hook. ───────────────────
 BASE="$(git merge-base origin/main HEAD 2>/dev/null || true)"
