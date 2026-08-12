@@ -5,6 +5,51 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-12 (latest) — Issue 453: restore Stripe's sync transport rather than rewrite two money paths as async
+
+**Decision — fix the 10-week billing outage with `stripe.HTTPXClient(allow_sync_methods=True)`,
+and explicitly decline the "more idiomatic" async rewrite.**
+
+**What was broken.** `billing/stripe_client.py:40` built the singleton's transport as
+`stripe.HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S)`. That constructor defaults
+`allow_sync_methods=False` (`stripe/_http_client.py:1227`), leaving the sync `httpx.Client` unbuilt
+(`:1255`) so `HTTPXClient.request()` raises before any network call (`:1286`). Both of our call
+sites use the sync API by design — `routers/billing.py:153` (`asyncio.to_thread`) and
+`worker/tasks.py:4473` (`run_in_executor`) — so `POST /billing/checkout` and
+`reconcile_stripe_ledger` failed **100 % of the time**.
+
+**Evidence (prod, 2026-08-12).** Three identical `RuntimeError`s in the app log at 20:17:48–49Z
+from the owner's purchase attempts; `reconcile_stripe_ledger` raising the same error at 19:22:13Z;
+and `grep -c "billing checkout_session"` over 168 h returning **0** — no Checkout Session has ever
+been created. Introduced by `334d1f7` (2026-05-31, Issue 106), the commit that added the timeout.
+
+**Why not the async rewrite.** Switching both call sites to Stripe's `*_async` methods and dropping
+the thread offload is arguably cleaner — `HTTPXClient` already builds an `AsyncClient`
+unconditionally, so the thread hop is pure overhead. It was declined here on scope-under-outage
+grounds: it rewrites two revenue paths (one a Celery beat task) while checkout is down, and it
+contradicts the Wave-3 Fix C rationale documented inline at `routers/billing.py:146-152`. One flag
+restores the architecture that is already written down. The async migration is worth doing
+deliberately, with its own CHECK phase — not as an outage patch.
+
+**Why not revert to the default transport.** `stripe.StripeClient(key)` alone works, but re-opens
+Issue 106's finding that the SDK default timeout is ~80 s, which would let one stuck Stripe call
+pin an `asyncio.to_thread` executor slot for that long.
+
+**The load-bearing lesson, recorded because it is the reusable part.** Every billing test mocks at
+or above `create_checkout_session` (`tests/test_billing.py:604-620`), so **no test in the repo
+touched the transport** — a fully-green suite coexisted with a total outage for 10 weeks. Worse,
+`scripts/doctor.py:405` probes Stripe with a raw `httpx.get` instead of our own client, so
+`doctor.py --full` returned "stripe auth ok" on 2026-07-29, which `docs/GO_LIVE.md:71` cited as
+"Stripe live-verified" and which kept the billing gate GREEN. A health check that does not drive
+the same client the product drives is not a health check. `tests/test_sdk_timeouts.py` now pins the
+sync transport directly; the doctor gap is logged in `docs/OFF_COURSE_BUGS.md`, and the GO_LIVE
+billing gate is reverted to RED until a real purchase settles.
+
+**Sources:** `stripe==11.4.0` `_http_client.py:1218-1290` (constructor + raise site, read directly);
+[Stripe Python SDK](https://github.com/stripe/stripe-python).
+
+---
+
 ## 2026-08-12 (later) — Issue 445: the shortlist becomes ORDERING, not a filter
 
 **Decision — the review queue is every clip awaiting a verdict; Issue 377's shortlist orders it
