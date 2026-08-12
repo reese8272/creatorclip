@@ -174,11 +174,21 @@ describe('Dashboard', () => {
     expect(screen.getByLabelText('Video files to upload')).toBeInTheDocument()
   })
 
-  it('sidebar shows the review queue with the rendered-clip count + Open review link (Issue 305)', async () => {
+  // RENAMED 2026-08-12 (Issue 445 acceptance): this test was called "with the
+  // rendered-clip count" and its fixture was two untriaged rendered clips — a
+  // case where `rendered` and `pending` are both 2, so it could not tell the
+  // fixed behaviour from the broken one. The card counts clips awaiting a
+  // VERDICT; the fixture now includes a kept clip so the two numbers differ and
+  // the assertion actually pins the contract.
+  it('sidebar shows the review queue with the pending-triage count + Open review link (Issue 305)', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], {
-        vd: [{ render_status: 'done' }, { render_status: 'done' }],
+        vd: [
+          { render_status: 'done', triage: 'pending' },
+          { render_status: 'done', triage: 'pending' },
+          { render_status: 'done', triage: 'kept' },
+        ],
       }),
     )
     renderDashboard()
@@ -191,9 +201,11 @@ describe('Dashboard', () => {
       'href',
       '/app/review',
     )
-    // Scoped to the card — the video table also renders a "2 rendered" cell.
+    // Scoped to the card — the video table renders a "3 rendered" cell, which
+    // is production progress and correctly unaffected by triage.
     const card = screen.getByText('Review queue').parentElement as HTMLElement
     expect(within(card).getByText('2')).toBeInTheDocument()
+    expect(within(card).queryByText('3')).not.toBeInTheDocument()
   })
 
   it('review-queue card offers a way to fill the queue instead of a "0" and a dead button', async () => {
