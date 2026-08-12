@@ -101,10 +101,14 @@ export function PileList({
   pile,
   clips,
   videoId,
+  onGoToReview,
 }: {
   pile: Exclude<Pile, 'pending'>
   clips: ReviewClip[]
   videoId: string
+  /** EmptyStatePrompt requires an action by design — an empty pile must offer
+   *  the way to fill it, not just say it is empty. */
+  onGoToReview: () => void
 }) {
   const queryClient = useQueryClient()
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -141,6 +145,8 @@ export function PileList({
             ? 'Clips you keep land here, ready to publish.'
             : 'Clips you drop land here. Nothing is deleted — you can restore any of them.'
         }
+        actionLabel="Review clips"
+        onAction={onGoToReview}
       />
     )
 

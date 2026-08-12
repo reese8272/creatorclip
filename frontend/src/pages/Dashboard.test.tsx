@@ -284,14 +284,14 @@ describe('review-queue card counts clips awaiting a verdict', () => {
   // on the counts endpoint for exactly this; the UI had never consumed it.
   it('shows the pending count, not the rendered count', async () => {
     const videos = [baseVideo({ id: 'v1', ingest_status: 'done' })]
-    global.fetch = mockFetch(videos, {
+    vi.stubGlobal('fetch', mockFetch(videos, {
       v1: [
         { render_status: 'done', triage: 'kept' },
         { render_status: 'done', triage: 'dropped' },
         { render_status: 'done', triage: 'pending' },
         { render_status: 'pending', triage: 'pending' },
       ],
-    }) as unknown as typeof fetch
+    }))
     renderDashboard()
 
     // 4 clips, 3 rendered, but only 2 still need a decision. Scope the
@@ -305,12 +305,12 @@ describe('review-queue card counts clips awaiting a verdict', () => {
 
   it('reads zero once every clip has been triaged', async () => {
     const videos = [baseVideo({ id: 'v1', ingest_status: 'done' })]
-    global.fetch = mockFetch(videos, {
+    vi.stubGlobal('fetch', mockFetch(videos, {
       v1: [
         { render_status: 'done', triage: 'kept' },
         { render_status: 'done', triage: 'dropped' },
       ],
-    }) as unknown as typeof fetch
+    }))
     renderDashboard()
 
     // Zero state replaces the count entirely, so the prompt is the assertion.

@@ -45,6 +45,8 @@ export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH && hash -r   # nod
 redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
 # backend:  .venv/bin/python -m pytest -m "not integration" -p no:langsmith -q   # baseline 2975/0
 # frontend: run from frontend/ — npx vitest run                                  # baseline 653/653
+#           AND `npm run build` — that is `tsc -b && vite build` and it TYPE-CHECKS THE TESTS.
+#           `npx tsc --noEmit` does NOT, and passed while CI failed on 12 type errors (2026-08-12).
 # Layer 0:  .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py
 # ruff:     CI runs `ruff check .` AND `ruff format --check .` — Layer 0 only runs the first
 # eval:     any clip_engine/ change → tests/test_clip_engine.py (SCENARIO_FLOOR=23, 25 fixtures)

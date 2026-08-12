@@ -350,7 +350,12 @@ export function Review() {
           <PileTabs counts={pileCounts} active={pile} onSelect={selectPile} />
           <GenerateMoreClipsButton videoId={videoId} onDone={handleMoreClips} />
         </div>
-        <PileList pile={pile} clips={piles[pile]} videoId={videoId} />
+        <PileList
+          pile={pile}
+          clips={piles[pile]}
+          videoId={videoId}
+          onGoToReview={() => selectPile('pending')}
+        />
       </ToolShell>
     )
   if (reviewed)
