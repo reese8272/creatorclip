@@ -3718,10 +3718,26 @@ rewrite it to assert what the cold-start path CAN prove; pin the floor value in 
 (e.g. transparency test) so lowering it requires two deliberate edits.
 
 **Acceptance**
-- [ ] Runner fails on any expectation key it does not read (proven by a fixture with a typo'd key)
-- [ ] Both dead scenarios either assert something real or are replaced (floor maintained)
-- [ ] `max_candidates` asserted in ≥ 3 flood-shaped scenarios; setup-before-peak unconditional
-- [ ] Landing-page claim re-verified by `test_eval_transparency.py` after the changes
+**Status: DONE 2026-08-13 (W1 of the beta close-out).** `_validate_expected_keys` registries
+(top-level + per-candidate + window subkeys + unknown `kind`), `_match_unique` one-to-one
+matching in all four kinds' matchers, unconditional setup-before-peak (the opt-in key is now
+REJECTED — verified empirically that all 15 geometry scenarios already satisfied the invariant
+via the `candidates.py:364` clamp, so zero fixture churn), and the floor pinned in a second file.
+
+**Acceptance**
+- [x] Runner fails on any expectation key it does not read — six proof tests: typo'd top-level
+      key, typo'd candidate key, unknown kind, typo'd window subkey, opt-in-key rejection, and
+      one-candidate-two-expectations double-satisfaction
+- [x] Both dead scenarios assert something real (floor maintained at 23, 24 files):
+      `injection_in_transcript` rewritten as `kind: snap` — instruction text spanning the setup
+      demands start 0 / end 600, boundary must land at the sentence start [70.9, 71.5] chosen by
+      TIMINGS (the deterministic path treats text as data; the LLM behavioural leg is 476's
+      lane); `false_peak_single_spike` now asserts `max_candidates: 0` (was `min >= 0`, vacuous)
+- [x] `max_candidates` asserted in 4 flood-shaped scenarios (false_peak 0, laughter 2,
+      multi_peak 2, overlapping_peaks 1 — the last was previously blind outside its window);
+      setup-before-peak unconditional
+- [x] Landing-page claim re-verified by `test_eval_transparency.py`, which now also pins
+      `SCENARIO_FLOOR == 23` so lowering the floor must touch two files in one diff
 
 ### Issue 478: no real-media verification lane — empty marker, no boundary ffprobe, orphaned real fixtures
 

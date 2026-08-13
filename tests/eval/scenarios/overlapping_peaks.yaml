@@ -17,9 +17,10 @@ input:
 
 expected:
   # The two peaks are 8s apart; one clip should cover both rather than
-  # producing two overlapping short clips.
+  # producing two overlapping short clips. Issue 477 added the global bound —
+  # the window rule alone was blind to spurious clips OUTSIDE the window.
+  max_candidates: 1
   max_candidates_in_window:
     window_start_s: 80.0
     window_end_s: 115.0
     max: 1
-  all_setup_before_peak: true

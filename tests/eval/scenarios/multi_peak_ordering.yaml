@@ -18,5 +18,5 @@ input:
 
 expected:
   min_candidates: 2
-  # All candidates must satisfy setup_start_s < peak_s
-  all_setup_before_peak: true
+  # Issue 477: flood bound — two spikes, two clips; extras are spurious.
+  max_candidates: 2
