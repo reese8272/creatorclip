@@ -105,11 +105,14 @@ Notes:
 - GitHub's modern equivalent is **Rulesets** (Settings → Rules → Rulesets); the same
   contexts/linear-history/force-push settings apply.
 - `enforce_admins: false` is deliberate and is what keeps the `staging` sync above
-  working. Main's squash-merge commits carry **no check runs of their own** (CI runs on
-  the PR head, and `ci.yml` has no `push` trigger), so a fast-forward
-  `git push origin origin/main:staging` cannot satisfy the required contexts on its own
-  — it lands because the maintainer is an admin. Flipping `enforce_admins` to `true`
-  would break that sync; route staging through a PR from `main` first if you ever do.
+  working. A merge commit on `main` carries **none of the 8 required contexts**: `ci.yml`
+  has no `push` trigger, so those run only on the PR head. What a main commit does carry
+  is the four deploy-track checks that fire on push — measured on `6137992`:
+  `Build & push to GHCR`, `Staging gate (data-bearing DB)`, `Deploy → autoclip.studio`,
+  `Run staging drills (all)`. None of them is a required context, so a fast-forward
+  `git push origin origin/main:staging` can never satisfy the rule on its own — it lands
+  because the maintainer is an admin. Flipping `enforce_admins` to `true` would break
+  that sync; route staging through a PR from `main` first if you ever do.
 
 ---
 
