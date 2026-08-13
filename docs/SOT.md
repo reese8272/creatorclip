@@ -137,7 +137,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   └── embeddings.py           # Profile + clip embeddings → pgvector
 │
 ├── clip_engine/
-│   ├── window.py               # Rolling 60–90s context window
+│   ├── window.py               # Fixed 75 s backward context window (WINDOW_S = 75.0)
 │   ├── candidates.py           # Peak detection + backward look for setup start
 │   ├── sentence_snap.py        # (NEW Issue 428) segment-aware sentence snapping: utterance-derived sentence index; post-extraction start/end snap (never-open-mid-sentence guard) + CLIP_TARGET_MAX_S 90s clamp for LLM windows
 │   ├── scoring.py              # Multi-signal + DNA-weighted scoring (Claude Opus 5 + features)
@@ -645,7 +645,7 @@ creator links/uploads a video
       └──────┬──────┘
              ▼
       ┌─────────────┐
-      │ Candidates  │  detect peaks → look BACKWARDS 60–90s → setup start
+      │ Candidates  │  detect peaks → look BACKWARDS 75 s (WINDOW_S) → setup start
       └──────┬──────┘
              ▼
       ┌─────────────┐

@@ -233,7 +233,7 @@ Deviations require a `docs/DECISIONS.md` entry before implementation.
 
 ## Clip-Engine Rules
 
-- The engine clips the SETUP, not the aftermath — backward look from peak in a 60–90s window
+- The engine clips the SETUP, not the aftermath — a fixed 75 s backward look from the peak (`WINDOW_S = 75.0`, clip_engine/window.py)
 - Every clip score cites a named principle from `docs/CLIPPING_PRINCIPLES.md`
 - Scoring is against THIS creator's DNA + audience, never a generic virality score
 - The preference model weights recent feedback more heavily (exponential recency decay)
@@ -285,7 +285,7 @@ docker compose logs --tail 100 app worker
 - Google OAuth app verification completed (Issue 29 — external Google review, still open)
 - ✅ Account deletion (right-to-erasure: token revocation + media purge) — endpoint `DELETE /auth/me` plus the Profile "Danger zone" UI affordance (Issue 158)
 - Billing: ✅ beta model wired (Issue 21 minute packs + Stripe Checkout; webhook `payment_status` verification Issue 206; ledger reconciliation Issue 205; spend guard Issue 290). Plan tiers beyond minute packs remain an open product/pricing decision (Stage B in `docs/GO_LIVE.md`).
-- ✅ Eval harness hardened with adversarial/edge cases — Issue 199: 8 adversarial geometry scenarios (false-peak/cold-open/interrupted-setup/very-long-setup/two-beats/loud-aftermath/dead-air/no-transcript) + a ranking-aware fixture, an aggregate 100%-pass-rate gate, and a ratcheting scenario floor (`SCENARIO_FLOOR=21` as of 2026-08-05 — mid-sentence-open, LLM-length-clamp, and contained-duplicate fixtures added by Issues 428/429) (`tests/eval/scenarios/`, `tests/test_clip_engine.py`)
+- ✅ Eval harness hardened with adversarial/edge cases — Issue 199: 8 adversarial geometry scenarios (false-peak/cold-open/interrupted-setup/very-long-setup/two-beats/loud-aftermath/dead-air/no-transcript) + a ranking-aware fixture, an aggregate 100%-pass-rate gate, and a ratcheting scenario floor (`SCENARIO_FLOOR=31` as of 2026-08-13 — ratchet history lives in the comment above the constant in `tests/test_clip_engine.py`; pinned in a second location by `tests/test_eval_transparency.py`) (`tests/eval/scenarios/`, `tests/test_clip_engine.py`)
 
 ---
 

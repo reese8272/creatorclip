@@ -9,7 +9,7 @@ When a new principle is applied, add it here before merging.
 ## The Core Mechanic
 
 **Clip the setup, not the aftermath** — competitors react to peaks (chat spike, loud audio) that
-occur *after* a moment lands, so they clip the aftermath. CreatorClip holds a rolling 60–90s
+occur *after* a moment lands, so they clip the aftermath. CreatorClip holds a fixed 75 s backward
 context window; when a peak signal fires it looks **backwards** to where the setup began (a
 sentence/beat boundary in the word-level transcript, preceded by a quieter audio baseline) and
 starts the clip there. The clip ends after the payoff resolves — not at the reaction.
