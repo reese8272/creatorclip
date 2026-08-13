@@ -77,9 +77,12 @@ jobs:
           ALLOWED_ORIGINS: "http://localhost:8000"
           LOG_DIR: ""
         run: |
-          python -m pytest tests/test_llm_live.py \
+          # -s: the Issue-476 scoring lane prints SCORING-MARGIN lines that the
+          # step summary below greps — captured stdout would swallow them.
+          python -m pytest tests/test_llm_live.py tests/test_llm_live_scoring.py \
             -m llm_live \
             -v \
+            -s \
             --tb=short \
             --no-header \
             2>&1 | tee llm_e2e_results.txt
@@ -95,6 +98,13 @@ jobs:
             echo "## LLM E2E Nightly Results" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             tail -30 "$RESULT_FILE" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            # Issue 476 — the scoring behavioral lane prints one SCORING-MARGIN
+            # line per ordering probe (classes A/B/C in test_llm_live_scoring.py).
+            echo "## Scoring behavioral lane" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep "SCORING-MARGIN" "$RESULT_FILE" >> "$GITHUB_STEP_SUMMARY" \
+              || echo "No SCORING-MARGIN lines — scoring lane did not run." >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           else
             echo "## LLM E2E Nightly Results" >> "$GITHUB_STEP_SUMMARY"
