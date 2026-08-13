@@ -72,7 +72,7 @@ def test_triage_sets_the_state_and_records_the_verdict(client):
     try:
         with (
             patch("routers.review.get_owned", AsyncMock(return_value=clip)),
-            patch("routers.review._enqueue_retrain", AsyncMock()) as retrain,
+            patch("worker.tasks.enqueue_retrain", AsyncMock()) as retrain,
         ):
             resp = _put(client, clip, "kept")
     finally:
@@ -96,7 +96,7 @@ def test_triage_back_to_pending_records_a_retraction(client):
     try:
         with (
             patch("routers.review.get_owned", AsyncMock(return_value=clip)),
-            patch("routers.review._enqueue_retrain", AsyncMock()),
+            patch("worker.tasks.enqueue_retrain", AsyncMock()),
         ):
             resp = _put(client, clip, "pending")
     finally:
@@ -117,7 +117,7 @@ def test_triage_is_idempotent_and_a_repeat_is_a_total_noop(client):
     try:
         with (
             patch("routers.review.get_owned", AsyncMock(return_value=clip)),
-            patch("routers.review._enqueue_retrain", AsyncMock()) as retrain,
+            patch("worker.tasks.enqueue_retrain", AsyncMock()) as retrain,
         ):
             first = _put(client, clip, "kept")
             second = _put(client, clip, "kept")
@@ -189,7 +189,7 @@ def test_first_keep_via_triage_fires_the_activation_event(client):
     try:
         with (
             patch("routers.review.get_owned", AsyncMock(return_value=clip)),
-            patch("routers.review._enqueue_retrain", AsyncMock()),
+            patch("worker.tasks.enqueue_retrain", AsyncMock()),
             patch("event_log.record_event_nowait") as rec,
         ):
             resp = _put(client, clip, "kept")
@@ -209,7 +209,7 @@ def test_dropping_never_fires_the_activation_event(client):
     try:
         with (
             patch("routers.review.get_owned", AsyncMock(return_value=clip)),
-            patch("routers.review._enqueue_retrain", AsyncMock()),
+            patch("worker.tasks.enqueue_retrain", AsyncMock()),
             patch("event_log.record_event_nowait") as rec,
         ):
             resp = _put(client, clip, "dropped")

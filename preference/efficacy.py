@@ -190,6 +190,11 @@ class LabeledClip:
     features: list[float]
     dna_composite: float  # clip.score (the DNA composite the production blend uses)
     signal_features: dict  # signals_jsonb['features'] for the generic-signal baseline
+    # The stored outcome verdict, carried verbatim so _train_scorer can feed
+    # sample_weight the SAME performed_well production does (Issue 475 — the old
+    # `relevance >= 2.0` reconstruction broke once relevance became action-first:
+    # a downvote with a good outcome grades 0.0 but still weights 3× in train.py).
+    performed_well: bool | None = None
 
 
 @dataclass
@@ -206,11 +211,15 @@ RANKINGS = ("random", "generic_signal", "dna_preference")
 
 
 def _relevance_for(action_value: str, performed_well: bool | None) -> float | None:
-    """Graded relevance from a feedback action + outcome. None means 'exclude this label'."""
-    if performed_well is True:
-        return _REL_PERFORMED_WELL
+    """Graded relevance from a feedback action + outcome. None means 'exclude this label'.
+
+    ACTION-FIRST (Issue 475): the action decides membership and polarity; the
+    outcome can only UPGRADE a keep to "performed well". The old outcome-first
+    order let performed_well=True resurrect skip/format retractions production
+    training discards, and flip a downvote into the strongest positive.
+    """
     if action_value in _POSITIVE_ACTIONS:
-        return _REL_KEEP
+        return _REL_PERFORMED_WELL if performed_well is True else _REL_KEEP
     if action_value == "downvote":
         return _REL_DOWNVOTE
     return None  # skip / format / anything else → excluded
@@ -295,15 +304,16 @@ def _train_scorer(
     y = [1 if c.action in _POSITIVE_ACTIONS else 0 for c in trainable]
     if len(set(y)) < 2:
         return None
-    # Recency/outcome sample weights mirror production (decay × outcome multiplier).
-    # relevance >= _REL_PERFORMED_WELL ⇔ performed_well is True for rows built by
-    # load_labeled_clips, so the outcome multiplier matches train.py's.
+    # Recency/outcome sample weights mirror production (decay × outcome
+    # multiplier). `performed_well` is the stored outcome verdict carried on the
+    # LabeledClip — the same value train.py feeds sample_weight — never derived
+    # from the eval-only relevance grade (Issue 475).
     X = np.array([c.features for c in trainable], dtype=float)
     w = np.array(
         [
             sample_weight(
                 c.created_at,
-                performed_well=(c.relevance >= _REL_PERFORMED_WELL),
+                performed_well=c.performed_well,
                 half_life_days=half_life_days,
             )
             for c in trainable
@@ -429,34 +439,19 @@ def pool_metrics(
 async def load_labeled_clips(session: AsyncSession, creator_id: uuid.UUID) -> list[LabeledClip]:
     """Load a creator's trainable, labeled clips (read-only) for the harness.
 
-    Mirrors preference.train.build_and_save's query: trainable feedback joined to its clip and
-    (optionally) its outcome. Graded relevance comes from the outcome/action; skip is excluded.
-
-    Issue 444 — it shares build_and_save's ``latest_verdict_subquery`` so both see ONE label per
-    clip. Keeping its own un-deduped query would make the offline NDCG measure a dataset production
-    never trains on, and the warn-ratchet would then fire on a phantom shift.
+    Issues 444/475 — it executes ``preference.train.training_rows_select``, the
+    EXACT query ``build_and_save`` trains on (one label per clip, TRAINABLE
+    filter in SQL, newest-first cap), so the offline NDCG measures precisely the
+    production dataset. The earlier version shared only the dedup subquery and
+    re-applied no trainable filter, so a skip-retracted clip with a
+    ``performed_well=True`` outcome leaked into the eval set as a strong
+    positive production training had discarded — and the per-retrain
+    warn-ratchet could fire on that phantom shift.
     """
-    from sqlalchemy import select
-
-    from config import settings
-    from models import Clip, ClipFeedback, ClipOutcome
     from preference.features import clip_features
-    from preference.train import latest_verdict_subquery
+    from preference.train import training_rows_select
 
-    # Bounded like train.py's training query (Issue 102): newest-first + LIMIT
-    # so a power creator with years of feedback doesn't pull the entire join
-    # into the per-retrain harness (which also runs O(n²) tau on the eval
-    # split). Rows are re-sorted ascending below for the chronological split.
-    latest = latest_verdict_subquery(creator_id)
-    result = await session.execute(
-        select(ClipFeedback, Clip, ClipOutcome)
-        .join(latest, latest.c.feedback_id == ClipFeedback.id)
-        .join(Clip, Clip.id == ClipFeedback.clip_id)
-        .outerjoin(ClipOutcome, ClipOutcome.clip_id == ClipFeedback.clip_id)
-        .where(latest.c.rn == 1)
-        .order_by(ClipFeedback.created_at.desc())
-        .limit(settings.PREFERENCE_MAX_TRAINING_LABELS)
-    )
+    result = await session.execute(training_rows_select(creator_id))
     labeled: list[LabeledClip] = []
     for feedback, clip, outcome in result.all():
         performed_well = outcome.performed_well if outcome else None
@@ -487,6 +482,7 @@ async def load_labeled_clips(session: AsyncSession, creator_id: uuid.UUID) -> li
                 "has_retention_spike": feats_dict.get("has_retention_spike", False),
                 "has_laughter": feats_dict.get("has_laughter", False),
             },
+            performed_well=performed_well,
         )
         lc.creator_id = creator_id  # type: ignore[attr-defined]
         labeled.append(lc)

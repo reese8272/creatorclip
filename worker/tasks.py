@@ -1518,15 +1518,45 @@ def build_dna(self: Task, creator_id: str) -> str:
 def retrain_preference(self: Task, creator_id: str) -> str:
     """Retrain the creator's preference model from their clip feedback (Issue 60).
 
-    Idempotent + self-debouncing: a no-op when no new trainable feedback has arrived
-    since the latest model version, so repeated feedback clicks collapse to cheap
-    no-ops. The version-assignment race is hardened in Issue 71.
+    Idempotent + self-debouncing: a no-op when no new verdict-action feedback or
+    judged outcome has arrived since the latest model version (Issue 473), so
+    repeated feedback clicks collapse to cheap no-ops. The version-assignment
+    race is hardened in Issue 71.
     """
     try:
         run_async(_retrain_preference_async(creator_id))
     except Exception as exc:
         raise self.retry(exc=exc) from exc
     return creator_id
+
+
+async def enqueue_retrain(creator_id: uuid.UUID) -> None:
+    """Queue a preference retrain, coalescing bursts (Issues 444/473).
+
+    The ONE enqueue idiom for every retrain trigger — the feedback/triage routes
+    (routers/review.py) and ``poll_clip_outcomes`` below. It lives here rather
+    than in a router so the worker never imports from ``routers.*``; the routers
+    already lazily import worker tasks to enqueue them.
+
+    The other protections do NOT collapse a burst on their own: the non-blocking
+    advisory lock only drops *overlapping* tasks, and the self-debounce checks
+    for new rows since the last model — so after task N commits a model, task
+    N+1 does find a newer row and retrains. A creator triaging 20 clips in a
+    minute would otherwise pay 20 full model fits. The countdown bunches them
+    into one effective run.
+
+    Freshness cost is nil: the model is read only at generate/rerank time, never
+    in the request (or poll pass) that wrote the trigger.
+    """
+    from config import settings
+
+    await asyncio.to_thread(
+        partial(
+            retrain_preference.apply_async,
+            args=[str(creator_id)],
+            countdown=settings.PREFERENCE_RETRAIN_DEBOUNCE_S,
+        )
+    )
 
 
 @celery.task(bind=True, max_retries=2, soft_time_limit=120)
@@ -1552,7 +1582,7 @@ async def _retrain_preference_async(creator_id: str) -> None:
     from sqlalchemy import func, select
     from sqlalchemy.exc import IntegrityError
 
-    from preference.train import TRAINABLE_ACTIONS, build_and_save
+    from preference.train import VERDICT_ACTIONS, build_and_save
 
     cid = uuid.UUID(creator_id)
     # Issue 231: single-creator retrain runs on the RLS-gated app role with the
@@ -1582,21 +1612,50 @@ async def _retrain_preference_async(creator_id: str) -> None:
                 .first()
             )
             if latest is not None:
-                # Self-debounce: only retrain if trainable feedback arrived since the
-                # last model was saved. Repeated clicks otherwise collapse to no-ops.
-                new_labels = (
+                # Self-debounce (Issue 473): retrain when the EFFECTIVE training
+                # set changed since the last model — not merely when a trainable
+                # row was appended. Two extra triggers the old TRAINABLE-only
+                # count was blind to:
+                #   1. a `skip` retraction (removes a label without adding one)
+                #      → watermark on the full VERDICT_ACTIONS partition set;
+                #   2. a judged ClipOutcome (multiplies the clip's sample weight
+                #      3× via sample_weight's outcome multiplier) → watermark on
+                #      outcome writes, joined through Clip because ClipOutcome
+                #      carries no creator_id. `fetched_at` is bumped on every
+                #      poll write and `performed_well IS NOT NULL` scopes it to
+                #      judged rows, so an unjudged (deferred) poll pass does not
+                #      churn retrains.
+                # Repeated clicks with nothing new still collapse to no-ops.
+                new_verdicts = (
                     await session.execute(
                         select(func.count())
                         .select_from(ClipFeedback)
                         .where(
                             ClipFeedback.creator_id == cid,
-                            ClipFeedback.action.in_(TRAINABLE_ACTIONS),
+                            ClipFeedback.action.in_(VERDICT_ACTIONS),
                             ClipFeedback.created_at > latest.updated_at,
                         )
                     )
                 ).scalar_one()
-                if not new_labels:
-                    logger.info("retrain_preference: no new feedback for creator %s, skip", cid)
+                new_outcomes = 0
+                if not new_verdicts:
+                    new_outcomes = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(ClipOutcome)
+                            .join(Clip, Clip.id == ClipOutcome.clip_id)
+                            .where(
+                                Clip.creator_id == cid,
+                                ClipOutcome.performed_well.isnot(None),
+                                ClipOutcome.fetched_at > latest.updated_at,
+                            )
+                        )
+                    ).scalar_one()
+                if not new_verdicts and not new_outcomes:
+                    logger.info(
+                        "retrain_preference: no new verdicts or outcomes for creator %s, skip",
+                        cid,
+                    )
                     return
             try:
                 scorer = await build_and_save(session, cid)
@@ -3492,9 +3551,11 @@ async def _poll_clip_outcomes_async() -> None:
 
                 # Pass 2 — judge + finalize. Below the comparable-Shorts floor we DEFER
                 # the verdict (leave performed_well as-is/None) rather than mislabel.
+                wrote_verdict = False
                 for outcome in fetched:
                     if outcome.views is not None and channel_median is not None:
                         outcome.performed_well = outcome.views >= channel_median
+                        wrote_verdict = True
                     outcome.fetched_at = now
                     if terminal[outcome.clip_id]:
                         # 7d checkpoint recorded — never poll this outcome again.
@@ -3513,6 +3574,15 @@ async def _poll_clip_outcomes_async() -> None:
                 # Commit per creator so a slow YouTube call can't hold one transaction
                 # across the whole batch, and partial progress survives a mid-batch failure.
                 await session.commit()
+
+                # Issue 473 — a judged outcome reweights this creator's training
+                # set 3×, so retrain through the same debounced enqueue the
+                # feedback routes use (countdown-coalesced; the task itself
+                # re-checks the watermark, so a redundant enqueue is a no-op).
+                # Deferred verdicts enqueue nothing. After the commit, so the
+                # debounce query can see the rows the retrain is for.
+                if wrote_verdict:
+                    await enqueue_retrain(creator_id)
         finally:
             await _rollback_then_unlock(session, "poll_clip_outcomes")
 

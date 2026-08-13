@@ -22,12 +22,16 @@ from tests.eval.efficacy import (
 )
 
 
-def _clip(rel, sig_density, dna, when, action=None):
+def _clip(rel, sig_density, dna, when, action=None, performed_well=None):
     """A LabeledClip whose features/baseline/composite all track `rel` (separable).
     `action` defaults to the action a plain (no-outcome) row with that relevance
-    would carry; pass it explicitly to model action/outcome divergence."""
+    would carry; `performed_well` defaults to True at rel 2.0 (the only grade the
+    action-first rule assigns a good outcome). Pass either explicitly to model
+    action/outcome divergence."""
     if action is None:
         action = "downvote" if rel == 0.0 else "upvote"
+    if performed_well is None and rel >= 2.0:
+        performed_well = True
     return LabeledClip(
         clip_id=f"clip-{when.isoformat()}",
         created_at=when,
@@ -41,6 +45,7 @@ def _clip(rel, sig_density, dna, when, action=None):
             "has_retention_spike": False,
             "has_laughter": False,
         },
+        performed_well=performed_well,
     )
 
 
@@ -53,6 +58,18 @@ def test_relevance_grading():
     # skip / unknown actions are excluded entirely
     assert _relevance_for("skip", None) is None
     assert _relevance_for("format", None) is None
+
+
+def test_relevance_is_action_first_so_outcomes_cannot_resurrect_retractions():
+    """Issue 475(a) — the ACTION decides membership and polarity; the outcome can
+    only upgrade a keep. The old outcome-first order let performed_well=True
+    resurrect a skip/format retraction (rel 2.0) that production training had
+    already discarded — the harness then scored a dataset production never sees."""
+    assert _relevance_for("skip", True) is None
+    assert _relevance_for("format", True) is None
+    # A downvote is the creator's verdict — a good outcome does not flip it into
+    # the strongest positive; production trains it as a NEGATIVE (3× weight).
+    assert _relevance_for("downvote", True) == 0.0
 
 
 def test_below_threshold_blend_falls_back_to_dna_and_beats_random():
@@ -134,19 +151,27 @@ def test_blend_parity_with_shared_helper() -> None:
 
 
 def test_downvote_with_good_outcome_trains_negative_like_production() -> None:
-    """Assessment 2026-07-20: _train_scorer labels from the ACTION, exactly like
-    preference.train — a downvoted clip whose outcome performed well (eval
-    relevance 2.0) still trains as a NEGATIVE. Under the old relevance-derived
-    rule this train set is single-class (every rel >= 1.0) and would return None."""
+    """_train_scorer labels from the ACTION and weights from the STORED outcome,
+    exactly like preference.train — a downvoted clip whose outcome performed
+    well grades 0.0 (action-first, Issue 475) yet still trains as a NEGATIVE
+    with the 3× outcome weight applied via `performed_well`, not via a
+    relevance-derived reconstruction."""
     base = datetime(2026, 1, 1, tzinfo=UTC)
     train = []
     for i in range(5):  # n=10 → LogisticRegression path (below LGBM threshold)
         train.append(_clip(1.0, 5.0, 0.9, base + timedelta(days=i)))  # upvote, hi features
-        train.append(  # downvote whose outcome performed well → rel 2.0, lo features
-            _clip(2.0, 0.0, 0.1, base + timedelta(days=i, hours=1), action="downvote")
+        train.append(  # downvote whose outcome performed well → rel 0.0, lo features
+            _clip(
+                0.0,
+                0.0,
+                0.1,
+                base + timedelta(days=i, hours=1),
+                action="downvote",
+                performed_well=True,
+            )
         )
     scorer = _train_scorer(train)
-    assert scorer is not None  # old rule: None (single class)
+    assert scorer is not None
     hi = _clip(1.0, 5.0, 0.9, base + timedelta(days=30))
     lo = _clip(1.0, 0.0, 0.1, base + timedelta(days=30))
     assert scorer.predict_score(hi.features) > scorer.predict_score(lo.features), (
@@ -155,12 +180,15 @@ def test_downvote_with_good_outcome_trains_negative_like_production() -> None:
 
 
 def test_non_trainable_actions_are_excluded_from_the_fit() -> None:
-    """skip rows are eval-only even when performed_well grades them 2.0 — they never
-    reach the fit (train.py filters them in SQL). With only one trainable class
-    left, _train_scorer honestly returns None."""
+    """skip rows never reach the fit even with a good outcome attached (the
+    production query filters them in SQL; this is the in-memory backstop). With
+    only one trainable class left, _train_scorer honestly returns None."""
     base = datetime(2026, 1, 1, tzinfo=UTC)
     train = [_clip(1.0, 5.0, 0.9, base + timedelta(days=i)) for i in range(3)]
-    train += [_clip(2.0, 0.0, 0.1, base + timedelta(days=10 + i), action="skip") for i in range(3)]
+    train += [
+        _clip(2.0, 0.0, 0.1, base + timedelta(days=10 + i), action="skip", performed_well=True)
+        for i in range(3)
+    ]
     assert _train_scorer(train) is None
 
 

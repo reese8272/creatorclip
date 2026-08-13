@@ -103,3 +103,78 @@ async def test_7d_poll_marks_final_and_finalized_is_skipped(db_session: AsyncSes
             delete(Clip).where(Clip.creator_id.in_([creator_a.id, creator_b.id]))
         )
         await db_session.commit()
+
+
+async def _seed_judged_baseline(session: AsyncSession, creator_id, video_id, n: int) -> None:
+    """`n` final short outcomes WITH views — the comparable-Shorts baseline pool."""
+    for i in range(n):
+        clip = Clip(
+            video_id=video_id,
+            creator_id=creator_id,
+            setup_start_s=1.0,
+            start_s=1.0,
+            end_s=60.0,
+            render_status=RenderStatus.done,
+        )
+        session.add(clip)
+        await session.flush()
+        session.add(
+            ClipOutcome(
+                clip_id=clip.id,
+                published_youtube_id=f"ytBase{i:05d}",
+                views=100 + i,
+                performed_well=True,
+                fetched_at=datetime.now(UTC),
+                final=True,
+            )
+        )
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_poll_enqueues_retrain_only_for_creators_with_written_verdicts(
+    db_session: AsyncSession, mocker
+):
+    """Issue 473 — a `performed_well` write changes the training weights 3×, so
+    the poller must enqueue a (debounced) retrain for that creator. A creator
+    whose verdict was DEFERRED (no comparable-Shorts baseline) gets none."""
+    from config import settings as app_settings
+
+    now = datetime.now(UTC)
+    # Creator A: due outcome + 3 judged baseline Shorts → performed_well written.
+    creator_a, clip_a = await _seed_outcome(
+        db_session, fetched_at=now - timedelta(days=8), final=False
+    )
+    await _seed_judged_baseline(db_session, creator_a.id, clip_a.video_id, 3)
+    # Creator B: due outcome, NO baseline → verdict deferred, nothing written.
+    creator_b, clip_b = await _seed_outcome(
+        db_session, fetched_at=now - timedelta(days=8), final=False
+    )
+
+    mocker.patch("youtube.oauth.get_valid_access_token", new=AsyncMock(return_value="tok"))
+    mocker.patch("youtube.data_api.get_video_stats", new=AsyncMock(return_value={"views": 500}))
+    import worker.tasks as worker_tasks
+
+    apply_async = mocker.patch.object(worker_tasks.retrain_preference, "apply_async")
+
+    try:
+        await _poll_clip_outcomes_async()
+
+        a = await db_session.get(ClipOutcome, clip_a.id)
+        await db_session.refresh(a)
+        assert a.performed_well is True  # the write that must trigger the enqueue
+
+        enqueued = {
+            c.kwargs.get("args", c.args[0] if c.args else None)[0]
+            for c in apply_async.call_args_list
+        }
+        assert str(creator_a.id) in enqueued, "creator with a written verdict must retrain"
+        assert str(creator_b.id) not in enqueued, "deferred verdict must not enqueue"
+        # Same coalescing contract as the feedback routes: debounced countdown.
+        for c in apply_async.call_args_list:
+            assert c.kwargs.get("countdown") == app_settings.PREFERENCE_RETRAIN_DEBOUNCE_S
+    finally:
+        await db_session.execute(
+            delete(Clip).where(Clip.creator_id.in_([creator_a.id, creator_b.id]))
+        )
+        await db_session.commit()
