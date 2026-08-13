@@ -57,6 +57,7 @@ def effective_max_len_s(optimal_clip_len_s: float | None) -> float:
         CLIP_TARGET_MAX_S,
     )
 
+
 # Tokens that cannot open a clip (Issue 441). A Deepgram utterance boundary is a
 # PAUSE, not a grammatical break, so "because they still don't know what Mikey
 # is." is a first-class sentence start and snapping to it is a no-op — which is
