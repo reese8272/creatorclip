@@ -54,12 +54,18 @@ function makeVideo(over: Partial<Video> = {}): Video {
 function renderTable(
   videos: Video[],
   clipInfoByVideo: Record<string, { total: number; rendered: number; loading: boolean }> = {},
+  archivedView = false,
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <VideoTable videos={videos} clipInfoByVideo={clipInfoByVideo} analysisMode="auto" />
+        <VideoTable
+          videos={videos}
+          clipInfoByVideo={clipInfoByVideo}
+          analysisMode="auto"
+          archivedView={archivedView}
+        />
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -209,5 +215,99 @@ describe('VideoTable — StageStepper integration', () => {
     renderTable(videos)
     expect(FakeEventSource.instances).toHaveLength(1)
     expect(FakeEventSource.instances[0].url).toContain('/tasks/running/events')
+  })
+})
+
+describe('VideoTable — archive / restore / erase (Issue 446)', () => {
+  it('every row offers an Archive action, and clicking it DELETEs the video', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        ({ ok: true, status: 200, json: async () => ({}) }) as Response,
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderTable([makeVideo({ id: 'va', ingest_status: 'done', clippable: true })], {
+      va: { total: 0, rendered: 0, loading: false },
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    const call = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/videos/va'))
+    expect(call).toBeTruthy()
+    expect((call![1] as RequestInit).method).toBe('DELETE')
+  })
+
+  it('archived view swaps actions to Restore + Delete permanently', () => {
+    renderTable(
+      [makeVideo({ id: 'va', ingest_status: 'done', archived_at: '2026-08-10T00:00:00Z' })],
+      {},
+      true,
+    )
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete permanently' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull()
+    // No SSE slot is held for archived rows.
+    expect(FakeEventSource.instances).toHaveLength(0)
+  })
+
+  it('Restore POSTs to /videos/{id}/restore', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        ({ ok: true, status: 200, json: async () => ({}) }) as Response,
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderTable([makeVideo({ id: 'va', archived_at: '2026-08-10T00:00:00Z' })], {}, true)
+    await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
+    const call = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/videos/va/restore'))
+    expect(call).toBeTruthy()
+    expect((call![1] as RequestInit).method).toBe('POST')
+  })
+
+  it('Delete permanently requires an explicit confirm naming the feedback loss', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        ({ ok: true, status: 200, json: async () => ({}) }) as Response,
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      renderTable([makeVideo({ id: 'va', archived_at: '2026-08-10T00:00:00Z' })], {}, true)
+      await userEvent.click(screen.getByRole('button', { name: 'Delete permanently' }))
+      // Declined → no request fired; the confirm copy states the training-data loss.
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(confirmSpy.mock.calls[0][0]).toMatch(/feedback/i)
+      expect(confirmSpy.mock.calls[0][0]).toMatch(/cannot be undone/i)
+
+      confirmSpy.mockReturnValue(true)
+      await userEvent.click(screen.getByRole('button', { name: 'Delete permanently' }))
+      const call = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/videos/va/erase'))
+      expect(call).toBeTruthy()
+      expect((call![1] as RequestInit).method).toBe('POST')
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+})
+
+describe('VideoTable — source expiry surface (Issue 446)', () => {
+  it('shows the retention deadline while the source is stored', () => {
+    renderTable([
+      makeVideo({
+        ingest_status: 'done',
+        clippable: true,
+        source_expires_at: '2026-08-16T12:00:00Z',
+        source_expired: false,
+      }),
+    ])
+    expect(screen.getByText(/Source kept until/)).toBeInTheDocument()
+  })
+
+  it('states plainly that an expired source cannot be re-rendered', () => {
+    renderTable([
+      makeVideo({
+        ingest_status: 'done',
+        clippable: false,
+        source_expires_at: null,
+        source_expired: true,
+      }),
+    ])
+    expect(screen.getByText(/can’t be re-rendered/)).toBeInTheDocument()
   })
 })

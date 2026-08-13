@@ -164,6 +164,8 @@ def test_linked_video_appears_in_list_with_clippable_false():
     link_video.created_at = datetime.now(UTC)
     link_video.origin = VideoOrigin.link
     link_video.source_uri = None
+    link_video.ingest_done_at = None
+    link_video.archived_at = None
 
     async def _sess():
         s = AsyncMock()

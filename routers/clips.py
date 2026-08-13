@@ -349,7 +349,10 @@ async def get_clip_counts(
             func.count().filter(Clip.triage == ClipTriage.dropped).label("dropped"),
         )
         .join(Video, Clip.video_id == Video.id)
-        .where(Video.creator_id == creator.id)
+        # archived_at IS NULL (Issue 446): an archived video's clips leave the
+        # Dashboard/Profile counts with it — the rows survive for training, but
+        # no surface counts them.
+        .where(Video.creator_id == creator.id, Video.archived_at.is_(None))
         .group_by(Clip.video_id)
     )
     result = await session.execute(stmt)

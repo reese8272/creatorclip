@@ -40,6 +40,37 @@ interface ActVars {
   done: string
 }
 
+// Issue 446 — archive copy states plainly what is kept and what is freed.
+// Neutral wording; no loss of training data on archive.
+const ARCHIVE_HELP =
+  'Archive this video — it leaves your library and its stored media is removed. ' +
+  'Clips and your feedback on them are kept; you can restore it any time.'
+
+const ERASE_CONFIRM =
+  'Permanently delete this video? This also deletes its clips AND the feedback ' +
+  'you gave on them — your style model loses those examples. This cannot be undone.'
+
+// Issue 446 — the source-retention window surfaced per row: an expiry date
+// while the source is stored, and an explicit not-re-renderable notice once
+// it has been purged (previously only a 409 at render time).
+function SourceExpiryHint({ video }: { video: Video }) {
+  if (video.source_expired) {
+    return (
+      <div className="text-xs text-subtle">
+        Source file expired — existing clips remain, but they can’t be re-rendered.
+      </div>
+    )
+  }
+  if (video.clippable && video.source_expires_at) {
+    return (
+      <div className="text-xs text-subtle">
+        Source kept until {new Date(video.source_expires_at).toLocaleString()}
+      </div>
+    )
+  }
+  return null
+}
+
 // A single video row. Button state for the Queue / Generate actions
 // (Queuing… → Queued ✓ → Retry) is derived from a TanStack mutation so a
 // network-level failure (fetch reject) resets to Retry instead of latching
@@ -49,10 +80,12 @@ function VideoRow({
   video,
   clipInfo,
   analysisMode,
+  archivedView = false,
 }: {
   video: Video
   clipInfo: ClipInfo | undefined
   analysisMode: AnalysisMode
+  archivedView?: boolean
 }) {
   const queryClient = useQueryClient()
 
@@ -61,6 +94,23 @@ function VideoRow({
     onSuccess: () => {
       setTimeout(() => queryClient.invalidateQueries({ queryKey: ['videos'] }), 3000)
     },
+  })
+
+  const invalidateLibrary = () => {
+    queryClient.invalidateQueries({ queryKey: ['videos'] })
+    queryClient.invalidateQueries({ queryKey: ['clip-counts'] })
+  }
+  const archive = useMutation({
+    mutationFn: () => api(`/videos/${video.id}`, { method: 'DELETE' }),
+    onSuccess: invalidateLibrary,
+  })
+  const restore = useMutation({
+    mutationFn: () => api(`/videos/${video.id}/restore`, { method: 'POST' }),
+    onSuccess: invalidateLibrary,
+  })
+  const erase = useMutation({
+    mutationFn: () => api(`/videos/${video.id}/erase`, { method: 'POST' }),
+    onSuccess: invalidateLibrary,
   })
 
   // Success keeps the button disabled on the done label until the delayed
@@ -76,7 +126,7 @@ function VideoRow({
         : null
 
   const streamState = useStageStream(
-    video.clippable ? video.id : null,
+    !archivedView && video.clippable ? video.id : null,
     video.ingest_status,
   )
 
@@ -107,6 +157,7 @@ function VideoRow({
           <div className="min-w-0">
             <VideoTitleCell video={video} />
             <div className="text-small text-muted">{videoMetaLine(video)}</div>
+            <SourceExpiryHint video={video} />
           </div>
         </div>
       </td>
@@ -141,23 +192,62 @@ function VideoRow({
         <ClipsCell video={video} clipInfo={clipInfo} />
       </td>
       <td className="px-4 py-3.5 align-middle">
-        <ActionCell
-          video={video}
-          clipInfo={clipInfo}
-          analysisMode={analysisMode}
-          busy={busy}
-          label={label}
-          onQueue={() =>
-            act.mutate({ url: `/videos/${video.id}/queue`, pending: 'Queuing…', done: 'Queued' })
-          }
-          onGenerate={() =>
-            act.mutate({
-              url: `/videos/${video.id}/clips/generate`,
-              pending: 'Generating…',
-              done: 'Queued',
-            })
-          }
-        />
+        {archivedView ? (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={restore.isPending || erase.isPending}
+              onClick={() => restore.mutate()}
+            >
+              {restore.isPending ? 'Restoring…' : 'Restore'}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={restore.isPending || erase.isPending}
+              onClick={() => {
+                if (window.confirm(ERASE_CONFIRM)) erase.mutate()
+              }}
+            >
+              {erase.isPending ? 'Deleting…' : 'Delete permanently'}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex flex-col items-start gap-1.5">
+            <ActionCell
+              video={video}
+              clipInfo={clipInfo}
+              analysisMode={analysisMode}
+              busy={busy}
+              label={label}
+              onQueue={() =>
+                act.mutate({
+                  url: `/videos/${video.id}/queue`,
+                  pending: 'Queuing…',
+                  done: 'Queued',
+                })
+              }
+              onGenerate={() =>
+                act.mutate({
+                  url: `/videos/${video.id}/clips/generate`,
+                  pending: 'Generating…',
+                  done: 'Queued',
+                })
+              }
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              title={ARCHIVE_HELP}
+              disabled={archive.isPending}
+              onClick={() => archive.mutate()}
+              className="text-subtle"
+            >
+              {archive.isPending ? 'Archiving…' : 'Archive'}
+            </Button>
+          </div>
+        )}
       </td>
     </tr>
   )
@@ -315,10 +405,14 @@ export function VideoTable({
   videos,
   clipInfoByVideo,
   analysisMode,
+  archivedView = false,
 }: {
   videos: Video[]
   clipInfoByVideo: Record<string, ClipInfo>
   analysisMode: AnalysisMode
+  // Issue 446 — rows fetched via /videos?archived=true: actions become
+  // Restore / Delete permanently, and no SSE slots are held.
+  archivedView?: boolean
 }) {
   return (
     <div className="overflow-x-auto">
@@ -342,6 +436,7 @@ export function VideoTable({
               video={v}
               clipInfo={clipInfoByVideo[v.id]}
               analysisMode={analysisMode}
+              archivedView={archivedView}
             />
           ))}
         </tbody>

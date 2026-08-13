@@ -3800,12 +3800,15 @@ async def _backfill_video_posters_async() -> None:
             # Videos whose source was already purged simply never match: the
             # purge nulls source_uri when it deletes the blob. Nothing to detect
             # — those rows keep poster_uri NULL and the UI shows a placeholder.
+            # archived_at IS NULL (Issue 446): never spend egress regenerating
+            # artifacts for a video the creator archived.
             result = await session.execute(
                 select(Video.id, Video.creator_id, Video.source_uri, Video.duration_s)
                 .where(
                     and_(
                         Video.poster_uri.is_(None),
                         Video.source_uri.is_not(None),
+                        Video.archived_at.is_(None),
                     )
                 )
                 # Newest first: if the drain is interrupted, the rows a creator is
@@ -3905,6 +3908,9 @@ async def _backfill_video_camera_regions_async() -> None:
                             Video.overlay_spans_jsonb.is_(None),
                         ),
                         Video.source_uri.is_not(None),
+                        # archived_at IS NULL (Issue 446) — same as the poster
+                        # sweep: no detection work for archived rows.
+                        Video.archived_at.is_(None),
                     )
                 )
                 .order_by(Video.created_at.desc())
@@ -4043,6 +4049,9 @@ async def _backfill_video_peaks_async() -> None:
                     and_(
                         Video.peaks_uri.is_(None),
                         Video.audio_uri.is_not(None),
+                        # archived_at IS NULL (Issue 446) — same as the poster
+                        # sweep: no backfill work for archived rows.
+                        Video.archived_at.is_(None),
                     )
                 )
                 # Newest first: if the drain is interrupted, the rows a creator is
@@ -4103,6 +4112,12 @@ async def _purge_stale_source_media_async() -> None:
     # Retention clock starts at ingest completion, not upload time (Issue 43).
     # A long-running or stuck ingest of an old upload must not have its source
     # purged mid-pipeline — gate on ingest_done_at instead of created_at.
+    #
+    # DELIBERATELY NOT filtered on archived_at (Issue 446): archive purges
+    # media inline but keeps the pointer for any blob whose delete failed
+    # (Object-Lock refusal). This sweep is the retry path that eventually frees
+    # those — excluding archived rows would turn a transient refusal into a
+    # permanent retention violation.
     cutoff = datetime.now(UTC) - timedelta(hours=settings.SOURCE_MEDIA_RETENTION_HOURS)
 
     # Issue 38 Wave 1: collect URIs in a short read transaction, release the
@@ -4960,7 +4975,13 @@ async def _collect_creator_export(session: Any, creator: Creator) -> dict:
             out.extend(_row_to_dict(r) for r in batch)
         return out
 
-    videos = await _all(select(Video).where(Video.creator_id == cid), Video.id)
+    # archived_at IS NULL (Issue 446): archived videos leave every surface,
+    # including the export. The clips/feedback rows retained past archive DO
+    # still appear below (they are creator data we continue to hold), scoped by
+    # creator_id — Art. 15 honesty for what actually remains.
+    videos = await _all(
+        select(Video).where(Video.creator_id == cid, Video.archived_at.is_(None)), Video.id
+    )
     video_ids = [v["id"] for v in videos]
     clips = await _all(select(Clip).where(Clip.creator_id == cid), Clip.id)
     convos = await _all(

@@ -22,6 +22,7 @@ class NoopEventSource {
 function mockFetch(
   videos: Video[],
   clips: Record<string, { render_status: string; triage?: string }[]> = {},
+  archivedVideos: Video[] = [],
 ) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
@@ -32,6 +33,12 @@ function mockFetch(
       return json({ minutes_balance: 100, low_balance: false })
     if (url.endsWith('/creators/me/dna')) return json({ profile: null })
     if (url.includes('/insights/analytics')) return json({ metrics_available: false })
+    // Issue 446 — the archived view's separate fetch.
+    if (url.endsWith('/videos?archived=true'))
+      return json({
+        videos: archivedVideos,
+        state: archivedVideos.length ? 'populated' : 'empty_filtered',
+      })
     if (url.endsWith('/videos'))
       return json({ videos, state: videos.length ? 'populated' : 'empty_initial' })
     // Batched counts endpoint (Issue 213 — replaces N+1 per-video queries).
@@ -315,5 +322,43 @@ describe('review-queue card counts clips awaiting a verdict', () => {
 
     // Zero state replaces the count entirely, so the prompt is the assertion.
     expect(await screen.findByText('Nothing waiting yet.')).toBeInTheDocument()
+  })
+})
+
+describe('archived view (Issue 446)', () => {
+  it('View archived fetches ?archived=true and offers Restore', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        [baseVideo({ id: 'v1', ingest_status: 'done' })],
+        { v1: [] },
+        [
+          baseVideo({
+            id: 'arch1',
+            title: 'Old stream',
+            ingest_status: 'done',
+            clippable: false,
+            archived_at: '2026-08-10T00:00:00Z',
+          }),
+        ],
+      ),
+    )
+    renderDashboard()
+    fireEvent.click(await screen.findByRole('button', { name: 'View archived' }))
+
+    expect(await screen.findByText('Archived videos')).toBeInTheDocument()
+    expect(await screen.findByText('Old stream')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Restore' })).toBeInTheDocument()
+    // The way back to the library is explicit.
+    expect(screen.getByRole('button', { name: '← Back to library' })).toBeInTheDocument()
+  })
+
+  it('an empty archived view shows a plain notice, never the onboarding hero', async () => {
+    vi.stubGlobal('fetch', mockFetch([baseVideo({ id: 'v1', ingest_status: 'done' })], { v1: [] }))
+    renderDashboard()
+    fireEvent.click(await screen.findByRole('button', { name: 'View archived' }))
+
+    expect(await screen.findByText('No archived videos.')).toBeInTheDocument()
+    expect(screen.queryByText("Let's get your first clip.")).toBeNull()
   })
 })

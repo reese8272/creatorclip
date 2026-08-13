@@ -64,6 +64,16 @@ export interface Video {
   // before the backfill reached it; the editor draws a labelled flat track and
   // never invents amplitude.
   has_peaks: boolean
+  // Issue 446 — the 72h source-retention window surfaced per row: ISO datetime
+  // when the stored source will be purged; null when there is no stored source
+  // or ingest hasn't completed. Optional: older fixtures omit it.
+  source_expires_at?: string | null
+  // Issue 446 — the explicit not-re-renderable signal: true once a previously
+  // processed video's source is gone (was only a 409 at render time before).
+  source_expired?: boolean
+  // Issue 446 — soft-delete marker. Non-null only on rows fetched via
+  // GET /videos?archived=true (the default view filters them out server-side).
+  archived_at?: string | null
 }
 
 export interface VideoListResponse {

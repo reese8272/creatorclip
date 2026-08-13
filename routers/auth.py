@@ -480,18 +480,46 @@ async def erase_creator(session: AsyncSession, creator: Creator) -> None:
     except Exception as exc:
         logger.warning("OAuth revocation failed for creator %s: %s", creator_id, exc)
 
-    # Purge all stored media for this creator
+    # Purge all stored media for this creator (Issues 446 + 471): enumerate
+    # every URI from the DB — all videos (archived included), every clip's
+    # render variants incl. deterministic constructed keys (reaches the
+    # clean-confirm orphans that have no DB pointer), recap summaries, and
+    # GDPR export artifacts — and delete each blob independently. Best-effort:
+    # a failure never aborts the erasure (same posture as before).
+    from worker.erasure import candidate_keys_for_creator, purge_uris
     from worker.storage import delete_prefix
 
-    # NOTE `posters/` and `peaks/` are creator-scoped deliberately (Issues 387,
-    # 392) so this sweep reaches them. `clips/` is NOT — renders are written to
-    # `clips/{clip_id}.mp4`, so the clips entry below matches nothing today. Known
-    # erasure gap, tracked separately; do not replicate the pattern in new prefixes.
+    # Stamp the RLS GUC BEFORE the enumeration reads (moved up from the delete
+    # block below — Issue 82b): the rollback above ended the transaction, so
+    # these queries auto-begin a NEW one, and callers whose session was not
+    # built by the auth dependency would otherwise read zero rows.
+    session.info["creator_id"] = creator_id
+
+    try:
+        uris = await candidate_keys_for_creator(session, creator_id)
+    except Exception as exc:
+        uris = set()
+        logger.warning("Erasure enumeration failed for creator %s: %s", creator_id, exc)
+    await session.rollback()  # release the read transaction before storage I/O
+    if uris:
+        purged = await purge_uris(uris)
+        logger.info(
+            "Purged %d/%d enumerated object(s) for creator %s",
+            len(purged),
+            len(uris),
+            creator_id,
+        )
+
+    # Belt-and-braces prefix sweeps over the creator-scoped namespaces (Issues
+    # 387, 392): catches anything the enumeration cannot know about (e.g. a
+    # superseded export bundle whose one-row-per-creator pointer was
+    # overwritten). Renders live at clips/{clip_id}.mp4 — non-creator-scoped —
+    # and are covered by the enumeration above, not a prefix.
     for prefix in (
         f"source/{creator_id}/",
-        f"clips/{creator_id}/",
         f"posters/{creator_id}/",
         f"peaks/{creator_id}/",
+        f"exports/{creator_id}/",
     ):
         try:
             # Offload the paginated boto3 list+delete off the event loop. (Issue 67)
@@ -513,12 +541,12 @@ async def erase_creator(session: AsyncSession, creator: Creator) -> None:
     except Exception as exc:
         logger.warning("event_logs purge failed for creator %s: %s", creator_id, exc)
 
-    # Reacquired-transaction RLS stamp (Issue 82b): the rollback above ended the
-    # transaction, so the deletes below auto-begin a NEW one. The after_begin
-    # listener stamps the `app.creator_id` GUC from session.info — set it
-    # explicitly so per-creator isolation holds even for callers (e.g. a future
-    # inactive-account sweep) whose session was not built by the auth dependency.
-    session.info["creator_id"] = creator_id
+    # Reacquired-transaction RLS stamp (Issue 82b): session.info["creator_id"]
+    # was set before the erasure enumeration above; the after_begin listener
+    # re-stamps the `app.creator_id` GUC on every transaction the deletes below
+    # auto-begin, so per-creator isolation holds even for callers (e.g. a
+    # future inactive-account sweep) whose session was not built by the auth
+    # dependency.
 
     # Audit the deletion WITHOUT the creator's PII (Issue 247). `audit_log` is
     # never purged and RLS-exempt, so writing email/channel_id here would let
