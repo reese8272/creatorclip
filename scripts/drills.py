@@ -332,6 +332,33 @@ async def drill_rate_limit() -> None:
             log.warning("rate-limit: post-drill bucket cleanup failed", exc_info=True)
 
 
+async def _reset_creator_throttles() -> None:
+    """Clear throttle state a previously ABORTED run may have left behind.
+
+    Best-effort and idempotent: a fresh stack has none of these keys. Runs once
+    before the first drill so no drill inherits another's residue — most
+    importantly the spend cool-down, whose 1 h TTL outlives a run and 429s every
+    budget-guarded route (see drill_spend_trip's finally for the full story).
+    """
+    from billing.spend_guard import cooldown_key
+    from youtube._redis import get_redis_client
+
+    try:
+        r = get_redis_client()
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        month = time.strftime("%Y-%m", time.gmtime())
+        cleared = await r.delete(
+            cooldown_key(_STAGING_CREATOR_ID),
+            "creatorclip:spend:trip:llm_generation",
+            f"creatorclip:spend:{today}",
+            f"creatorclip:spend:{month}",
+            f"creatorclip:spend:{today}:creator:{_STAGING_CREATOR_ID}",
+        )
+        log.info("setup: cleared %d leftover throttle key(s) from a prior run", cleared)
+    except Exception:  # noqa: BLE001 — never let setup hygiene abort the drills
+        log.warning("setup: throttle reset failed; drills may inherit stale state", exc_info=True)
+
+
 _DRILLS = {
     "flags-flip": drill_flags_flip,
     "spend-trip": drill_spend_trip,
@@ -353,7 +380,14 @@ async def _run_drills(names: list[str]) -> None:
     and blew up before its first probe. The bug was invisible while only one
     drill touched Redis, and reordering the drills would have surfaced it just
     as well. One loop for all drills removes the whole class.
+
+    Also resets the seeded creator's throttle state ONCE up front. A drill that
+    dies mid-flight can leave a spend cool-down behind (1 h TTL), and flags-flip
+    runs first — so without this the suite is poisoned by its own previous
+    failure and reports a defect that is really just residue. Starting from a
+    known-clean state is what makes each run's verdict about the CODE.
     """
+    await _reset_creator_throttles()
     for name in names:
         log.info("=== drill: %s ===", name)
         await _DRILLS[name]()
