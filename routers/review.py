@@ -12,7 +12,6 @@ import asyncio
 import logging
 import math
 import uuid
-from functools import partial
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -23,7 +22,6 @@ from auth import get_current_creator
 from billing.ledger import check_positive_balance
 from billing.spend_guard import require_budget
 from clip_engine.edits import MIN_KEEP_SEGMENT_S
-from config import settings
 from db import get_session
 from flags import require_flag
 from limiter import RENDER_DAILY_LIMIT, creator_key, limiter
@@ -306,9 +304,12 @@ async def submit_feedback(
         )
 
     # Retrain the creator's preference model so ranking adapts to this feedback.
-    # The task self-debounces (no-op without new trainable labels), so enqueuing
-    # on every feedback write is cheap. (Issue 60)
-    await _enqueue_retrain(creator.id)
+    # Shared debounced enqueue (worker.tasks.enqueue_retrain — Issue 473): the
+    # task self-debounces and the countdown coalesces bursts, so enqueuing on
+    # every feedback write is cheap. (Issue 60)
+    from worker.tasks import enqueue_retrain
+
+    await enqueue_retrain(creator.id)
 
     # Issue 371: tags/notes carry the "why" — feed the style distiller. Only
     # enqueued when substance exists; the task itself debounces + LLM-gates.
@@ -318,30 +319,6 @@ async def submit_feedback(
         await asyncio.to_thread(distill_style_prefs.delay, str(creator.id))
 
     return {"id": str(feedback.id), "action": feedback.action.value}
-
-
-async def _enqueue_retrain(creator_id: uuid.UUID) -> None:
-    """Queue a preference retrain, coalescing bursts (Issue 444).
-
-    The existing protections do NOT collapse a burst on their own: the
-    non-blocking advisory lock only drops *overlapping* tasks, and the
-    self-debounce checks for trainable rows newer than the last model — so after
-    task N commits a model, task N+1 does find a newer row and retrains. A
-    creator triaging 20 clips in a minute would otherwise pay 20 full model fits.
-    The countdown bunches them into one effective run.
-
-    Freshness cost is nil: the model is read only at generate/rerank time, never
-    in the request that wrote the label.
-    """
-    from worker.tasks import retrain_preference
-
-    await asyncio.to_thread(
-        partial(
-            retrain_preference.apply_async,
-            args=[str(creator_id)],
-            countdown=settings.PREFERENCE_RETRAIN_DEBOUNCE_S,
-        )
-    )
 
 
 @router.put("/{clip_id}/triage", response_model=TriageOut)
@@ -400,7 +377,9 @@ async def set_clip_triage(
             extra={"action": action.value},
         )
 
-    await _enqueue_retrain(creator.id)
+    from worker.tasks import enqueue_retrain
+
+    await enqueue_retrain(creator.id)
     return {"id": str(clip_id), "triage": body.triage.value}
 
 

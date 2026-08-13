@@ -38,7 +38,12 @@ TRAINABLE_ACTIONS = _POSITIVE_ACTIONS | _NEGATIVE_ACTIONS
 # supersede an earlier upvote. Note the 0057 backfill deliberately treats
 # `format` as a keep — that answers a different question (what pile should this
 # land in) and the two sets are not meant to match.
-_VERDICT_ACTIONS = TRAINABLE_ACTIONS | {FeedbackAction.skip}
+#
+# Public (Issue 473): the retrain debounce watermarks on THIS set, not
+# TRAINABLE_ACTIONS — a `skip` retraction changes the effective training set
+# without adding a trainable row, and a watermark that cannot see it lets the
+# model keep serving a label the creator withdrew.
+VERDICT_ACTIONS = TRAINABLE_ACTIONS | {FeedbackAction.skip}
 
 # Superseded PreferenceModel rows to retain per creator. Only the newest 2
 # versions are ever read (load_latest + the worker's NDCG warn-ratchet), but a
@@ -66,7 +71,7 @@ def latest_verdict_subquery(creator_id: uuid.UUID) -> Subquery:
         )
         .where(
             ClipFeedback.creator_id == creator_id,
-            ClipFeedback.action.in_(_VERDICT_ACTIONS),
+            ClipFeedback.action.in_(VERDICT_ACTIONS),
         )
         .order_by(ClipFeedback.created_at.desc(), ClipFeedback.id.desc())
         .limit(settings.PREFERENCE_FEEDBACK_SCAN_LIMIT)
@@ -100,7 +105,7 @@ async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> Prefer
     # `id` breaks created_at ties so the choice is deterministic rather than
     # whatever the planner returns.
     #
-    # The partition runs over _VERDICT_ACTIONS (which INCLUDES `skip`) and the
+    # The partition runs over VERDICT_ACTIONS (which INCLUDES `skip`) and the
     # trainable filter is applied afterwards. That ordering is what makes a
     # retraction real: PUT /clips/{id}/triage back to `pending` records a
     # `skip`, which wins the partition and then drops out at the filter, so the
