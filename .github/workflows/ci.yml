@@ -113,6 +113,21 @@ jobs:
       - name: Run unit tests
         # pytest.ini already applies -m "not integration"
         run: pytest --tb=short -q
+      - name: Render-env lane (real ffmpeg, Issue 478)
+        # HARD ffmpeg install — deliberately NO `|| warning` fallback in this
+        # step: the render_env lane exists so a missing binary FAILS instead of
+        # silently skipping (ffmpeg is NOT preinstalled on ubuntu-latest; the
+        # soft install above may or may not have provisioned it). The
+        # collect-only count guard fails the job if the lane ever empties out
+        # again (it sat at 0 selected tests from its introduction — the marker
+        # was hyphenated and could never be applied as a decorator).
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo -n apt-get update -q
+            sudo -n apt-get install -y --no-install-recommends ffmpeg
+          fi
+          test "$(pytest -m render_env --collect-only -q | grep -c '::')" -ge 3
+          pytest -m render_env -q
 
   integration:
     name: Integration tests (postgres + redis)
