@@ -375,15 +375,19 @@ async def test_delete_account_cascades_all_dependent_tables(
 
 
 @pytest.mark.integration
-async def test_delete_account_purges_both_storage_prefixes(
+async def test_delete_account_purges_creator_prefixes_and_enumerated_uris(
     db_session: AsyncSession,
 ):
-    """Storage purge is called with source/{id}/ and clips/{id}/."""
+    """Issues 446/471: the creator-scoped prefixes are swept AND the per-URI
+    enumeration reaches the non-creator-scoped render keys the old
+    clips/{creator_id}/ prefix could never match."""
     from fastapi.testclient import TestClient
 
     creator = await _seed_full_creator(db_session)
     cid = creator.id
+    clip_id = await db_session.scalar(select(Clip.id).where(Clip.creator_id == cid))
     purged: list[str] = []
+    deleted_uris: list[str] = []
 
     def _capture(prefix: str) -> int:
         purged.append(prefix)
@@ -395,6 +399,7 @@ async def test_delete_account_purges_both_storage_prefixes(
     try:
         with (
             patch(_STORAGE_PATH, side_effect=_capture),
+            patch("worker.storage.delete_file", side_effect=deleted_uris.append),
             patch(_HTTPX_PATH),
             TestClient(app) as client,
         ):
@@ -403,7 +408,14 @@ async def test_delete_account_purges_both_storage_prefixes(
         app.dependency_overrides.clear()
 
     assert f"source/{cid}/" in purged, "source prefix not purged"
-    assert f"clips/{cid}/" in purged, "clips prefix not purged"
+    assert f"posters/{cid}/" in purged, "posters prefix not purged"
+    assert f"peaks/{cid}/" in purged, "peaks prefix not purged"
+    assert f"exports/{cid}/" in purged, "exports prefix not purged (Issue 471)"
+    # The old creator-scoped clips prefix matched nothing (renders live at
+    # clips/{clip_id}.mp4) — it is replaced by per-URI enumeration:
+    assert f"clips/{cid}/" not in purged
+    for key in (f"clips/{clip_id}.mp4", f"clips/{clip_id}_clean.mp4", f"clips/{clip_id}_edit.mp4"):
+        assert any(u.endswith(key) for u in deleted_uris), f"render key {key} not enumerated"
 
     # Cleanup: creator is already deleted by the handler
 

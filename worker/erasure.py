@@ -143,14 +143,10 @@ async def candidate_keys_for_creator(session: Any, creator_id: uuid.UUID) -> set
     from models import Clip, DataExport, Summary, Video
 
     videos = (
-        (await session.execute(select(Video).where(Video.creator_id == creator_id)))
-        .scalars()
-        .all()
+        (await session.execute(select(Video).where(Video.creator_id == creator_id))).scalars().all()
     )
     clips = (
-        (await session.execute(select(Clip).where(Clip.creator_id == creator_id)))
-        .scalars()
-        .all()
+        (await session.execute(select(Clip).where(Clip.creator_id == creator_id))).scalars().all()
     )
     summaries = (
         (await session.execute(select(Summary).where(Summary.creator_id == creator_id)))

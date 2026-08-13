@@ -62,6 +62,8 @@ def _video(creator_id: uuid.UUID) -> MagicMock:
     v.source_uri = "s3://b/source/x.mp4"
     v.poster_uri = None
     v.peaks_uri = None
+    v.ingest_done_at = None
+    v.archived_at = None
     return v
 
 

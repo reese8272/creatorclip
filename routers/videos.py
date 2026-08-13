@@ -31,10 +31,10 @@ from models import (
     VideoKind,
     VideoOrigin,
 )
-from worker.erasure import candidate_keys_for_video, purge_uris, summary_keys
 from routers._enqueue import stamp_stream_owner
 from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
+from worker.erasure import candidate_keys_for_video, purge_uris, summary_keys
 from worker.storage import (
     MultipartUploadNotFound,
     StorageError,
@@ -337,9 +337,7 @@ async def list_videos(
     """
     # Hard cap to prevent unbounded scans as creator libraries grow. (Issue 76)
     _LIST_LIMIT = 100
-    archived_filter = (
-        Video.archived_at.is_not(None) if archived else Video.archived_at.is_(None)
-    )
+    archived_filter = Video.archived_at.is_not(None) if archived else Video.archived_at.is_(None)
     result = await session.execute(
         select(Video)
         .where(
