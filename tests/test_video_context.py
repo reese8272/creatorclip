@@ -184,9 +184,25 @@ def test_cache_marker_floor_gated() -> None:
     assert len(system) == 2
     assert system[1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
-    # No identity, no brief → no block 2 at all (no volatile placeholder bytes).
+    # No brief → no block 2 at all (no volatile placeholder bytes).
     system_none, _ = _build_request("t", 100.0, None, None)
     assert len(system_none) == 1
+
+    # Identity-only → STILL no block 2: identity rides the user turn (Issue 463),
+    # so the floor now measures static + DNA only.
+    system_identity_only, _ = _build_request("t", 100.0, None, "identity " * 600)
+    assert len(system_identity_only) == 1
+    assert "cache_control" not in system_identity_only[0]
+
+
+def test_system_blocks_byte_identical_with_and_without_identity() -> None:
+    """Issue 463 (the Issue-371 pin style): identity_text must not perturb the
+    system blocks AT ALL — same bytes, same cache marker — or every identity
+    edit would invalidate the creator's 1h cache and desync the 2x billing flag."""
+    long_brief = "d" * 5000
+    sys_with, _ = _build_request("t", 100.0, long_brief, "My channel identity.")
+    sys_without, _ = _build_request("t", 100.0, long_brief, None)
+    assert sys_with == sys_without
 
 
 def test_transcript_is_untrusted_user_turn_only() -> None:

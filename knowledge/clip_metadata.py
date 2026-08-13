@@ -10,9 +10,11 @@ Prompt structure (Issue 315 discipline):
   Block 1 — static honesty rubric + output rules (creator-independent,
             byte-identical across all calls).
   Block 2 — DNA brief via ``dna_system_block`` (1h cache marker floor-gated).
-  Block 3 — video-context summary (per-video, uncached — changes every video).
-  User msg — per-clip payloads; each clip's transcript window rides through
-            ``wrap_untrusted`` (OWASP LLM01; Issue 224).
+  User msg — the model-authored video-context summary (derived from the
+            untrusted transcript — a second-order injection surface, so it
+            rides ``wrap_untrusted``, Issue 463) then per-clip payloads; each
+            clip's transcript window rides through ``wrap_untrusted`` (OWASP
+            LLM01; Issue 224).
 
 Python clamps every field to the YouTube videos.insert limits BEFORE storage:
 title ≤100 chars, description ≤5000 UTF-8 BYTES (char-boundary safe) with
@@ -158,16 +160,15 @@ def _build_request(
         # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
         dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
     ]
-    # Block 3: per-video context summary — uncached, after the cache breakpoint.
-    if context_summary:
-        system.append(
-            {
-                "type": "text",
-                "text": "VIDEO CONTEXT:\n" + context_summary[:_CONTEXT_SUMMARY_MAX_CHARS],
-            }
-        )
 
-    parts = [f"Channel: {channel_title}\nClips to write metadata for:\n"]
+    parts: list[str] = []
+    # Model-authored context summary — derived from the untrusted transcript,
+    # so it must never reach the system role (Issue 463; second-order LLM01).
+    if context_summary:
+        parts.append(
+            wrap_untrusted("video_context_summary", context_summary[:_CONTEXT_SUMMARY_MAX_CHARS])
+        )
+    parts.append(f"Channel: {channel_title}\nClips to write metadata for:\n")
     for p in clip_payloads:
         parts.append(f"clip_id: {p['clip_id']} (rank {p.get('rank')})\n")
         parts.append(wrap_untrusted(f"clip_transcript_{p['clip_id']}", p.get("window_text", "")))
