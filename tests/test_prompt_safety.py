@@ -142,6 +142,80 @@ class TestThumbnailsSystemBlocks:
         assert json.dumps(identity) in user_content
 
 
+# ── analysis/video_context.py ─────────────────────────────────────────────────
+
+
+class TestVideoContextSystemBlocks:
+    def test_identity_not_in_system(self) -> None:
+        """Issue 463 AC: creator-authored identity must not appear in any system
+        block (the Issue 224 rule dna/brief.py already follows for the same data)."""
+        from analysis.video_context import _build_request
+
+        identity = "Educational Python channel for beginners."
+        system, _ = _build_request("transcript text", 100.0, "DNA brief.", identity)
+        assert not _system_blocks_contain_text(system, identity), (
+            "analysis/video_context.py: identity_text must not appear in any system "
+            "block (Issue 224 — untrusted content must not go in system role)."
+        )
+
+    def test_identity_json_wrapped_in_user_turn(self) -> None:
+        """Issue 463 AC: identity must arrive JSON-encoded in the user turn."""
+        from analysis.video_context import _build_request
+
+        identity = "Educational Python channel for beginners."
+        _, messages = _build_request("transcript text", 100.0, "DNA brief.", identity)
+        user_content = messages[0]["content"]
+        assert '<untrusted name="creator_stated_identity">' in user_content
+        assert json.dumps(identity) in user_content
+
+    def test_no_identity_wrapper_when_none(self) -> None:
+        """When identity_text is None, no identity envelope is emitted (the
+        transcript keeps its own separate wrapper)."""
+        from analysis.video_context import _build_request
+
+        _, messages = _build_request("transcript text", 100.0, "DNA brief.", None)
+        user_content = messages[0]["content"]
+        assert '<untrusted name="creator_stated_identity">' not in user_content
+
+
+# ── knowledge/clip_metadata.py ────────────────────────────────────────────────
+
+
+class TestClipMetadataSystemBlocks:
+    def test_context_summary_not_in_system(self) -> None:
+        """Issue 463 AC: the model-authored context summary is DERIVED from the
+        untrusted transcript (second-order injection surface) and must not
+        appear in any system block."""
+        from knowledge.clip_metadata import _build_request
+
+        summary = "MODEL-AUTHORED summary derived from the untrusted transcript."
+        system, _ = _build_request(
+            channel_title="Chan",
+            dna_brief="DNA brief.",
+            context_summary=summary,
+            clip_payloads=[{"clip_id": "a", "rank": 1, "window_text": "w"}],
+        )
+        assert not _system_blocks_contain_text(system, summary), (
+            "knowledge/clip_metadata.py: the model-authored context summary must not "
+            "appear in any system block (Issue 463 — second-order injection surface)."
+        )
+
+    def test_context_summary_wrapped_in_user_turn(self) -> None:
+        """Issue 463 AC: the summary must arrive JSON-encoded in the user turn."""
+        from knowledge.clip_metadata import _build_request
+
+        summary = "MODEL-AUTHORED summary derived from the untrusted transcript."
+        _, messages = _build_request(
+            channel_title="Chan",
+            dna_brief="DNA brief.",
+            context_summary=summary,
+            clip_payloads=[{"clip_id": "a", "rank": 1, "window_text": "w"}],
+        )
+        user_content = messages[0]["content"]
+        assert '<untrusted name="video_context_summary">' in user_content
+        assert json.dumps(summary) in user_content
+
+
 # ── routers/insights.py ───────────────────────────────────────────────────────
 
 
