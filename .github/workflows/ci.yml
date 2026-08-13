@@ -121,12 +121,23 @@ jobs:
         # collect-only count guard fails the job if the lane ever empties out
         # again (it sat at 0 selected tests from its introduction — the marker
         # was hyphenated and could never be applied as a decorator).
+        # Issue 478 leg 3: the lane also provisions the REAL face-detection
+        # stack — mediapipe + the pinned hub BlazeFace model (same pins and
+        # force-reinstall ordering as the Dockerfile, where contrib must own
+        # the cv2 module path) — because the reframe_seats fixture test
+        # hard-asserts the detector exists (fail, never skip). Model fetch is
+        # equally hard: no fallback, a 404 fails the lane.
         run: |
           if ! command -v ffmpeg >/dev/null 2>&1; then
             sudo -n apt-get update -q
             sudo -n apt-get install -y --no-install-recommends ffmpeg
           fi
-          test "$(pytest -m render_env --collect-only -q | grep -c '::')" -ge 3
+          pip install -r requirements-image.txt
+          pip install --force-reinstall --no-deps opencv-contrib-python==4.13.0.92
+          wget -q -O "$RUNNER_TEMP/blaze_face_short_range.tflite" \
+            https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite
+          export MEDIAPIPE_FACE_MODEL_PATH="$RUNNER_TEMP/blaze_face_short_range.tflite"
+          test "$(pytest -m render_env --collect-only -q | grep -c '::')" -ge 7
           pytest -m render_env -q
 
   integration:

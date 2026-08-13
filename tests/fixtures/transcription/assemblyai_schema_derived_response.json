@@ -1,0 +1,126 @@
+{
+  "_provenance": "schema-derived, not recorded: built from the documented AssemblyAI transcript schema (ms-int word timings) using the expected_words.json ground truth; no live AssemblyAI call was made",
+  "status": "completed",
+  "text": "For a full hour, he had paced up and down waiting, but he could wait no longer.",
+  "words": [
+    {
+      "text": "for",
+      "start": 160,
+      "end": 560,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "a",
+      "start": 560,
+      "end": 720,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "full",
+      "start": 720,
+      "end": 960,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "hour",
+      "start": 960,
+      "end": 1360,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "he",
+      "start": 1360,
+      "end": 1440,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "had",
+      "start": 1440,
+      "end": 1600,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "paced",
+      "start": 1600,
+      "end": 2000,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "up",
+      "start": 2000,
+      "end": 2160,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "and",
+      "start": 2160,
+      "end": 2320,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "down",
+      "start": 2320,
+      "end": 2560,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "waiting",
+      "start": 2560,
+      "end": 3360,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "but",
+      "start": 3440,
+      "end": 3600,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "he",
+      "start": 3600,
+      "end": 3760,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "could",
+      "start": 3760,
+      "end": 3920,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "wait",
+      "start": 3920,
+      "end": 4240,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "no",
+      "start": 4240,
+      "end": 4480,
+      "confidence": 0.99,
+      "speaker": "A"
+    },
+    {
+      "text": "longer",
+      "start": 4480,
+      "end": 4880,
+      "confidence": 0.99,
+      "speaker": "A"
+    }
+  ]
+}

@@ -357,6 +357,20 @@ def geometry_duration_s(doc: object) -> float | None:
     return sum(e - s for s, e in segments)
 
 
+def clip_origin_s(setup_start_s: float | None, start_s: float) -> float:
+    """The clip's render origin in VIDEO-ABSOLUTE seconds: ``setup_start_s ?? start_s``.
+
+    The engine starts the clip at the setup, not the peak's aftermath, so when
+    ``setup_start_s`` is set THAT — not ``start_s`` — is second 0 of the
+    delivered video and the zero point of every clip-relative measurement
+    (durations, setup leads, trim windows, transcript offsets). The ONE origin
+    rule (Issue 475) — shared by ``playable_duration_s``, the Proof-of-Lift
+    contrast and the originality fingerprint, so no surface can mis-measure
+    clips whose setup point differs from ``start_s``.
+    """
+    return setup_start_s if setup_start_s is not None else start_s
+
+
 def playable_duration_s(
     *,
     setup_start_s: float | None,
@@ -367,15 +381,13 @@ def playable_duration_s(
     """Duration of the clip's DELIVERED video, in clip-relative seconds.
 
     When a confirmed trim/clean recorded effective geometry, that is the
-    authority; otherwise the render origin is ``setup_start_s`` when set — the
-    engine starts the clip at the setup, not the peak's aftermath — so that,
-    not ``start_s``, is what every clip-relative time is measured from.
+    authority; otherwise the delivered window runs from the shared render
+    origin (``clip_origin_s``) to ``end_s``.
     """
     effective = geometry_duration_s(effective_geometry)
     if effective is not None:
         return effective
-    origin_s = setup_start_s if setup_start_s is not None else start_s
-    return end_s - origin_s
+    return end_s - clip_origin_s(setup_start_s, start_s)
 
 
 def compose_keep_segments(

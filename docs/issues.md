@@ -286,7 +286,7 @@ YourCall drops its AppliedTitleField embed, gains quiet "Next clip".
 - [x] Review media box ≥1.8× today's area at 1440×900 (Playwright boundingBox assertion — measured 1.89×)
 - [x] Exactly one primary card; title+hook ≤2 collapsed rows; #412 empty-canvas regression guard
 - [x] Trim save/apply flows identical (existing tests); axe + disclaimer + no-virality green
-- [ ] Review baselines regenerated via CI dispatch (`--update-snapshots=all`, ubuntu only)
+- [x] Review baselines regenerated via CI dispatch — done 2026-08-13 for Issues 424/425/426 together: `update_snapshots=true` dispatch run 31672333175 at main `9de69f4`, baselines committed via PR #95 whose own visual job passed against them (the acceptance proof)
 
 ### Issue 425: Editor flip + toolbar merge + deletions
 - [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`; CI baseline regen pending) · **Track:** C · **Size:** M · **Depends:** 424
@@ -300,7 +300,7 @@ constants (tests migrate).
 - [x] One transport player per page; undo/redo/apply-cuts/CAS flows untouched
       (`editor-persistence.spec.ts` unchanged); J/K/L + capture-bus keys unaffected
 - [x] Stage card fits its grid row (tool-shell boundingBox guard)
-- [ ] Editor + long-form baselines regenerated via CI dispatch
+- [x] Editor + long-form baselines regenerated via CI dispatch — same 2026-08-13 dispatch/PR #95 as Issue 424 (the run regenerates ALL smoke-spec baselines)
 
 ### Issue 426: Crop-track overlay preview
 - [x] **Status:** DONE 2026-08-04 (branch `lane/l26-stage`, merged in `lane/l26`; CI baseline regen pending) · **Track:** C · **Size:** M · **Depends:** 421 (endpoint), 424
@@ -3647,11 +3647,13 @@ feedback surface reuses the action with different intent.
 write NO feedback row) from "retract my verdict" (the triage-pending transition). Either stop
 POST /feedback accepting `skip`, or exclude feedback-surface skips from the verdict partition.
 
+**Status: DONE 2026-08-13 (W5 learning-loop lane, branch `fix/issues-472-475-learning-loop`, red-first).** `POST /feedback action=skip` is now a pure acknowledged no-op (201, `id: null`, no row, no triage change, no retrain) — navigation and retraction are different verbs; retraction is exclusively `PUT /triage → pending`. UI Skip is pure `onAdvance()` (vitest pins zero network calls). Migration 0062 repairs history: deletes only MASKING skips (kept/dropped clip, no later trainable verdict), preserves superseded and pending-retraction skips, idempotent, would-delete count logged at WARNING pre-delete (drilled on a scratch cluster: 3 of 5 seeded skips deleted, second run 0). The 444 invariant is pinned end-to-end (pile state ⇒ training state).
+
 **Acceptance**
-- [ ] Trim → Skip in the UI leaves the trim label trained (integration-lane test on the partition)
-- [ ] PUT /triage → pending still retracts (existing test stays green)
-- [ ] UI: skip after a same-session rating either warns or is a pure navigation no-op
-- [ ] The 444 docstring's invariant is true again (test that pile state implies training state)
+- [x] Trim → Skip in the UI leaves the trim label trained (integration-lane test on the partition)
+- [x] PUT /triage → pending still retracts (existing test stays green)
+- [x] UI: skip after a same-session rating either warns or is a pure navigation no-op
+- [x] The 444 docstring's invariant is true again (test that pile state implies training state)
 
 ### Issue 473: retrain debounce watermark is blind to retractions and outcome arrivals
 
@@ -3665,10 +3667,12 @@ fires and `load_latest` keeps serving the stale model indefinitely.
 **Fix direction (CHECK phase):** watermark on the full verdict-action set + outcome writes, or on
 a monotonic feedback/outcome sequence id.
 
+**Status: DONE 2026-08-13 (same lane).** Watermark widened to the full VERDICT_ACTIONS set OR judged outcome writes (`fetched_at > model.updated_at AND performed_well IS NOT NULL`), and — the leg the filed issue missed — `poll_clip_outcomes` now ENQUEUES the countdown-coalesced retrain per affected creator (there was no outcome enqueue site at all). Coalescing pinned; the common feedback path stays one COUNT query.
+
 **Acceptance**
-- [ ] Skip-only retraction triggers a retrain (test at the debounce layer)
-- [ ] Outcome arrival triggers a retrain within the debounce window
-- [ ] No retrain storm: debounce still coalesces (existing behavior pinned)
+- [x] Skip-only retraction triggers a retrain (test at the debounce layer)
+- [x] Outcome arrival triggers a retrain within the debounce window
+- [x] No retrain storm: debounce still coalesces (existing behavior pinned)
 
 ### Issue 474: personalization threshold honesty — `active=true` at weight 0.0, and two different label counts
 
@@ -3684,9 +3688,11 @@ actually saw. CLAUDE.md: "Personalization threshold is communicated honestly."
 **Fix direction (CHECK phase):** one count (post-dedup) everywhere; `active` means `weight > 0`;
 show the weight ramp if useful.
 
+**Status: DONE 2026-08-13 (same lane).** `active := weight > 0.0` in the one producer (`_build_personalization_status`); at exactly T labels the API asserts weight 0.0 and active false. Count stays `scorer.label_count` (the fitted post-dedup n — the audit's 'pre-dedup surface' claim was stale, corrected in the brief); Review band copy now says 'clips rated'.
+
 **Acceptance**
-- [ ] At exactly T labels the UI does not claim active personalization (API test)
-- [ ] Surfaced count == trained count basis (test)
+- [x] At exactly T labels the UI does not claim active personalization (API test)
+- [x] Surfaced count == trained count basis (test)
 
 ### Issue 475: efficacy/lift harness diverges from what production trains and serves
 
@@ -3704,10 +3710,12 @@ Related register item: `efficacy.py` hand-copies the production blend formula (C
 `latest_verdict_subquery` — extend to the outcome-join semantics), share the origin helper, and
 pin blend parity with a test.
 
+**Status: DONE 2026-08-13 (same lane).** `preference.train.training_rows_select()` is the single shared select executed by BOTH `build_and_save` and `load_labeled_clips` (Google Rules of ML #32); `_relevance_for` is action-first so a skip/format retraction excludes the clip even with a good outcome; `LabeledClip.performed_well` carries the stored flag so harness sample weights match train.py exactly (closes register item C2-13's last leg); `clip_engine.edits.clip_origin_s` adopted by the lift query AND the originality fingerprint (sanctioned scope addition). Blend parity was already 465's shared helper — closed by verification citing `tests/eval/test_efficacy.py::test_blend_parity_with_shared_helper`.
+
 **Acceptance**
-- [ ] Efficacy set == training set for identical inputs (test against the shared query)
-- [ ] Lift geometry uses the shared origin (test with `setup_start_s != start_s`)
-- [ ] Blend parity test between `efficacy._blend_scores` and `rerank_with_preference`
+- [x] Efficacy set == training set for identical inputs (test against the shared query)
+- [x] Lift geometry uses the shared origin (test with `setup_start_s != start_s`)
+- [x] Blend parity test between `efficacy._blend_scores` and `rerank_with_preference`
 
 ### Batch E — Eval & CI integrity (476–482)
 
@@ -3729,10 +3737,12 @@ parser/pipeline regressions + a small nightly live set with behavioral assertion
 preference over aftermath-window on constructed pairs, principle ∈ registry, dna_score ordering on
 a fixed brief). Research current LLM-eval practice (LLM-judge vs fixed assertions) in Phase 1.
 
+**Status: DONE 2026-08-13 (W5 LLM-eval lane, branch `fix/issues-476-480-llm-eval`).** Two lanes per the tranche-2 `[DEC]`: (1) GOLDENS — real recorded Anthropic response bodies (happy-path + a real stop_reason=max_tokens truncation) replayed through `anthropic.types.Message.model_validate` into the REAL `score_candidates` parse/annotate path in the unit lane, each pinned to sha256 of the canonical `_OUTPUT_SCHEMA` + the scoring model id so a contract change reds CI until a ~$0.20 re-record; (2) NIGHTLY — code-graded behavioral lane (NO LLM judge; all criteria are objective orderings), majority-of-3, ~$1/night: setup-vs-aftermath ordering, strict shape/refusal detection, dna_score on/off-brief ordering. PROVEN LIVE pre-merge: 3/3 green with margins +0.84–0.89, and an inverted assertion demonstrated red. CI guard pins the nightly's pytest path.
+
 **Acceptance**
-- [ ] Recorded-response goldens exercise the REAL `score_candidates` parse/annotate path in CI
-- [ ] A nightly behavioral eval hits the live model with ≥ 3 assertion classes and posts a status
-- [ ] `docs/DECISIONS.md` entry for the chosen eval design
+- [x] Recorded-response goldens exercise the REAL `score_candidates` parse/annotate path in CI
+- [x] A nightly behavioral eval hits the live model with ≥ 3 assertion classes and posts a status
+- [x] `docs/DECISIONS.md` entry for the chosen eval design
 
 ### Issue 477: eval-runner assertion integrity — dead scenarios, vacuous minimums, permissive matching
 
@@ -3799,12 +3809,12 @@ punch-in and sendcmd chains executed for parse+init (catches Issue 467's class);
 `reframe_seats` through the real mouth-motion → mapping path; (4) a CI step that fails if the
 ffmpeg-gated tests were skipped (count assertion or `--strict-markers`-style guard).
 
-**Status: LEGS 1–2 DONE 2026-08-13 (W4 render lane); leg 3 (reframe_seats consumption) remains open for W5.** Marker renamed `render_env` (the hyphen could never be applied as a decorator — the root defect that kept the lane empty), addopts exclusion fixed, 3 real-media tests (missing ffmpeg FAILS, never skips), and a hard CI step (unconditional apt install + ≥3-collected floor) pinned in `test_ci_config.py`.
+**Status: DONE 2026-08-13 (legs 1–2 W4 render lane; leg 3 W5 fixtures lane).** Marker renamed `render_env` (the hyphen could never be applied as a decorator — the root defect that kept the lane empty), addopts exclusion fixed, 3 real-media tests (missing ffmpeg FAILS, never skips), and a hard CI step (unconditional apt install + ≥3-collected floor) pinned in `test_ci_config.py`.
 
 **Acceptance**
 - [x] `pytest -m render-env` selects ≥ 3 tests locally and in CI
 - [x] Boundary ffprobe test red/green demonstrated by mutating `-ss` handling
-- [ ] `reframe_seats` fixtures consumed by a test that computes the mapping from the frames
+- [x] `reframe_seats` fixtures consumed by a test that computes the mapping from the frames — `tests/test_render_env_reframe.py` runs real BlazeFace → tracks → mouth energy → mapping → speaking-span over the 12 PNGs at production config (CI provisions mediapipe + the pinned model, hard-fail; render_env floor 3→7). Scope caveat: the two-seat hold + energy ordering are NOT provable from the 480 px fixture (the left face is undetectable at production confidence; lowering it produced phantom tracks) — covered by the synthetic Issue-450 tests; a FULL-RESOLUTION re-freeze is queued for the W6 fresh upload
 - [x] CI fails when the ffmpeg lane silently skips
 
 ### Issue 479: the gates that never ran — per-module coverage floors, diff-cover, and the pre-push hook
@@ -3864,9 +3874,11 @@ label set, seeded) + an eval asserting the blend reorders a candidate set the ri
 threshold weights; rename or strengthen the DNA fixture to test what it names (needs 476 for the
 LLM leg).
 
+**Status: DONE 2026-08-13 (same lane).** Deterministic RNG-free 40-row label set (= 2×threshold → the LightGBM branch, weight exactly at PREFERENCE_WEIGHT_CAP) through the REAL `fit()` + `rerank_with_preference`: the blend flips an ordering at w=cap with the Issue-465 contract pinned (score unmutated, blended_score set, dense ranks) and a weight-0 control proving the test can fail. The misleading DNA fixture renamed `ranking_composite_sort_order` with an honest claim cross-referencing the 476 nightly's dna-ordering class.
+
 **Acceptance**
-- [ ] Eval fixture with a real fitted scorer flips an ordering at w=cap (deterministic, seeded)
-- [ ] The DNA fixture either exercises real coupling or its name/claim is corrected
+- [x] Eval fixture with a real fitted scorer flips an ordering at w=cap (deterministic, seeded)
+- [x] The DNA fixture either exercises real coupling or its name/claim is corrected
 
 ### Issue 481: transcription timing fidelity is untested — every boundary depends on it
 
@@ -3884,10 +3896,12 @@ speech, checked-in WAV + expected word windows with tolerance) run through each 
 parsing AND through one recorded provider response; add a WARNING log + metric on the one-segment
 fallback so silent degradation becomes visible.
 
+**Status: DONE 2026-08-13 (W5 fixtures lane, branch `fix/issues-481-478c-fixtures`).** LibriSpeech test-clean utterance (CC BY 4.0, provenance README) + a REAL recorded Deepgram nova-3 response (request options byte-matched to production; word-for-word equal to the corpus reference). Parse fidelity = float-EQUAL per backend (the AAI ms÷1000 class pinned; AAI fixture schema-derived — no key available — labeled honestly; WhisperX recorded leg descoped per `[DEC]`). Provider fidelity ±0.25 s (engineering-chosen — no vendor SLA exists). No-utterance fallback now WARNs + sets an additive `degraded` flag surfaced on the transcript endpoint and as a `transcript_degraded` SSE step. Owner-approved live nightly ASR leg rides the LLM nightly, proven green against real Deepgram.
+
 **Acceptance**
-- [ ] Recorded-fixture test asserts word timings within tolerance for the default backend
-- [ ] One-segment fallback logs a warning and sets a video-visible degradation flag
-- [ ] Fixture documented in `tests/fixtures/` README (provenance, license)
+- [x] Recorded-fixture test asserts word timings within tolerance for the default backend
+- [x] One-segment fallback logs a warning and sets a video-visible degradation flag
+- [x] Fixture documented in `tests/fixtures/` README (provenance, license)
 
 ### Issue 482: doc↔code accuracy sweep (roll-up)
 

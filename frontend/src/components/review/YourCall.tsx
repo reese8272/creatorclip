@@ -30,11 +30,13 @@ const FLASH_TONE_CLASS: Record<FlashTone, string> = {
 }
 
 // The queue reads "Keep"/"Drop"; echoing the wire enum back ("upvote recorded")
-// named the transport, not the creator's decision.
-const ACTION_CONFIRMATION: Record<FeedbackAction, string> = {
+// named the transport, not the creator's decision. `skip` is absent: it never
+// POSTs (Issue 472 — pure navigation), so there is nothing to confirm.
+type RatingAction = Exclude<FeedbackAction, 'skip'>
+
+const ACTION_CONFIRMATION: Record<RatingAction, string> = {
   upvote: 'Kept',
   downvote: 'Dropped',
-  skip: 'Skipped',
   trim: 'Trim saved',
 }
 
@@ -111,7 +113,7 @@ export function YourCall({
 
   /** Resolves true when the rating actually reached the API. */
   async function sendFeedback(
-    action: FeedbackAction,
+    action: RatingAction,
     tags?: string[],
     feedbackNote?: string,
   ): Promise<boolean> {
@@ -196,12 +198,15 @@ export function YourCall({
       </div>
 
       <div className="mt-2.5 flex gap-2">
+        {/* Issue 472: Skip is pure queue navigation — no POST. The old
+            sendFeedback('skip') wrote a feedback row that RETRACTED the clip's
+            latest label server-side, so Trim → Skip silently erased the trim. */}
         <Button
           variant="secondary"
           size="sm"
           className="h-[38px] flex-1"
           disabled={submitting}
-          onClick={() => void sendFeedback('skip')}
+          onClick={onAdvance}
         >
           Skip
         </Button>

@@ -1,0 +1,44 @@
+{
+  "recorded_at": "2026-08-13T11:23:13+00:00",
+  "model": "claude-opus-5",
+  "stop_reason": "end_turn",
+  "schema_sha256": "37201ed4792b3ee85440e4880976ce9f076fb201e7dbf8274a6852a3f8f57d2b",
+  "body": {
+    "id": "msg_011CdzfKCxQtngEgLAbCtHq6",
+    "container": null,
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "citations": null,
+        "text": "{\"scores\":[{\"index\":0,\"dna_score\":0.93,\"score\":0.9,\"principle\":\"Tension and release\",\"reasoning\":\"The window opens on the explicit doubt sentence ('I genuinely do not believe that'), builds through the 90-pound clamp load, and lands the honest 'it held' reaction inside the 38-second native window \u2014 exactly the reveal-after-doubt beat this channel's top Shorts are built on.\"},{\"index\":1,\"dna_score\":0.28,\"score\":0.26,\"principle\":\"Clip the setup, not the aftermath\",\"reasoning\":\"The doubt and the test both happened in [BEFORE], so this window is pure post-reveal commentary that drifts into a glue-cleanup tip, leaving no tension for a viewer who never saw the load test.\"},{\"index\":2,\"dna_score\":0.9,\"score\":0.88,\"principle\":\"Hook in the first 3 seconds\",\"reasoning\":\"It opens on the confession that this mortise ruined his last two attempts, which is the doubt sentence this audience stays for, and the 'dead level, first try' result lands before the sanding tangent begins.\"},{\"index\":3,\"dna_score\":0.78,\"score\":0.72,\"principle\":\"One idea per Short\", \"reasoning\":\"placeholder\"},{\"index\":4,\"dna_score\":0.14,\"score\":0.12,\"principle\":\"Native length over generic length\",\"reasoning\":\"A 60-second budget-recap and call-to-action outro exceeds this channel's 28-45 second native window and reads as gear/price talk, which sits far below the channel median.\"},{\"index\":5,\"dna_score\":0.82,\"score\":0.68,\"principle\":\"Audience-fit over generic virality\",\"reasoning\":\"The 'I measured twice and got two different numbers' admission plus the bent tape-hook fix is precisely the self-deprecating honesty beat that spikes re-watch for this beginner audience, though the soft 'quick word about measuring' opener blunts the first three seconds.\"}]}",
+        "type": "text"
+      }
+    ],
+    "model": "claude-opus-5",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 2099,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 2099,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 2310,
+      "output_tokens": 1824,
+      "output_tokens_details": {
+        "thinking_tokens": 1166
+      },
+      "server_tool_use": null,
+      "service_tier": "standard"
+    }
+  }
+}

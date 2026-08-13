@@ -46,10 +46,14 @@ function PersonalizationBand({ status }: { status: PersonalizationStatus }) {
   return (
     <span className="flex items-center gap-2 text-xs text-muted">
       <Chip pose="meditate" size={22} />
+      {/* "clips rated", not "ratings collected" (Issue 474): the count is
+          status.labels == scorer.label_count — POST-dedup, one per clip
+          (newest verdict wins) — so a creator who re-rated the same clip five
+          times sees the number the model actually trained on, not five. */}
       <span>
         {status.active
-          ? `Personalized to your feedback (${status.labels} ratings collected)`
-          : `Still learning — DNA-based ranking (${status.labels}/${status.threshold} ratings collected)`}
+          ? `Personalized to your feedback (${status.labels} clips rated)`
+          : `Still learning — DNA-based ranking (${status.labels}/${status.threshold} clips rated)`}
       </span>
     </span>
   )

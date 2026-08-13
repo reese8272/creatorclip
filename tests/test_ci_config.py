@@ -427,11 +427,84 @@ def test_render_env_step_is_hard_and_guarded() -> None:
         "the render-env step must have NO `::warning` fallback — a missing "
         "ffmpeg must FAIL this lane, never soft-skip it (Issue 478)"
     )
-    assert "pytest -m render_env --collect-only -q | grep -c '::'" in run and "-ge 3" in run, (
-        "the render-env step must keep the collect-count floor (>= 3) so an "
-        "emptied lane fails the job instead of passing vacuously"
+    assert "pytest -m render_env --collect-only -q | grep -c '::'" in run and "-ge 7" in run, (
+        "the render-env step must keep the collect-count floor (>= 7: 3 ffmpeg "
+        "tests + 4 reframe_seats tests, Issue 478 leg 3) so an emptied lane "
+        "fails the job instead of passing vacuously — bump BOTH this pin and "
+        "ci.yml together when adding lane tests"
     )
     assert "pytest -m render_env -q" in run, "the render-env step must actually run the lane"
+    # Issue 478 leg 3: the reframe_seats test hard-asserts a working MediaPipe
+    # detector, so the step must provision the stack — image-pinned installs
+    # (with the Dockerfile's contrib force-reinstall, so contrib owns cv2), the
+    # pinned hub model, and the env var pointing at it. All hard: no fallback.
+    assert "pip install -r requirements-image.txt" in run, (
+        "the render-env step must install requirements-image.txt (mediapipe)"
+    )
+    assert "--force-reinstall --no-deps opencv-contrib-python==" in run, (
+        "contrib must be force-reinstalled LAST so it deterministically owns "
+        "the cv2 module path (same ordering as the Dockerfile)"
+    )
+    assert "blaze_face_short_range.tflite" in run and "wget -q -O" in run, (
+        "the render-env step must fetch the pinned BlazeFace hub model"
+    )
+    assert "MEDIAPIPE_FACE_MODEL_PATH=" in run, (
+        "the render-env step must export MEDIAPIPE_FACE_MODEL_PATH so the real "
+        "detector initializes (a missing model silently falls back to frame "
+        "center everywhere else — here it must FAIL)"
+    )
+    assert "||" not in run, (
+        "no soft-fallback anywhere in the render-env step — provisioning "
+        "failures must fail the lane"
+    )
+
+
+def test_nightly_runs_transcription_live_leg() -> None:
+    """The nightly workflow must actually run the transcription_live leg
+    (Issue 481) — the marker + addopts exclusion alone would leave the live
+    ASR test executing NOWHERE, the exact silent-empty-lane failure mode of
+    Issue 478. Pins the file path, the marker, the gate env var, and the
+    real secret."""
+    nightly = _load_workflow("llm-e2e-nightly.yml")
+    assert "tests/ingestion/test_transcription_live.py" in nightly, (
+        "llm-e2e-nightly.yml must run the transcription_live test file"
+    )
+    assert "-m transcription_live" in nightly.replace("\\\n", " ").replace("  ", " "), (
+        "the nightly must select the transcription_live marker explicitly"
+    )
+    assert 'RUN_TRANSCRIPTION_LIVE: "1"' in nightly, (
+        "the nightly must set RUN_TRANSCRIPTION_LIVE=1 — without it the live "
+        "test skips and the leg silently stops running"
+    )
+    assert "secrets.DEEPGRAM_API_KEY" in nightly, (
+        "the nightly must inject the real DEEPGRAM_API_KEY secret"
+    )
+
+
+def test_llm_nightly_runs_scoring_behavioral_lane() -> None:
+    """The nightly live-LLM workflow must run the Issue-476 scoring lane.
+
+    llm-e2e-nightly.yml hardcodes its pytest path; before Issue 476 it ran ONLY
+    tests/test_llm_live.py, so the clip scorer — the single decision-maker for
+    what ships and which principle it cites — had no behavioral gate anywhere.
+    This pin makes silently dropping the scoring lane from the nightly a CI
+    failure, the same pattern as the render-env and coverage pins above.
+    """
+    src = _load_workflow("llm-e2e-nightly.yml")
+    assert "tests/test_llm_live_scoring.py" in src, (
+        "llm-e2e-nightly.yml's pytest invocation must include "
+        "tests/test_llm_live_scoring.py — the Issue-476 scoring behavioral lane "
+        "(setup-vs-aftermath ordering, shape/principle/range, dna_score ordering) "
+        "runs nowhere else."
+    )
+    assert "tests/test_llm_live.py" in src, (
+        "llm-e2e-nightly.yml must keep tests/test_llm_live.py — adding the "
+        "scoring lane must not displace the Issue-319 feature-module lane."
+    )
+    assert "Scoring behavioral lane" in src, (
+        "llm-e2e-nightly.yml's step summary must include the '## Scoring "
+        "behavioral lane' section so the nightly posts the Issue-476 margins."
+    )
 
 
 def test_render_env_marker_excluded_from_default_lane() -> None:

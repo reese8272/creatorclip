@@ -236,7 +236,7 @@ describe('PersonalizationBand', () => {
     expect(bandText).not.toMatch(/\bviral\b|\bguarantee\b/)
   })
 
-  it('shows "Personalized" copy at/above threshold (active=true)', async () => {
+  it('shows "Personalized" copy past the threshold (active=true)', async () => {
     const personalization: PersonalizationStatus = {
       active: true, labels: 25, threshold: 20, weight: 0.25,
     }
@@ -245,7 +245,8 @@ describe('PersonalizationBand', () => {
     expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
     const band = screen.getByText(/Personalized to your feedback/i)
     expect(band).toBeInTheDocument()
-    expect(screen.getByText(/25 ratings collected/i)).toBeInTheDocument()
+    // "clips rated" — the post-dedup trained count, not raw rating events (474).
+    expect(screen.getByText(/25 clips rated/i)).toBeInTheDocument()
     // The band copy itself must not promise virality.
     const bandText = band.textContent?.toLowerCase() ?? ''
     expect(bandText).not.toMatch(/\bviral\b|\bguarantee\b/)

@@ -153,6 +153,15 @@ def test_clip_duration_falls_back_without_geometry():
     assert _clip_duration_s(clip) == 40.0
 
 
+def test_clip_origin_prefers_setup_start():
+    """Issue 475 — the ONE origin rule: `setup_start_s ?? start_s`, shared by
+    every clip-relative measurement (durations, lift geometry, fingerprint)."""
+    from clip_engine.edits import clip_origin_s
+
+    assert clip_origin_s(5.0, 12.0) == 5.0
+    assert clip_origin_s(None, 12.0) == 12.0
+
+
 def test_clip_response_exposes_delivered_duration_and_baked_flag(client):
     """GET /clips/{id} must carry the delivered duration and an explicit
     baked-edits flag so the UI can warn before a from-source re-render."""

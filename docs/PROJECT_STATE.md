@@ -4,10 +4,10 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-12/13 (latest) — Beta close-out W0–W4: L29 filed; Batches A+B+C DONE
+## 2026-08-12/13 (latest) — Beta close-out W0–W5: all five build waves DONE
 
 The full beta close-out plan (7 waves, L29 + open tail + drills + billing proof, with a concrete
-back-testing spine) was approved and started. W0–W4 so far:
+back-testing spine) was approved and started. W0–W5 so far:
 
 - **Audit deliverables merged** (PR #85): `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md`,
   Lane L29 (Issues 456–482) in `docs/issues.md`, plus the W0 preservation snapshot
@@ -62,6 +62,17 @@ back-testing spine) was approved and started. W0–W4 so far:
   post-trim geometry persisted (migration 0061) with honest re-render discard; the real-media
   render_env CI lane exists and fails-if-skipped; doctor.py probes through the app's own
   Stripe/R2 clients (OFF_COURSE L148 closed). Alembic head 0059→0061.
+
+- **W5 Batches D+E — Issues 472, 473, 474, 475, 476, 480, 481 + 478 leg 3 DONE**
+  (integration/w5-batch-d-e): skip no longer erases labels (acknowledged no-op + migration 0062
+  repairing masked history); retrain freshness watermark + the missing outcome-poller enqueue;
+  personalization honesty at the threshold boundary; training and efficacy share the literal
+  same query + origin helper; the LLM scorer finally has its harness (recorded goldens with
+  schema-hash pins + a code-graded nightly proven live 3/3 with margins +0.84–0.89); 480's
+  trained-model rerank eval; LibriSpeech timing fidelity + the degraded-transcript flag +
+  a live nightly ASR leg; reframe_seats through the real BlazeFace path (full-res re-freeze
+  queued for W6). Visual baselines regenerated via dispatch + PR #95 — Issues 424–426's owed
+  regeneration closed; main fully green on all 12 CI jobs.
 
 ## 2026-08-12 — Issue 453 SEV1 found and fixed; 451 + 452 closed
 

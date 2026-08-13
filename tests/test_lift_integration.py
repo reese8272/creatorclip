@@ -75,6 +75,10 @@ async def _seed_published_clip(
     *,
     performed_well: bool | None,
     score: float = 0.7,
+    setup_start_s: float | None = 10.0,
+    start_s: float = 10.0,
+    end_s: float = 40.0,
+    peak_s: float = 25.0,
 ) -> Clip:
     """Seed video → clip → publication(done) → outcome, mirroring the real path."""
     video = Video(
@@ -91,10 +95,10 @@ async def _seed_published_clip(
     clip = Clip(
         video_id=video.id,
         creator_id=creator_id,
-        start_s=10.0,
-        end_s=40.0,
-        peak_s=25.0,
-        setup_start_s=10.0,
+        start_s=start_s,
+        end_s=end_s,
+        peak_s=peak_s,
+        setup_start_s=setup_start_s,
         score=score,
         dna_match=0.6,
         format=ClipFormat.short,
@@ -171,6 +175,36 @@ async def test_lift_buckets_deferred_verdicts_separately(client, db_session):
         assert data["deferred_count"] == 1
         # Below the minimum, so counts only — no rate claim.
         assert data["rate"] is None
+    finally:
+        await _cleanup(db_session, creator.id)
+
+
+@pytest.mark.asyncio
+async def test_lift_geometry_uses_the_setup_origin(client, db_session):
+    """Issue 475(b) — every other surface measures clip-relative time from the
+    `setup_start_s ?? start_s` origin (the engine starts the clip at the setup).
+    The lift contrast must too: with setup_start_s=5 / start_s=12 / end_s=45 /
+    peak_s=30 the delivered clip is 40 s with a 25 s setup lead — not the 33/18
+    the raw start_s would claim."""
+    creator = await _seed_creator(db_session)
+    geometry = {"setup_start_s": 5.0, "start_s": 12.0, "end_s": 45.0, "peak_s": 30.0}
+    try:
+        # 3 winners + 3 losers so the contrast panel is emitted.
+        for verdict in (True, True, True, False, False, False):
+            await _seed_published_clip(db_session, creator.id, performed_well=verdict, **geometry)
+
+        resp = client.get("/creators/me/insights/lift", cookies=_auth_cookie(creator.id))
+        assert resp.status_code == 200, resp.text
+        contrast = resp.json()["contrast"]
+        assert contrast is not None
+
+        for group in ("winners", "underperformers"):
+            assert contrast[group]["median_duration_s"] == pytest.approx(40.0), (
+                "duration must be measured from the setup origin, not start_s"
+            )
+            assert contrast[group]["median_setup_lead_s"] == pytest.approx(25.0), (
+                "setup lead must be measured from the setup origin, not start_s"
+            )
     finally:
         await _cleanup(db_session, creator.id)
 

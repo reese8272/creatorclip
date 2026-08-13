@@ -1,0 +1,54 @@
+scenario: rerank_preference_flips_order
+description: >
+  Preference-rerank eval (Issue 480): a REAL trained preference model — fit via
+  the production preference.model.fit() on the deterministic 40-row label set
+  below (40 = 2x PERSONALIZATION_THRESHOLD_LABELS, so the LightGBM branch runs
+  and preference_weight() sits exactly at PREFERENCE_WEIGHT_CAP) — must FLIP the
+  DNA ordering when driven through the REAL rerank_with_preference. The creator's
+  own feedback history (thumbs-up on laughter/spike clips, thumbs-down on long
+  quiet ones) outweighs a 0.3 fit-score gap at the cap weight. Assertions are
+  ORDERINGS only, never float equality. Issue-465 contract also pinned: score is
+  never mutated, the blend lands in blended_score, survivor ranks are dense.
+
+# In the ranking/ subdir so the geometry scenario glob (scenarios/*.yaml) does not
+# load this — it has no timeline; it is exercised by
+# tests/preference/test_rerank_eval.py.
+
+# Deterministic, RNG-free label set: 20 positive rows (the creator upvoted
+# short, laughter/spike clips) + 20 negative rows (downvoted long, quiet ones).
+# dna_match is held CONSTANT across all rows so the trained model cannot lean on
+# the DNA feature — the flip must come from the behavioral features alone.
+label_set:
+  rows_per_class: 20
+  shared: {dna_match: 0.7}
+  positive:
+    {signal_density: 2.0, hook_energy: 1.2, silence_ratio: 0.05,
+     clip_duration_s: 30.0, setup_length_s: 8.0,
+     has_retention_spike: true, has_laughter: true}
+  negative:
+    {signal_density: 0.5, hook_energy: 0.2, silence_ratio: 0.40,
+     clip_duration_s: 70.0, setup_length_s: 25.0,
+     has_retention_spike: false, has_laughter: false}
+  # Per-row deterministic jitter added to the continuous features:
+  # row i gets +jitter_step * (i % rows_per_class).
+  jitter_step: 0.01
+
+clips:
+  - id: dna_leader          # best DNA/LLM fit, but matches the DOWNVOTED pattern
+    score: 0.9
+    dna_match: 0.9
+    features:
+      {signal_density: 0.5, hook_energy: 0.2, silence_ratio: 0.40,
+       clip_duration_s: 70.0, setup_length_s: 25.0,
+       has_retention_spike: false, has_laughter: false}
+  - id: feedback_favorite   # weaker fit, but matches the UPVOTED pattern
+    score: 0.6
+    dna_match: 0.55
+    features:
+      {signal_density: 2.0, hook_energy: 1.2, silence_ratio: 0.05,
+       clip_duration_s: 30.0, setup_length_s: 8.0,
+       has_retention_spike: true, has_laughter: true}
+
+expected:
+  dna_rank_order: [dna_leader, feedback_favorite]
+  reranked_order: [feedback_favorite, dna_leader]

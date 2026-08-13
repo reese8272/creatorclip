@@ -12,7 +12,6 @@ import asyncio
 import logging
 import math
 import uuid
-from functools import partial
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -23,7 +22,6 @@ from auth import get_current_creator
 from billing.ledger import check_positive_balance
 from billing.spend_guard import require_budget
 from clip_engine.edits import MIN_KEEP_SEGMENT_S
-from config import settings
 from db import get_session
 from flags import require_flag
 from limiter import RENDER_DAILY_LIMIT, creator_key, limiter
@@ -51,7 +49,9 @@ _KEEP_ACTIONS: frozenset[FeedbackAction] = frozenset(
 
 
 class FeedbackOut(BaseModel):
-    id: str
+    # `id` is None for `skip` (Issue 472): skip is acknowledged, never persisted,
+    # so there is no feedback row to identify.
+    id: str | None
     action: str
 
 
@@ -204,8 +204,23 @@ async def submit_feedback(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Record a feedback action for a clip."""
+    """Record a feedback action for a clip.
+
+    ``skip`` is the one action that is acknowledged but NOT recorded (Issue 472,
+    SEV1): on this surface it means "advance past this clip" — UI navigation —
+    while in the training partition a ``skip`` row is a RETRACTION that
+    supersedes the clip's latest real label and then drops out at the trainable
+    filter. The shipped Trim → Skip flow therefore silently erased keep labels
+    while the pile stayed ``kept``. Retraction remains available where it is
+    meant: ``PUT /clips/{id}/triage`` back to ``pending``.
+    """
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+
+    # Issue 472 — pure ack: no ClipFeedback row, no triage change, no retrain
+    # enqueue, no activation probe. 201 with id=None keeps the response shape
+    # stable for clients that fire-and-forget the POST.
+    if body.action is FeedbackAction.skip:
+        return {"id": None, "action": FeedbackAction.skip.value}
 
     # Issue 339 (timebase corrected, ready-pass W1): trim values are
     # CLIP-RELATIVE seconds over the rendered mp4 — origin is
@@ -244,11 +259,15 @@ async def submit_feedback(
     # Issue 444 — a rating IS a verdict, so the pile moves with it in the same
     # transaction. Deriving triage server-side rather than making the client
     # send both is what makes it structurally impossible for the rating and the
-    # pile to disagree. `skip` is absent from the map on purpose: skipping is
-    # not a verdict, so the clip keeps whatever state it had and stays in the
-    # queue. The reverse direction is NOT symmetric — PUT /clips/{id}/triage
-    # moves a clip between piles WITHOUT writing a label, which is what stops a
-    # restore-from-drop from poisoning the training set.
+    # pile to disagree. The invariant (pinned by the integration lane): a
+    # `kept`/`dropped` pile implies exactly one surviving matching-polarity
+    # label in the verdict partition; `pending` implies none. `skip` never
+    # reaches this point — it early-returns above without writing a row
+    # (Issue 472), so it can neither move the pile nor retract a label; the
+    # only retraction path is PUT /clips/{id}/triage back to `pending`, which
+    # records the `skip` row that wins the partition and then drops out. The
+    # reverse direction is NOT symmetric — PUT /clips/{id}/triage moves a clip
+    # between piles while writing the matching label in the same transaction.
     implied_triage = TRIAGE_BY_FEEDBACK_ACTION.get(body.action)
     if implied_triage is not None:
         clip.triage = implied_triage
@@ -285,9 +304,12 @@ async def submit_feedback(
         )
 
     # Retrain the creator's preference model so ranking adapts to this feedback.
-    # The task self-debounces (no-op without new trainable labels), so enqueuing
-    # on every feedback write is cheap. (Issue 60)
-    await _enqueue_retrain(creator.id)
+    # Shared debounced enqueue (worker.tasks.enqueue_retrain — Issue 473): the
+    # task self-debounces and the countdown coalesces bursts, so enqueuing on
+    # every feedback write is cheap. (Issue 60)
+    from worker.tasks import enqueue_retrain
+
+    await enqueue_retrain(creator.id)
 
     # Issue 371: tags/notes carry the "why" — feed the style distiller. Only
     # enqueued when substance exists; the task itself debounces + LLM-gates.
@@ -297,30 +319,6 @@ async def submit_feedback(
         await asyncio.to_thread(distill_style_prefs.delay, str(creator.id))
 
     return {"id": str(feedback.id), "action": feedback.action.value}
-
-
-async def _enqueue_retrain(creator_id: uuid.UUID) -> None:
-    """Queue a preference retrain, coalescing bursts (Issue 444).
-
-    The existing protections do NOT collapse a burst on their own: the
-    non-blocking advisory lock only drops *overlapping* tasks, and the
-    self-debounce checks for trainable rows newer than the last model — so after
-    task N commits a model, task N+1 does find a newer row and retrains. A
-    creator triaging 20 clips in a minute would otherwise pay 20 full model fits.
-    The countdown bunches them into one effective run.
-
-    Freshness cost is nil: the model is read only at generate/rerank time, never
-    in the request that wrote the label.
-    """
-    from worker.tasks import retrain_preference
-
-    await asyncio.to_thread(
-        partial(
-            retrain_preference.apply_async,
-            args=[str(creator_id)],
-            countdown=settings.PREFERENCE_RETRAIN_DEBOUNCE_S,
-        )
-    )
 
 
 @router.put("/{clip_id}/triage", response_model=TriageOut)
@@ -379,7 +377,9 @@ async def set_clip_triage(
             extra={"action": action.value},
         )
 
-    await _enqueue_retrain(creator.id)
+    from worker.tasks import enqueue_retrain
+
+    await enqueue_retrain(creator.id)
     return {"id": str(clip_id), "triage": body.triage.value}
 
 
