@@ -61,6 +61,38 @@ def test_build_signal_array_silence_lowers_signal():
     assert signal[idx] < 0.0
 
 
+def test_build_signal_array_overlapping_laughter_energy_capped():
+    """Issue 457: a sample under overlapping laughter + energy_spike contributes
+    the max of the two class weights, not their 3.5x sum — the loud reaction
+    must not out-peak the moment that caused it."""
+    timeline = {
+        "duration_s": 20.0,
+        "events": [
+            {"type": "laughter", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+            {"type": "energy_spike", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+        ],
+    }
+    _, signal = build_signal_array(timeline)
+    idx = int(11.0 / RESOLUTION_S)
+    assert signal[idx] == pytest.approx(2.0)  # max(2.0, 1.5), never 3.5
+
+
+def test_build_signal_array_retention_additive_over_capped_audio():
+    """Issue 457: the cross-class cap applies to audio classes only — retention
+    (ground truth) still adds on top of the capped laughter/energy value."""
+    timeline = {
+        "duration_s": 20.0,
+        "events": [
+            {"type": "laughter", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+            {"type": "energy_spike", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+            {"type": "retention_spike", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+        ],
+    }
+    _, signal = build_signal_array(timeline)
+    idx = int(11.0 / RESOLUTION_S)
+    assert signal[idx] == pytest.approx(5.0)  # max(2.0, 1.5) + 3.0
+
+
 def test_build_signal_array_unknown_event_type_ignored():
     timeline = {
         "duration_s": 10.0,

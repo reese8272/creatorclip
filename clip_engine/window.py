@@ -32,9 +32,12 @@ def build_signal_array(
     n = int(duration_s / resolution_s) + 1
     times = np.arange(n, dtype=float) * resolution_s
     signal = np.zeros(n)
+    laugh_arr = np.zeros(n)
+    energy_arr = np.zeros(n)
 
     for event in timeline.get("events", []):
-        weight = _WEIGHTS.get(event.get("type", ""), 0.0)
+        event_type = event.get("type", "")
+        weight = _WEIGHTS.get(event_type, 0.0)
         if weight == 0.0:
             continue
 
@@ -50,6 +53,20 @@ def build_signal_array(
         # stray negative magnitude from inverting a positive event's contribution.
         if i1 <= i0:
             continue
-        signal[i0:i1] += weight * max(0.0, value_scale)
+        contribution = weight * max(0.0, value_scale)
+        if event_type == "laughter":
+            laugh_arr[i0:i1] += contribution
+        elif event_type == "energy_spike":
+            energy_arr[i0:i1] += contribution
+        else:
+            signal[i0:i1] += contribution
+
+    # Defense-in-depth (Issue 457): laughter and energy are mutually exclusive
+    # at emission (ingestion/audio.py), but already-persisted timelines and
+    # hand-authored fixtures can still overlap the two classes. A sample under
+    # both contributes the STRONGER class, not the 3.5x sum — summing made the
+    # loud reaction (aftermath) the most peak-shaped thing in the timeline.
+    # Retention stays additive (ground truth); silence stays subtractive.
+    signal += np.maximum(laugh_arr, energy_arr)
 
     return times, signal

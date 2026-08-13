@@ -32,16 +32,42 @@ def wav_quiet(tmp_path):
 
 @pytest.fixture
 def wav_with_burst(tmp_path):
-    """3-second WAV: silent first second, loud burst middle, silent last second."""
+    """3-second WAV: near-silent first second, loud tone burst middle, near-silent last.
+
+    The quiet sections carry a tiny noise floor (below the -60 dBFS silence
+    gate) instead of exact digital zeros: real recordings always have one, and
+    near-silent noise holds the file's highest raw ZCR — with exact zeros the
+    pure tone became the per-file ZCR maximum and misread as laughter
+    (Issue 457 made laughter the stricter, winning class)."""
     import scipy.io.wavfile as wf
 
     sr = 16000
-    quiet = np.zeros(sr, dtype=np.float32)
+    rng = np.random.default_rng(7)
+    quiet = rng.uniform(-15, 15, sr).astype(np.float32) / 32767.0
     t = np.linspace(0, 1, sr)
     loud = np.sin(2 * np.pi * 440 * t).astype(np.float32)
     audio = np.concatenate([quiet, loud, quiet])
     audio_int16 = (audio / (np.abs(audio).max() + 1e-8) * 32767).astype(np.int16)
     path = tmp_path / "burst.wav"
+    wf.write(str(path), sr, audio_int16)
+    return path
+
+
+@pytest.fixture
+def wav_noise_burst(tmp_path):
+    """3-second WAV: silence, then a 1s full-scale white-noise burst, silence.
+
+    The burst satisfies BOTH detectors: rms_norm 1.0 >= 0.6 (energy) and
+    rms_norm >= 0.3 with zcr_norm ~1.0 >= 0.5 (laughter)."""
+    import scipy.io.wavfile as wf
+
+    sr = 16000
+    quiet = np.zeros(sr, dtype=np.float32)
+    rng = np.random.default_rng(42)
+    noise = rng.uniform(-1.0, 1.0, sr).astype(np.float32)
+    audio = np.concatenate([quiet, noise, quiet])
+    audio_int16 = (audio * 32767).astype(np.int16)
+    path = tmp_path / "noise_burst.wav"
     wf.write(str(path), sr, audio_int16)
     return path
 
@@ -117,6 +143,21 @@ def test_extract_audio_events_returns_lists(wav_quiet):
     assert isinstance(result["energy_spikes"], list)
     assert isinstance(result["silences"], list)
     assert isinstance(result["laughter"], list)
+
+
+def test_extract_audio_events_overlap_emits_laughter_only(wav_noise_burst):
+    """Issue 457: a frame passing BOTH the energy and laughter masks belongs to
+    ONE event class — laughter (the stricter detector: energy + spectral ZCR)
+    wins, and no energy_spike event overlaps a laughter event."""
+    result = extract_audio_events(wav_noise_burst)
+    assert len(result["laughter"]) >= 1
+    for spike in result["energy_spikes"]:
+        for laugh in result["laughter"]:
+            assert spike["end_s"] <= laugh["start_s"] or spike["start_s"] >= laugh["end_s"], (
+                f"energy_spike [{spike['start_s']:.2f}, {spike['end_s']:.2f}] overlaps "
+                f"laughter [{laugh['start_s']:.2f}, {laugh['end_s']:.2f}] — the same "
+                "samples were double-counted into two event classes"
+            )
 
 
 # ── build_signal_timeline ─────────────────────────────────────────────────────
