@@ -3169,19 +3169,30 @@ user can switch packs with no intervening navigation); a fresh UUID per click gu
 disabled button (regresses Issue 106 — a disabled button is a UI affordance, not a concurrency
 guarantee).
 
+**Status: CODE-COMPLETE 2026-08-12** — attempt-scoped `useRef` map + synchronous in-flight latch
+in `Pricing.tsx`; 409/502 `{code, message}` branches with scrubbed classification-field logging in
+`routers/billing.py`. Backend 51/51 billing tests, frontend 662/662, tsc/eslint clean. The two
+live boxes are proven structurally by tests; their live half rides the W0.6 real-purchase drill.
+
 **Acceptance**
-- [ ] A different pack clicked in the same tab starts checkout instead of erroring
-- [ ] A repeat purchase of the same pack gets a new, payable Session — not a consumed one
-- [ ] A double-click still issues exactly ONE `POST /billing/checkout` (Issue 106's guarantee),
-      pinned by a test
-- [ ] `routers/billing.py` maps `stripe.IdempotencyError` to 409 `checkout_conflict` and returns
-      the project's `{code, message}` detail shape on every branch; the client stops flattening
-      every failure into one sentence and tells the user nothing was charged
-- [ ] The Stripe failure log carries `error_class`/`stripe_type`/`stripe_code`/`stripe_request_id`
-      and **never** the idempotency key or `intent_id` (Stripe's own message quotes the key back)
-- [ ] The three lying comments are corrected
-- [ ] `frontend/src/pages/Pricing.test.tsx` exercises `buyPack` at all — today it does not, which
-      is why both 453 and 454 shipped
+- [x] A different pack clicked in the same tab starts checkout instead of erroring — each settled
+      attempt gets a fresh `intent_id` (pinned: cross-pack + same-pack test asserts 3 distinct
+      UUIDs); live confirmation rides the W0.6 purchase drill
+- [x] A repeat purchase of the same pack gets a new, payable Session — same test; the attempt key
+      is deleted on settle, so no key ever meets Stripe twice across attempts
+- [x] A double-click still issues exactly ONE `POST /billing/checkout` (Issue 106's guarantee),
+      pinned by a test — synchronous `inFlightRef` latch (state alone can't beat two clicks in one
+      tick), plus the shared per-attempt key as defense-in-depth
+- [x] `routers/billing.py` maps `stripe.IdempotencyError` to 409 `checkout_conflict` and returns
+      the project's `{code, message}` detail shape on every branch; the client shows a distinct
+      conflict message and says nothing was charged on both failure paths
+- [x] The Stripe failure log carries `error_class`/`stripe_type`/`stripe_code`/`stripe_request_id`
+      and **never** the idempotency key or `intent_id` — pinned by two caplog tests (one plants
+      the key in the exception message and asserts it never reaches the log)
+- [x] The three lying comments are corrected (`Pricing.tsx` intent comment, `stripe_client.py`
+      docstring, `routers/billing.py` `CheckoutRequest` comment)
+- [x] `frontend/src/pages/Pricing.test.tsx` exercises `buyPack` — five tests: happy path,
+      double-click, fresh-key-per-attempt, 409 conflict, generic failure + re-enable
 
 ### Issue 452: clip title and caption truncate in the focused review view
 

@@ -957,3 +957,103 @@ def test_create_checkout_session_tax_with_existing_customer_adds_customer_update
         )
 
     assert captured["params"].get("customer_update") == {"address": "auto"}
+
+
+# ── Issue 454: purchase-attempt-scoped intent — server half ───────────────────
+
+
+def test_checkout_maps_idempotency_error_to_409_checkout_conflict(monkeypatch, caplog):
+    """A replayed idempotency key with different params (the pre-454 client's
+    tab-scoped intent id) must surface as 409 {code: checkout_conflict}, not the
+    generic 502 — and the log line must carry classification fields only, never
+    the idempotency key (Stripe's own message quotes it back) or intent_id.
+    """
+    import stripe as stripe_sdk
+
+    from auth import get_current_creator
+    from config import settings as _settings
+    from main import app
+
+    monkeypatch.setattr(_settings, "STRIPE_SECRET_KEY", "sk_test_fake_key_for_test")
+    fake_creator = MagicMock(id=uuid.uuid4(), stripe_customer_id=None)
+    intent_id = "11111111-1111-4111-8111-111111111111"
+    leaked_key = f"checkout:{fake_creator.id}:{intent_id}"
+
+    def _raise_idem(*args, **kwargs):
+        raise stripe_sdk.IdempotencyError(
+            f"Keys for idempotent requests can only be used with the same "
+            f"parameters they were first used with. (key: {leaked_key})",
+            headers={"request-id": "req_test_454"},
+        )
+
+    monkeypatch.setattr("routers.billing.create_checkout_session", _raise_idem)
+    app.dependency_overrides[get_current_creator] = override_current_creator(fake_creator)
+    try:
+        c = TestClient(app, raise_server_exceptions=False)
+        with caplog.at_level("WARNING", logger="routers.billing"):
+            response = c.post(
+                "/billing/checkout",
+                json={
+                    "pack_id": "creator",
+                    "success_url": "http://example.com/ok",
+                    "cancel_url": "http://example.com/no",
+                    "intent_id": intent_id,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "checkout_conflict"
+    assert "harged" in detail["message"], "user must be told nothing was charged"
+    log_text = caplog.text
+    assert "IdempotencyError" in log_text, "error_class must be logged"
+    assert "req_test_454" in log_text, "stripe_request_id must be logged"
+    assert leaked_key not in log_text, "the idempotency key must never be logged"
+    assert intent_id not in log_text, "the intent_id must never be logged"
+
+
+def test_checkout_stripe_error_502_scrubs_key_from_logs(monkeypatch, caplog):
+    """Generic StripeError → 502 with the {code, message} detail shape; the log
+    carries error_class/stripe_code/stripe_request_id and never str(exc)."""
+    import stripe as stripe_sdk
+
+    from auth import get_current_creator
+    from config import settings as _settings
+    from main import app
+
+    monkeypatch.setattr(_settings, "STRIPE_SECRET_KEY", "sk_test_fake_key_for_test")
+    fake_creator = MagicMock(id=uuid.uuid4(), stripe_customer_id=None)
+
+    def _raise_stripe(*args, **kwargs):
+        raise stripe_sdk.APIConnectionError(
+            "SECRET-MESSAGE-MUST-NOT-LOG", headers={"request-id": "req_test_502"}
+        )
+
+    monkeypatch.setattr("routers.billing.create_checkout_session", _raise_stripe)
+    app.dependency_overrides[get_current_creator] = override_current_creator(fake_creator)
+    try:
+        c = TestClient(app, raise_server_exceptions=False)
+        with caplog.at_level("ERROR", logger="routers.billing"):
+            response = c.post(
+                "/billing/checkout",
+                json={
+                    "pack_id": "creator",
+                    "success_url": "http://example.com/ok",
+                    "cancel_url": "http://example.com/no",
+                    "intent_id": "11111111-1111-4111-8111-111111111111",
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+
+    assert response.status_code == 502, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "checkout_failed"
+    assert "harged" in detail["message"]
+    assert "APIConnectionError" in caplog.text
+    assert "req_test_502" in caplog.text
+    assert "SECRET-MESSAGE-MUST-NOT-LOG" not in caplog.text, (
+        "StripeError messages can echo request details — never log them"
+    )

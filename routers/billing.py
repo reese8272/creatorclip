@@ -56,12 +56,14 @@ class CheckoutRequest(BaseModel):
     pack_id: str
     success_url: str
     cancel_url: str
-    # Client-supplied v4 UUID generated on /pricing page load and stored in
-    # sessionStorage; used as the Stripe Idempotency-Key. Double-click on the
-    # same page load dedupes to a single Checkout session within Stripe's 24h
-    # window. Page refresh produces a new UUID (correct semantics — user
-    # reconsidered, new attempt). Pydantic UUID4 validates v4 shape before
-    # the value reaches Stripe. (Issue 106)
+    # Client-supplied v4 UUID scoped to ONE purchase attempt (Issue 454; key
+    # derivation from Issue 106): the client mints it on the first click of an
+    # attempt and discards it when the request settles, so concurrent clicks in
+    # the same attempt share a Stripe Idempotency-Key while every new attempt
+    # (different pack, retry, repeat purchase) sends a fresh one — Stripe errors
+    # when a key is replayed with different params and replays the cached
+    # (already-consumed) Session when it is replayed with the same ones.
+    # Pydantic UUID4 validates v4 shape before the value reaches Stripe.
     intent_id: UUID4
 
 
@@ -158,9 +160,60 @@ async def checkout(
             body.cancel_url,
             str(body.intent_id),
         )
+    except stripe.IdempotencyError as exc:
+        # A stale attempt key was replayed with different params (Issue 454 —
+        # pre-fix clients reuse one tab-scoped id across attempts). Nothing was
+        # charged; the client should retry, which mints a fresh attempt id.
+        # Stripe's exception MESSAGE quotes the idempotency key back, so log
+        # classification fields only — never str(exc), the key, or intent_id.
+        logger.warning(
+            "billing checkout idempotency conflict error_class=%s stripe_type=%s "
+            "stripe_code=%s stripe_request_id=%s",
+            type(exc).__name__,
+            getattr(getattr(exc, "error", None), "type", None),
+            getattr(exc, "code", None),
+            getattr(exc, "request_id", None),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "checkout_conflict",
+                "message": (
+                    "This purchase attempt conflicted with an earlier one. "
+                    "Nothing was charged — please try again."
+                ),
+            },
+        ) from exc
+    except stripe.StripeError as exc:
+        # Same logging rule as above: StripeError messages can echo request
+        # details; the request_id is the safe handle for dashboard lookup.
+        logger.error(
+            "billing checkout failed error_class=%s stripe_type=%s "
+            "stripe_code=%s stripe_request_id=%s http_status=%s",
+            type(exc).__name__,
+            getattr(getattr(exc, "error", None), "type", None),
+            getattr(exc, "code", None),
+            getattr(exc, "request_id", None),
+            getattr(exc, "http_status", None),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "checkout_failed",
+                "message": "Could not create checkout session. Nothing was charged.",
+            },
+        ) from exc
     except Exception as exc:
-        logger.error("Stripe checkout creation failed: %s", exc)
-        raise HTTPException(status_code=502, detail="Could not create checkout session") from exc
+        # Non-Stripe failure (e.g. the session.url None guard). Our own message
+        # text is safe to log and carries no Stripe key material.
+        logger.error("billing checkout failed error_class=%s: %s", type(exc).__name__, exc)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "checkout_failed",
+                "message": "Could not create checkout session. Nothing was charged.",
+            },
+        ) from exc
     return CheckoutOut(checkout_url=url)
 
 

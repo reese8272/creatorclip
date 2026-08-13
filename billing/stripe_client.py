@@ -67,12 +67,14 @@ def create_checkout_session(
 ) -> str:
     """Create a Stripe Checkout session for a minute pack. Returns the hosted URL.
 
-    `intent_id` must be a v4 UUID generated client-side on /pricing page
-    load and persisted in sessionStorage. The Stripe Idempotency-Key is
-    derived server-side as ``checkout:{creator_id}:{intent_id}`` so
-    double-clicks or router retries within Stripe's 24h window collapse to a
-    single Checkout session, while a replay of the same intent_id under a
-    different creator can never surface another tenant's cached response.
+    `intent_id` must be a v4 UUID scoped to ONE purchase attempt (Issue 454):
+    the client mints it on the first click of an attempt and discards it when
+    the request settles — never persisted, never reused across attempts. The
+    Stripe Idempotency-Key is derived server-side as
+    ``checkout:{creator_id}:{intent_id}`` so double-clicks or router retries
+    within one attempt collapse to a single Checkout session, while a replay
+    of the same intent_id under a different creator can never surface another
+    tenant's cached response.
     """
     pack = PURCHASABLE_PACKS.get(pack_id)
     if pack is None:
