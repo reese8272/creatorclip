@@ -1,10 +1,10 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-08-12 · **Branch:** `docs/close-out-455` @ `41012fc` · working tree has
-**4 uncommitted audit-deliverable files** (see NEXT ACTION 1) · branch is **1 ahead of
-`origin/main`** (the open docs PR; its CI passed 2026-08-12 21:43).
-**Prod:** `https://autoclip.studio`, alembic **`0058 (head)`** — no migrations this session.
-The previously-in-flight `c138e93` deploy **landed** (Deploy to production run: success, 21:45 UTC).
+**Last updated:** 2026-08-13 · **Branch:** `main` @ `9da18a9` · working tree clean.
+**Prod:** `https://autoclip.studio`, alembic **`0062 (head)`** — deploy for `9da18a9` succeeded 14:00 UTC.
+**Remote branches: `main` + `staging` only, and `main == staging == 9da18a9`.**
+**Branch protection is now ENFORCED on both** (8 required checks, linear history, no force-push) —
+direct pushes to `main` are no longer the way; open a PR.
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source
 > of truth.
@@ -13,41 +13,41 @@ The previously-in-flight `c138e93` deploy **landed** (Deploy to production run: 
 
 ## CURRENT FOCUS
 
-**A full clipping-integrity audit was completed and filed as Lane L29 (Issues 456–482) — the next
-session's job is to BUILD those fixes, starting with the five SEV1s.** The audit was
-assessment-only: zero production code changed; every filed finding survived adversarial
-verification plus hand adjudication (repros rerun) of all SEV1s.
+**Lane L29 (the clipping-integrity audit, Issues 456–482) is BUILT and merged** — PRs #85–#98
+landed the whole lane including all five SEV1s. The 2026-08-13 session that followed was a
+branch/CI reconciliation, not feature work.
 
-**Read these two files before writing any code:**
-1. `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md` — verdicts, evidence, the 88-row
-   disposition table (what was confirmed / refuted / already-tracked / deliberately-accepted).
-2. `docs/issues.md` **Lane L29** — 27 self-contained issue bodies with evidence, root cause,
-   fix direction, and acceptance boxes. Repro details are embedded in the issue bodies
-   (the audit session's scratchpad scripts are ephemeral and already gone).
+**What that session established (do not re-derive):**
+- The six lingering `fix/issue-*` branches were **already fully absorbed into `main`** via the
+  squash-merged integration branches (PRs #92, #93). Verified line-by-line; every residual
+  difference was `main` being *ahead*. All six are deleted — do not resurrect them.
+- `main`'s tip was gated for the first time (full 12-job CI dispatch, all green).
+
+**Three real CI defects were found and fixed — each was a gate that looked green but was not
+doing its job:**
+1. **PR #99** — `scripts/ci_local.sh` ran `pytest -m "not integration"`. A CLI `-m` *replaces*
+   `pytest.ini`'s `addopts` `-m` instead of intersecting, so the pre-push hook re-selected
+   `render_env`/`llm_live`/`transcription_live` and failed on every dev box. `--no-verify` hid it.
+   **Always invoke pytest bare.**
+2. **PR #100** — the staging drills' `-m scripts.drills` invocation was unpinned and `drills.py`
+   had no `sys.path` guard, so `scripts/flags.py` could shadow root `flags.py` again.
+3. **PR #101** — `eval/clip-quality` posted to `context.sha`, which on a `pull_request` event is
+   the **merge** commit, not the head commit branch protection reads. Issue 265 built that status
+   *specifically* so protection could require it, and it never could. Enabling the documented
+   ruleset before this fix would have deadlocked every PR.
+
+Root causes for 1 and 3 are logged as **ISSUE-2026-08-13-01/-02** in `~/.claude/ISSUES_LOG.md`.
 
 ## → NEXT ACTION
 
-1. **Commit + push the audit deliverables on THIS branch** (they belong in the open docs PR):
-   `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md` (new), `docs/issues.md` (Lane L29 +
-   next-free→483), `docs/assessment/modules/clip_engine.md` + `preference.md` (cross-ref lines).
-   Ship via the PR — **never direct to `main`** (ci.yml has no push trigger; zero gates run).
-2. **Start Lane L29.** Recommended order (each issue still gets its Phase-1 CHECK per CLAUDE.md):
-   - **467** (Punch-in emits invalid ffmpeg — feature has never worked) and **472** (feedback
-     `skip` after "Save trim" erases the training label) — small, surgical, highest
-     user-harm-to-effort ratio.
-   - **479** (CI per-module coverage floors + diff-cover have NEVER run — `run_layer0.py:527`
-     deletes `_coverage.xml` between ci.yml's two invocations) — one-line-ish fix, restores two
-     supposedly-active gates for every subsequent PR. Do it early so the rest of the lane is
-     actually gated.
-   - **456** (backward snap can ship the peak outside the clip) and **466** (overlay-band sampler
-     broken on >~500 s sources) — the two big engine SEV1s; need real CHECK phases.
-   - **476** (LLM scorer evaluated nowhere) — largest design surface; research eval patterns first.
-3. **Issue 448's live drill window expires 2026-08-13 19:23 UTC** (source purge). Given Issue 466
-   (the sampler the drill depends on is broken on this 1617 s source), letting it lapse is now the
-   defensible default — the owner already deferred it once. Decide, don't drift.
-4. **Billing live-proof is still owed** (carried from the previous handoff): buy the smallest pack
+1. **Pick up the product roadmap** — L29 is closed; consult `docs/issues.md` for the next lane and
+   `docs/GO_LIVE.md` for the two-stage go/no-go scorecard. Each issue still gets its Phase-1 CHECK.
+2. **Issue 448's live drill window expired 2026-08-13 19:23 UTC** (source purge) — it was already
+   the defensible default to let it lapse (the sampler it depended on was the Issue 466 SEV1, now
+   fixed). Confirm it is closed out rather than silently carried.
+3. **Billing live-proof is still owed** (carried from the previous handoff): buy the smallest pack
    on prod for real; minutes must credit; `docs/GO_LIVE.md` billing gate stays **RED** until then.
-   Expect Issue 454 (tab-scoped intent id) on a second Buy click — filed, not built.
+   Issue 454 (tab-scoped intent id) shipped in PR #88, so a second Buy click should now work.
 
 ### Local gate incantations
 
@@ -61,7 +61,9 @@ redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
 # frontend: run from frontend/ — npx vitest run; AND `npm run build` (tsc -b type-checks TESTS;
 #           `npx tsc --noEmit` does NOT and has lied before)
 # Layer 0:  PATH="$PWD/.venv/bin:$PATH" .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py
-# eval:     any clip_engine/ change → tests/test_clip_engine.py (SCENARIO_FLOOR=23, 24+1 fixtures)
+# eval:     any clip_engine/ change → tests/test_clip_engine.py (SCENARIO_FLOOR=31, 32 fixtures)
+# NOTE: the pre-push hook (.githooks/pre-push → scripts/ci_local.sh --fast) runs most of the
+#       above automatically on every push; core.hooksPath is set to .githooks.
 ```
 
 ---
