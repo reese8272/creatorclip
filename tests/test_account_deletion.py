@@ -71,7 +71,7 @@ def test_delete_account_returns_204(client):
 # ── Storage purge ─────────────────────────────────────────────────────────────
 
 
-def test_delete_account_purges_source_and_clips_prefixes(client):
+def test_delete_account_purges_creator_scoped_prefixes_and_enumerates_renders(client):
     creator = _make_creator()
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session()
@@ -82,9 +82,13 @@ def test_delete_account_purges_source_and_clips_prefixes(client):
         purged.append(prefix)
         return 0
 
+    enumerated = AsyncMock(return_value={f"s3://media/clips/{uuid.uuid4()}.mp4"})
+    deleted_uris: list[str] = []
     try:
         with (
             patch("worker.storage.delete_prefix", side_effect=fake_delete_prefix),
+            patch("worker.storage.delete_file", side_effect=deleted_uris.append),
+            patch("worker.erasure.candidate_keys_for_creator", enumerated),
             patch("routers.auth.httpx.AsyncClient"),
         ):
             client.delete("/auth/me", cookies=_session_cookie_for(creator))
@@ -92,14 +96,19 @@ def test_delete_account_purges_source_and_clips_prefixes(client):
         app.dependency_overrides.clear()
 
     assert any(f"source/{creator.id}/" in p for p in purged)
-    assert any(f"clips/{creator.id}/" in p for p in purged)
-    # Issue 387 — posters are creator-scoped precisely so this sweep reaches
-    # them. (Clip RENDERS are not: they are written to clips/{clip_id}.mp4, so
-    # the clips prefix above matches nothing today — a known erasure gap that
-    # this new prefix deliberately does not replicate.)
+    # Issue 387 — posters are creator-scoped precisely so this sweep reaches them.
     assert any(f"posters/{creator.id}/" in p for p in purged)
     # Issue 392 — waveform peaks, creator-scoped for the same reason.
     assert any(f"peaks/{creator.id}/" in p for p in purged)
+    # Issue 471 — GDPR export bundles: the prefix catches superseded artifacts
+    # whose one-row-per-creator DB pointer was overwritten.
+    assert any(f"exports/{creator.id}/" in p for p in purged)
+    # Issues 446/471 — renders live at clips/{clip_id}.mp4 (NOT creator-scoped),
+    # so the old clips/{creator_id}/ prefix matched nothing. They are reached by
+    # per-URI enumeration now; the dead prefix must be gone.
+    assert not any(f"clips/{creator.id}/" in p for p in purged)
+    enumerated.assert_awaited_once()
+    assert deleted_uris == list(enumerated.return_value)
 
 
 def test_delete_account_continues_if_storage_purge_fails(client):

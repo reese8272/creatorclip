@@ -3,12 +3,14 @@ import logging
 import re
 import tempfile
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +20,18 @@ from billing.ledger import check_balance_for_minutes, check_positive_balance, vi
 from config import settings
 from db import get_session
 from limiter import creator_key, limiter
-from models import Creator, IngestStatus, OnboardingState, Transcript, Video, VideoKind, VideoOrigin
+from models import (
+    Clip,
+    Creator,
+    IngestStatus,
+    OnboardingState,
+    Summary,
+    Transcript,
+    Video,
+    VideoKind,
+    VideoOrigin,
+)
+from worker.erasure import candidate_keys_for_video, purge_uris, summary_keys
 from routers._enqueue import stamp_stream_owner
 from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
@@ -72,6 +85,18 @@ class VideoListItemOut(BaseModel):
     # fetching the waveform and drawing the labelled flat track WITHOUT a
     # speculative 404 on every open.
     has_peaks: bool = False
+    # Issue 446 — the 72h source-retention window made visible per row.
+    # ``source_expires_at``: when the stored source will be purged (ingest_done_at
+    # + SOURCE_MEDIA_RETENTION_HOURS); None when there is no stored source or
+    # ingest hasn't completed. ``source_expired``: the explicit not-re-renderable
+    # signal — True once a previously-processed video's source is gone (today the
+    # only signal was a 409 ``source_expired`` at render time).
+    source_expires_at: str | None = None
+    source_expired: bool = False
+    # Issue 446 — soft-delete marker. None = active. Archived rows are hidden
+    # from every default surface; GET /videos?archived=true lists them for the
+    # restore affordance.
+    archived_at: str | None = None
 
 
 _TITLE_MAX_CHARS = 200
@@ -88,6 +113,15 @@ def _title_from_filename(filename: str | None) -> str | None:
 
 def _video_item(v: Video) -> dict:
     """One VideoListItemOut payload (shared by the list and PATCH responses)."""
+    # Issue 446: surface the retention clock instead of leaving the 409
+    # source_expired at render time as the only signal. Expiry only exists for
+    # a video that HAS stored source and finished ingest (the purge task gates
+    # on ingest_done_at — Issue 43); a linked/catalog row that never had source
+    # is "no source", not "expired".
+    source_expires_at: str | None = None
+    if v.source_uri is not None and v.ingest_done_at is not None:
+        expires = v.ingest_done_at + timedelta(hours=settings.SOURCE_MEDIA_RETENTION_HOURS)
+        source_expires_at = expires.isoformat()
     return {
         "id": str(v.id),
         "youtube_video_id": v.youtube_video_id,
@@ -102,6 +136,9 @@ def _video_item(v: Video) -> dict:
         "clippable": v.source_uri is not None,
         "has_poster": v.poster_uri is not None,
         "has_peaks": v.peaks_uri is not None,
+        "source_expires_at": source_expires_at,
+        "source_expired": v.source_uri is None and v.ingest_done_at is not None,
+        "archived_at": v.archived_at.isoformat() if v.archived_at is not None else None,
     }
 
 
@@ -274,10 +311,15 @@ def _validate_upload_key(key: str, creator_id: uuid.UUID) -> None:
 @limiter.limit("120/minute", key_func=creator_key)
 async def list_videos(
     request: Request,
+    archived: bool = False,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """List all videos for the current creator, newest first.
+
+    ``archived`` (Issue 446): the default view excludes archived rows —
+    archiving removes a video from the library everywhere. ``archived=true``
+    returns ONLY archived rows, for the restore/permanent-delete affordance.
 
     Excludes catalog-only rows (``origin == catalog``) — those are DNA/analytics
     references upserted by ``sync_video_catalog`` and have no stored media.
@@ -295,15 +337,24 @@ async def list_videos(
     """
     # Hard cap to prevent unbounded scans as creator libraries grow. (Issue 76)
     _LIST_LIMIT = 100
+    archived_filter = (
+        Video.archived_at.is_not(None) if archived else Video.archived_at.is_(None)
+    )
     result = await session.execute(
         select(Video)
-        .where(Video.creator_id == creator.id, Video.origin != VideoOrigin.catalog)
+        .where(
+            Video.creator_id == creator.id,
+            Video.origin != VideoOrigin.catalog,
+            archived_filter,
+        )
         .order_by(Video.created_at.desc())
         .limit(_LIST_LIMIT)
     )
     videos = list(result.scalars())
     items = [_video_item(v) for v in videos]
-    state = build_envelope_state(len(items))
+    # The archived view is a filter, never a first-run state — an empty result
+    # there must not render the guided onboarding hero.
+    state = build_envelope_state(len(items), is_filtered=archived)
     message: str | None = None
     next_action: NextActionOut | None = None
     if state == "empty_initial":
@@ -358,7 +409,13 @@ async def list_catalog(
     limit = max(1, min(limit, _CATALOG_PAGE_MAX))
     offset = max(0, offset)
     # Per-creator isolation enforced on BOTH the count and the page query.
-    base = select(Video).where(Video.creator_id == creator.id, Video.origin == VideoOrigin.catalog)
+    # archived_at IS NULL (Issue 446): an archived row leaves every surface,
+    # including the channel browser.
+    base = select(Video).where(
+        Video.creator_id == creator.id,
+        Video.origin == VideoOrigin.catalog,
+        Video.archived_at.is_(None),
+    )
     total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     result = await session.execute(
         base.order_by(Video.created_at.desc()).limit(limit).offset(offset)
@@ -401,6 +458,192 @@ async def patch_video(
     await session.commit()
     await session.refresh(video)
     return _video_item(video)
+
+
+# ── Archive / restore / permanent erase (Issue 446) ───────────────────────────
+
+
+class VideoArchiveOut(BaseModel):
+    """DELETE /videos/{id} — 200 with a body on BOTH first call and repeat
+    (RFC 9110 §9.3.5: DELETE is not required to be 204, and idempotent repeats
+    reporting the same end state is the friendlier contract for a retrying
+    client)."""
+
+    video_id: str
+    status: Literal["archived", "noop"]
+    archived_at: str
+
+
+class VideoErasedOut(BaseModel):
+    video_id: str
+    status: Literal["erased"]
+
+
+async def _video_clips(session: AsyncSession, video: Video, creator_id: uuid.UUID) -> list[Clip]:
+    return list(
+        (
+            await session.execute(
+                select(Clip).where(Clip.video_id == video.id, Clip.creator_id == creator_id)
+            )
+        ).scalars()
+    )
+
+
+@router.delete("/{video_id}", response_model=VideoArchiveOut)
+@limiter.limit("60/hour", key_func=creator_key)
+async def archive_video(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Archive a video: hide it from every surface and free its stored media.
+
+    NOT an erasure (models.py `archived_at` docstring): the video row, its
+    clips, and every `clip_feedback` row are PRESERVED — those are the
+    preference model's training labels. Posters + waveform peaks also survive
+    (owner default): they are the index-entry artifacts that let a creator
+    recognise an archived row in order to restore it. What IS purged: the
+    source video, extracted audio, and every clip render variant — enumerated
+    per-URI from the DB plus the deterministic constructed keys
+    (worker/erasure.py), never by prefix.
+
+    Purge posture copied from `_purge_stale_source_media_async`: mark first in
+    a short transaction, release the session during storage I/O, delete each
+    blob independently (log-and-continue — an Object-Lock refusal on `clips/`
+    per Issue 258 must not fail the archive), then null ONLY the pointers whose
+    blobs actually went away so a later sweep or erase can retry the rest.
+
+    Idempotent: repeating on an archived video is a 200 no-op.
+    """
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    if video.archived_at is not None:
+        return {
+            "video_id": str(video.id),
+            "status": "noop",
+            "archived_at": video.archived_at.isoformat(),
+        }
+
+    clips = await _video_clips(session, video, creator.id)
+    archived_at = datetime.now(UTC)
+    video.archived_at = archived_at
+
+    # Column→URI map captured BEFORE the purge, so success can be attributed
+    # back to exactly the pointer whose object was removed.
+    pointer_columns: list[tuple[Video | Clip, str]] = [(video, "source_uri"), (video, "audio_uri")]
+    for clip in clips:
+        pointer_columns += [(clip, "render_uri"), (clip, "cleaned_render_uri")]
+    uris = candidate_keys_for_video(video, clips, include_identity_artifacts=False)
+
+    # Short txn 1: the archive marker commits even if every delete below fails —
+    # the row leaves the library either way, and pointers stay for retry.
+    await session.commit()
+
+    purged = await purge_uris(uris)
+
+    # Short txn 2: null only the pointers whose blob deletion succeeded.
+    changed = False
+    for obj, attr in pointer_columns:
+        uri = getattr(obj, attr)
+        if uri is not None and uri in purged:
+            setattr(obj, attr, None)
+            changed = True
+    if changed:
+        await session.commit()
+
+    from observability import log_event
+
+    log_event(
+        "video_archived",
+        creator_id=str(creator.id),
+        video_id=str(video.id),
+        purged_objects=len(purged),
+    )
+    return {
+        "video_id": str(video.id),
+        "status": "archived",
+        "archived_at": archived_at.isoformat(),
+    }
+
+
+@router.post("/{video_id}/restore", response_model=VideoListItemOut)
+@limiter.limit("60/hour", key_func=creator_key)
+async def restore_video(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Un-archive a video. Idempotent — restoring an active video is a no-op.
+
+    Restore brings back the ROW, not the purged media: the video reappears in
+    the library with `source_expired` truthfully set, its clips intact, and its
+    poster/peaks still present (which is why they survive archive).
+    """
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    if video.archived_at is not None:
+        video.archived_at = None
+        await session.commit()
+
+        from observability import log_event
+
+        log_event("video_restored", creator_id=str(creator.id), video_id=str(video.id))
+    return _video_item(video)
+
+
+@router.post("/{video_id}/erase", response_model=VideoErasedOut)
+@limiter.limit("30/hour", key_func=creator_key)
+async def erase_video(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Permanently delete a video: ALL media (posters and peaks included this
+    time), the row, and — via FK cascade — its clips, their feedback labels,
+    edit documents, publications, and recap summaries. Unlike archive this DOES
+    remove training data; the UI wording must say so plainly.
+
+    Same purge posture as archive; the row deletion is a core DELETE so the
+    database FK cascades do the fan-out. A repeat call 404s (the row is gone),
+    which is the honest answer rather than a manufactured no-op.
+    """
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    clips = await _video_clips(session, video, creator.id)
+    summaries = list(
+        (
+            await session.execute(
+                select(Summary).where(
+                    Summary.video_id == video.id, Summary.creator_id == creator.id
+                )
+            )
+        ).scalars()
+    )
+
+    uris = candidate_keys_for_video(video, clips, include_identity_artifacts=True)
+    for summary in summaries:
+        uris |= summary_keys(summary)
+
+    # Release the request transaction before storage I/O (Issue 82b idiom).
+    await session.commit()
+    purged = await purge_uris(uris)
+
+    # Core DELETE — FK ON DELETE CASCADE removes clips/feedback/publications/
+    # edit-documents/summaries without the ORM lazy-loading each relationship.
+    await session.execute(
+        sa_delete(Video).where(Video.id == video.id, Video.creator_id == creator.id)
+    )
+    await session.commit()
+
+    from observability import log_event
+
+    log_event(
+        "video_erased",
+        creator_id=str(creator.id),
+        video_id=str(video_id),
+        purged_objects=len(purged),
+    )
+    return {"video_id": str(video_id), "status": "erased"}
 
 
 @router.post("/link", response_model=VideoLinkedOut)

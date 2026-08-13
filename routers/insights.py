@@ -709,7 +709,9 @@ async def get_analytics_summary(
             func.avg(VideoMetrics.engagement_rate).label("avg_eng"),
         )
         .join(VideoMetrics, VideoMetrics.video_id == Video.id)
-        .where(Video.creator_id == creator.id)
+        # archived_at IS NULL (Issue 446): archived videos leave the Dashboard/
+        # Profile analytics aggregates along with every other surface.
+        .where(Video.creator_id == creator.id, Video.archived_at.is_(None))
     )
     if cutoff is not None:
         stmt = stmt.where(Video.published_at >= cutoff)
