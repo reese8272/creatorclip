@@ -11,8 +11,10 @@ identical to what `camera_region._sample_gray_frames` returns.
 
 import glob
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import cv2
+import numpy as np
 import pytest
 
 from clip_engine.overlay_bands import (
@@ -290,6 +292,68 @@ def test_detect_returns_none_when_sampling_fails_or_is_too_short(monkeypatch) ->
     # Degenerate inputs are rejected before any sampling is attempted.
     assert ob.detect_overlay_spans(Path("unused.mp4"), 0.0, 1920, 1080) is None
     assert ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 0) is None
+
+
+def _synthetic_frame(band: bool) -> np.ndarray:
+    """54x32 gray frame; ``band`` paints 8 anomalously bright rows in the
+    lower region — enough to clear the scaled `_MIN_BRIGHT_ROWS_FRAC` gate."""
+    frame = np.full((54, 32), 60, np.uint8)
+    if band:
+        frame[42:50, :] = 200
+    return frame
+
+
+class _SeekClock:
+    """Stand-in for camera_region's ``time`` module — ``monotonic()`` under
+    test control so the sampling budget trips deterministically."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+def test_span_times_survive_dropped_frames_and_a_budget_cut(monkeypatch) -> None:
+    """Issue 466 defects 2+3: span times must come from real timestamps.
+
+    A 1000 s source with a banner at t=300-330 s, every 4th sample failing and
+    the budget exhausted at ~700 s of source time must still yield a span at
+    300-330 — and the stored document must say how far the scan actually got.
+    Before the fix, ``duration / len(stack)`` dilated the surviving indices
+    (the live repro mapped a real 300-330 s banner to ~606-668 s) and the
+    truncation was silent.
+    """
+    import clip_engine.camera_region as cr
+    import clip_engine.overlay_bands as ob
+
+    clock = _SeekClock()
+    monkeypatch.setattr(cr, "time", clock)
+    calls: list[float] = []
+
+    def _fake_run(cmd, **kwargs):
+        clock.now += 1.0  # one fake second per seek; timeout_s below caps the count
+        t = float(cmd[cmd.index("-ss") + 1])
+        calls.append(t)
+        if len(calls) % 4 == 0:
+            return MagicMock(returncode=1, stdout="", stderr="")
+        cv2.imwrite(cmd[-1], _synthetic_frame(300.0 <= t <= 330.0))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cr.subprocess, "run", _fake_run)
+
+    # 0.5 s cadence over 1000 s = 2000 samples; the fake clock stops the scan
+    # after 1400 seeks, i.e. at source time ~700 s.
+    doc = ob.detect_overlay_spans(Path("unused.mp4"), 1000.0, 1920, 1080, timeout_s=1400.0)
+
+    assert doc is not None
+    assert doc["version"] == OVERLAY_SPANS_VERSION
+    [span] = doc["spans"]
+    assert span["start_s"] == pytest.approx(300.0, abs=1.0)
+    assert span["end_s"] == pytest.approx(330.0, abs=1.0)
+    # Truncation is explicit, and the stored cadence is the REQUESTED one.
+    assert doc["scanned_until_s"] == pytest.approx(700.0, abs=1.0)
+    assert doc["sample_interval_s"] == pytest.approx(0.5)
 
 
 def test_detect_swallows_detector_errors(monkeypatch) -> None:
