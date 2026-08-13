@@ -325,6 +325,12 @@ def _live_redis(env: dict[str, str], secrets: list[str]) -> Result:
         return Result("redis ping", Status.FAIL, _scrub(str(exc), secrets))
 
 
+# L148 audit note (2026-08-13): _live_anthropic and _live_voyage construct the
+# same SDK clients the app uses (no custom transport in our code) — no bypass.
+# _live_deepgram probes raw REST while the app uses the pinned SDK; a full SDK
+# transcription probe costs money/time, so the REST reachability check is the
+# accepted trade-off (the words=True-class SDK regressions are covered by the
+# recorded-fixture tests, not by doctor).
 def _live_anthropic(env: dict[str, str], secrets: list[str]) -> Result:
     key = env.get("ANTHROPIC_API_KEY", "")
     if not key:
@@ -380,17 +386,13 @@ def _live_r2(env: dict[str, str], secrets: list[str]) -> Result:
     if not (account and bucket):
         return Result("r2 head_bucket", Status.SKIP, "R2 not fully configured")
     try:
-        import boto3
+        # L148 audit: probe through the app's own client factory rather than a
+        # parallel boto3 construction, so a misconfigured worker/storage._r2
+        # (the class of failure the Stripe probe missed) is what gets tested.
+        from worker.storage import _r2
 
-        client = boto3.client(
-            "s3",
-            endpoint_url=f"https://{account}.r2.cloudflarestorage.com",
-            aws_access_key_id=env.get("R2_ACCESS_KEY_ID", ""),
-            aws_secret_access_key=env.get("R2_SECRET_ACCESS_KEY", ""),
-            region_name="auto",
-        )
-        client.head_bucket(Bucket=bucket)
-        return Result("r2 head_bucket", Status.OK, f"bucket {bucket} reachable")
+        _r2().head_bucket(Bucket=bucket)
+        return Result("r2 head_bucket", Status.OK, f"bucket {bucket} reachable (app client)")
     except Exception as exc:  # noqa: BLE001
         return Result("r2 head_bucket", Status.FAIL, _scrub(str(exc), secrets))
 
@@ -400,11 +402,17 @@ def _live_stripe(env: dict[str, str], secrets: list[str]) -> Result:
     if not key:
         return Result("stripe auth", Status.SKIP, "no key")
     try:
-        import httpx
+        # OFF_COURSE 2026-08-12 (L148): a raw httpx.get here reported
+        # "stripe auth ok" through the entire 10-week Issue-453/455 outage,
+        # because the outage lived in OUR client's transport construction —
+        # which this probe never exercised. Probe through the app's actual
+        # module singleton (billing/stripe_client._STRIPE with its
+        # RequestsClient transport); checkout.sessions.list is read-only and
+        # free. A green line now means OUR billing path can reach Stripe.
+        from billing.stripe_client import _STRIPE
 
-        resp = httpx.get("https://api.stripe.com/v1/balance", auth=(key, ""), timeout=10)
-        resp.raise_for_status()
-        return Result("stripe auth", Status.OK, "balance ok")
+        _STRIPE.checkout.sessions.list({"limit": 1})
+        return Result("stripe auth", Status.OK, "checkout.sessions.list ok (app client)")
     except Exception as exc:  # noqa: BLE001
         return Result("stripe auth", Status.FAIL, _scrub(str(exc), secrets))
 
