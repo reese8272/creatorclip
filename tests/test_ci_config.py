@@ -427,11 +427,36 @@ def test_render_env_step_is_hard_and_guarded() -> None:
         "the render-env step must have NO `::warning` fallback — a missing "
         "ffmpeg must FAIL this lane, never soft-skip it (Issue 478)"
     )
-    assert "pytest -m render_env --collect-only -q | grep -c '::'" in run and "-ge 3" in run, (
-        "the render-env step must keep the collect-count floor (>= 3) so an "
-        "emptied lane fails the job instead of passing vacuously"
+    assert "pytest -m render_env --collect-only -q | grep -c '::'" in run and "-ge 7" in run, (
+        "the render-env step must keep the collect-count floor (>= 7: 3 ffmpeg "
+        "tests + 4 reframe_seats tests, Issue 478 leg 3) so an emptied lane "
+        "fails the job instead of passing vacuously — bump BOTH this pin and "
+        "ci.yml together when adding lane tests"
     )
     assert "pytest -m render_env -q" in run, "the render-env step must actually run the lane"
+    # Issue 478 leg 3: the reframe_seats test hard-asserts a working MediaPipe
+    # detector, so the step must provision the stack — image-pinned installs
+    # (with the Dockerfile's contrib force-reinstall, so contrib owns cv2), the
+    # pinned hub model, and the env var pointing at it. All hard: no fallback.
+    assert "pip install -r requirements-image.txt" in run, (
+        "the render-env step must install requirements-image.txt (mediapipe)"
+    )
+    assert "--force-reinstall --no-deps opencv-contrib-python==" in run, (
+        "contrib must be force-reinstalled LAST so it deterministically owns "
+        "the cv2 module path (same ordering as the Dockerfile)"
+    )
+    assert "blaze_face_short_range.tflite" in run and "wget -q -O" in run, (
+        "the render-env step must fetch the pinned BlazeFace hub model"
+    )
+    assert "MEDIAPIPE_FACE_MODEL_PATH=" in run, (
+        "the render-env step must export MEDIAPIPE_FACE_MODEL_PATH so the real "
+        "detector initializes (a missing model silently falls back to frame "
+        "center everywhere else — here it must FAIL)"
+    )
+    assert "||" not in run, (
+        "no soft-fallback anywhere in the render-env step — provisioning "
+        "failures must fail the lane"
+    )
 
 
 def test_nightly_runs_transcription_live_leg() -> None:
