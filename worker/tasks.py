@@ -2748,6 +2748,11 @@ async def _clean_clip_async(clip_id: str) -> None:
     ``cleaned_render_uri`` is already populated short-circuits without
     re-encoding.
     """
+    from clip_engine.edits import (
+        map_words_to_delivered,
+        parse_geometry,
+        playable_duration_s,
+    )
     from clip_engine.filler import (
         detect_cut_segments,
         invert_to_keep_ranges,
@@ -2779,7 +2784,16 @@ async def _clean_clip_async(clip_id: str) -> None:
             start_s = clip.start_s
             end_s = clip.end_s
             clip_origin_s = setup_start_s if setup_start_s is not None else start_s
-            clip_duration_s = end_s - clip_origin_s
+            # Issue 470: cut the video that actually exists — after a confirmed
+            # trim, render_uri is shorter than the source window and words must
+            # be projected onto its timeline before filler detection.
+            effective_segments = parse_geometry(clip.effective_geometry_jsonb)
+            clip_duration_s = playable_duration_s(
+                setup_start_s=setup_start_s,
+                start_s=start_s,
+                end_s=end_s,
+                effective_geometry=clip.effective_geometry_jsonb,
+            )
 
         async with db.tenant_session(creator_id) as session:
             transcript = await session.get(Transcript, video_id)
@@ -2804,6 +2818,8 @@ async def _clean_clip_async(clip_id: str) -> None:
                         "end": w_end - clip_origin_s,
                     }
                 )
+        if effective_segments is not None:
+            words_clip_relative = map_words_to_delivered(words_clip_relative, effective_segments)
 
         from config import settings as _s
 
@@ -2863,6 +2879,13 @@ async def _clean_clip_async(clip_id: str) -> None:
             clip = await session.get(Clip, uuid.UUID(clip_id))
             if clip:
                 clip.cleaned_render_uri = cleaned_uri
+                # Issue 470: the only durable record of what this artifact kept
+                # — the cut list exists nowhere else. Same commit as the URI so
+                # the two can never disagree; /clean/confirm promotes it to
+                # effective geometry inside its CAS transaction.
+                from clip_engine.edits import geometry_doc
+
+                clip.pending_geometry_jsonb = geometry_doc(keep_ranges)
                 await session.commit()
 
         logger.info("Clip %s cleaned → %s", clip_id, cleaned_uri)
@@ -2887,7 +2910,7 @@ async def _edit_clip_async(clip_id: str, cut_segments: list[list[float]]) -> Non
     Idempotent: a redelivered task whose ``cleaned_render_uri`` is already
     populated short-circuits without re-encoding.
     """
-    from clip_engine.edits import validate_user_cuts
+    from clip_engine.edits import playable_duration_s, validate_user_cuts
     from clip_engine.render import render_cleaned_clip_file
     from worker.progress import aemit
     from worker.storage import alocal_path, aupload_file
@@ -2911,11 +2934,15 @@ async def _edit_clip_async(clip_id: str, cut_segments: list[list[float]]) -> Non
             if not clip.render_uri:
                 raise ValueError(f"Clip {clip_id} has no render_uri — render before editing")
             source_uri = clip.render_uri
-            setup_start_s = clip.setup_start_s
-            start_s = clip.start_s
-            end_s = clip.end_s
-            clip_origin_s = setup_start_s if setup_start_s is not None else start_s
-            clip_duration_s = end_s - clip_origin_s
+            # Issue 470: validate cuts against the DELIVERED duration — after a
+            # confirmed trim, render_uri is shorter than end_s - origin and a
+            # keep range built from the stale window would overrun the file.
+            clip_duration_s = playable_duration_s(
+                setup_start_s=clip.setup_start_s,
+                start_s=clip.start_s,
+                end_s=clip.end_s,
+                effective_geometry=clip.effective_geometry_jsonb,
+            )
 
         # Defensive re-validation. The endpoint already validated; this guards
         # against a redelivery from a buggy older endpoint version.
@@ -2953,6 +2980,12 @@ async def _edit_clip_async(clip_id: str, cut_segments: list[list[float]]) -> Non
             clip = await session.get(Clip, uuid.UUID(clip_id))
             if clip:
                 clip.cleaned_render_uri = edited_uri
+                # Issue 470: durable record of what this artifact kept, in the
+                # same commit as the URI (the Issue-391 edit document is
+                # cleared at confirm, so it cannot serve as the record).
+                from clip_engine.edits import geometry_doc
+
+                clip.pending_geometry_jsonb = geometry_doc(edit.keep_ranges)
                 await session.commit()
 
         logger.info("Clip %s edited → %s", clip_id, edited_uri)

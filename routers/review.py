@@ -104,14 +104,24 @@ def _validate_trim_pair(s: float | None, e: float | None) -> None:
 
 
 def _clip_duration_s(clip: Clip) -> float:
-    """Duration of the rendered clip in CLIP-RELATIVE seconds.
+    """Duration of the DELIVERED render in CLIP-RELATIVE seconds.
 
-    Origin is ``setup_start_s`` when set, else ``start_s`` — the timebase
-    shared by /transcript, /cuts, /feedback and /trim-render. Both trim
-    routes derive their bounds from this one helper so they cannot drift.
+    The timebase shared by /transcript, /cuts, /feedback and /trim-render.
+    Both trim routes derive their bounds from this one helper so they cannot
+    drift. Issue 470: delegates to the shared geometry-aware helper — after a
+    confirmed trim/clean the delivered video is shorter than the source window
+    (origin ``setup_start_s`` ?? ``start_s``), and trim bounds validated
+    against the stale window would pass validation here and then overrun the
+    real file in the worker.
     """
-    origin = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
-    return clip.end_s - origin
+    from clip_engine.edits import playable_duration_s
+
+    return playable_duration_s(
+        setup_start_s=clip.setup_start_s,
+        start_s=clip.start_s,
+        end_s=clip.end_s,
+        effective_geometry=clip.effective_geometry_jsonb,
+    )
 
 
 class FeedbackRequest(BaseModel):
