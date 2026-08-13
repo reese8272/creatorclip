@@ -18,10 +18,9 @@ import pytest_asyncio
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from auth import SESSION_COOKIE, create_session_token, get_current_creator
+from auth import SESSION_COOKIE, create_session_token
 from config import settings
 from crypto import encrypt
-from db import get_session
 from main import app
 from models import (
     AudienceActivity,
@@ -53,7 +52,6 @@ from models import (
     VideoMetrics,
     YoutubeToken,
 )
-from tests._helpers import override_current_creator
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -290,8 +288,8 @@ async def test_delete_account_cascades_all_dependent_tables(
     creator = await _seed_full_creator(db_session)
     cid = creator.id
 
-    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _make_override_session(db_session)
+    # Real cookie auth (no override): erase_creator DELETES the Creator row, so
+    # injecting a pytest-session-attached instance raises 'already attached'.
 
     try:
         with patch(_STORAGE_PATH, return_value=0), patch(_HTTPX_PATH), TestClient(app) as client:
@@ -393,8 +391,8 @@ async def test_delete_account_purges_creator_prefixes_and_enumerated_uris(
         purged.append(prefix)
         return 0
 
-    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _make_override_session(db_session)
+    # Real cookie auth (no override): erase_creator DELETES the Creator row, so
+    # injecting a pytest-session-attached instance raises 'already attached'.
 
     try:
         with (
@@ -446,8 +444,8 @@ async def test_delete_account_succeeds_when_google_revoke_fails(
                 response=httpx.Response(500, request=req),
             )
 
-    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _make_override_session(db_session)
+    # Real cookie auth (no override): erase_creator DELETES the Creator row, so
+    # injecting a pytest-session-attached instance raises 'already attached'.
 
     try:
         with (
@@ -483,8 +481,8 @@ async def test_delete_account_succeeds_when_storage_purge_fails(
     creator = await _seed_full_creator(db_session)
     cid = creator.id
 
-    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _make_override_session(db_session)
+    # Real cookie auth (no override): erase_creator DELETES the Creator row, so
+    # injecting a pytest-session-attached instance raises 'already attached'.
 
     try:
         with (
