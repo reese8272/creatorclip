@@ -68,22 +68,6 @@ async def test_rerank_noop_below_threshold():
 
 
 @pytest.mark.asyncio
-async def test_rerank_blends_and_reorders_above_threshold():
-    from clip_engine.ranking import rerank_with_preference
-
-    a, b = _clip(0.9), _clip(0.1)
-    # weight = cap (0.5) at 2× threshold. pref flips the order: a→0.0, b→1.0.
-    stub = _StubScorer(label_count=2 * settings.PERSONALIZATION_THRESHOLD_LABELS, scores=[0.0, 1.0])
-    with patch("preference.train.load_latest", new=AsyncMock(return_value=stub)):
-        out = await rerank_with_preference([a, b], MagicMock(), MagicMock())
-
-    # blended: a = 0.5*0.9 + 0.5*0.0 = 0.45 ; b = 0.5*0.1 + 0.5*1.0 = 0.55 → b first
-    assert out[0] is b and out[0].rank == 1
-    assert out[1] is a and out[1].rank == 2
-    assert b.score == pytest.approx(0.55)
-
-
-@pytest.mark.asyncio
 async def test_rerank_noop_when_no_model():
     from clip_engine.ranking import rerank_with_preference
 
@@ -133,6 +117,114 @@ async def test_rerank_falls_back_to_dna_when_scorer_raises():
 
     # Scorer raised → DNA scores left untouched, original order preserved.
     assert [c.score for c in out] == [0.9, 0.1]
+
+
+# ── Issue 465: blended_score separation ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rerank_writes_blend_to_blended_score_and_never_touches_fit():
+    """Issue 465 — the persisted `score` is the immutable DNA/LLM fit composite.
+
+    The rerank writes the personalization blend to `blended_score` and orders by
+    it; `score` survives the rerank byte-identical so every fit reader (recap
+    candidates, proof-of-lift, chat tools, efficacy) stays uncontaminated.
+    """
+    from clip_engine.ranking import rerank_with_preference
+
+    a, b = _clip(0.9), _clip(0.1)
+    # weight = cap (0.5) at 2× threshold. pref flips the order: a→0.0, b→1.0.
+    stub = _StubScorer(label_count=2 * settings.PERSONALIZATION_THRESHOLD_LABELS, scores=[0.0, 1.0])
+    with patch("preference.train.load_latest", new=AsyncMock(return_value=stub)):
+        out = await rerank_with_preference([a, b], MagicMock(), MagicMock())
+
+    # fit composite untouched by the rerank
+    assert a.score == pytest.approx(0.9)
+    assert b.score == pytest.approx(0.1)
+    # the blend lives in blended_score: (1-w)*fit + w*pref
+    assert a.blended_score == pytest.approx(0.45)
+    assert b.blended_score == pytest.approx(0.55)
+    # rank order follows the BLENDED score
+    assert out[0] is b and out[0].rank == 1
+    assert out[1] is a and out[1].rank == 2
+
+
+@pytest.mark.asyncio
+async def test_rerank_below_threshold_leaves_blended_null():
+    """NULL blended_score means 'personalization never applied' — the honest
+    below-threshold fallback must not write one."""
+    from clip_engine.ranking import rerank_with_preference
+
+    clips = [_clip(0.9), _clip(0.1)]
+    stub = _StubScorer(label_count=settings.PERSONALIZATION_THRESHOLD_LABELS - 1, scores=[1.0, 0.0])
+    with patch("preference.train.load_latest", new=AsyncMock(return_value=stub)):
+        out = await rerank_with_preference(clips, MagicMock(), MagicMock())
+
+    assert [c.score for c in out] == [0.9, 0.1]
+    assert all(c.blended_score is None for c in out)
+
+
+@pytest.mark.asyncio
+async def test_efficacy_dna_composite_uncontaminated_after_rerank():
+    """Issue 465(c) — preference/efficacy.py ingests `clip.score` as
+    `dna_composite`, the fit the blend is built FROM. Before the fix the rerank
+    overwrote `clip.score` with the blend, so the harness scored the blend
+    against itself. After a rerank the exact value the loader reads
+    (`float(clip.score or 0.0)`) must still be the fit."""
+    from clip_engine.ranking import rerank_with_preference
+
+    a, b = _clip(0.8), _clip(0.2)
+    stub = _StubScorer(label_count=2 * settings.PERSONALIZATION_THRESHOLD_LABELS, scores=[0.1, 0.9])
+    with patch("preference.train.load_latest", new=AsyncMock(return_value=stub)):
+        await rerank_with_preference([a, b], MagicMock(), MagicMock())
+
+    assert float(a.score or 0.0) == pytest.approx(0.8)
+    assert float(b.score or 0.0) == pytest.approx(0.2)
+
+
+# ── Issue 465: reader map — downstream readers choose the FIT score ─────────────
+
+
+def test_clip_response_reads_fit_not_blended():
+    from models import ClipTriage, RenderStatus
+    from routers.clips import _clip_response
+
+    clip = MagicMock(spec=Clip)
+    clip.score = 0.42
+    clip.blended_score = 0.99  # personalization applied — must NOT surface here
+    clip.rank = 1
+    clip.signals_jsonb = {}
+    clip.style_preset = None
+    clip.render_status = RenderStatus.pending
+    clip.triage = ClipTriage.pending
+
+    assert _clip_response(clip)["score"] == 0.42
+
+
+def test_downstream_readers_never_read_blended_score():
+    """The Issue-465 reader map, pinned: recap candidates (create_summary),
+    clip-explain, proof-of-lift (route + _group_features), and the chat tools
+    all deliberately read the immutable fit `score`. A future switch to
+    blended_score must be an explicit, tested choice — this test makes an
+    accidental one fail."""
+    import inspect
+
+    import chat.tools as chat_tools
+    import preference.lift as lift
+    import routers.clips as clips_router
+    import routers.insights as insights_router
+
+    readers = {
+        "create_summary": inspect.getsource(clips_router.create_summary),
+        "get_clip_explanation": inspect.getsource(clips_router.get_clip_explanation),
+        "get_proof_of_lift": inspect.getsource(insights_router.get_proof_of_lift),
+        "_group_features": inspect.getsource(lift._group_features),
+        "_list_top_clips": inspect.getsource(chat_tools._list_top_clips),
+        "_get_clip_detail": inspect.getsource(chat_tools._get_clip_detail),
+    }
+    for name, src in readers.items():
+        assert "blended_score" not in src, f"{name} must read the fit score, not the blend"
+        assert ".score" in src, f"{name} no longer reads Clip.score — update the reader map"
 
 
 @pytest.mark.asyncio

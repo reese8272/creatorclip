@@ -323,15 +323,17 @@ def _blend_scores(
     Below the personalization threshold the weight is 0 → the blend reduces to the DNA
     composite (the honest production fallback).
     """
-    from preference.model import preference_weight
+    from preference.model import blend_scores, preference_weight
 
     scorer = _train_scorer(train, half_life_days=half_life_days)
     # scorer.label_count == fitted trainable labels — the same count production feeds
     # preference_weight (clip_engine/ranking.py), excluding eval-only rows.
     weight = preference_weight(scorer.label_count) if scorer is not None else 0.0
     if scorer is not None and weight > 0.0:
+        # The shared production blend (Issue 465) — never a hand copy, so the
+        # offline numbers measure the formula rerank_with_preference serves.
         return [
-            (1.0 - weight) * c.dna_composite + weight * scorer.predict_score(c.features)
+            blend_scores(c.dna_composite, scorer.predict_score(c.features), weight)
             for c in eval_clips
         ]
     return [c.dna_composite for c in eval_clips]
