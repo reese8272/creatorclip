@@ -141,6 +141,20 @@ async def test_append_reoffsets_once_on_rank_collision() -> None:
     assert [c.rank for c in clips] == [15, 16]  # re-derived offset, not 13/14
 
 
+async def test_append_writes_fit_score_and_null_blended() -> None:
+    """Issue 465 — append rows are uniform with the initial persist: `score` is
+    the fit composite from scoring and `blended_score` is NULL (personalization
+    never applied — append deliberately skips the preference rerank), so one
+    video never mixes blended ranks 1–12 with raw ranks 13+ on the same column."""
+    from clip_engine.ranking import append_ranked_clips
+
+    session = _append_session(max_ranks=[2], commit_effects=[None])
+    clips = await append_ranked_clips(session, uuid.uuid4(), uuid.uuid4(), _RANKED)
+
+    assert [c.score for c in clips] == [0.8, 0.7]  # fit, straight from the candidates
+    assert all(c.blended_score is None for c in clips)
+
+
 async def test_append_empty_ranked_is_noop() -> None:
     from clip_engine.ranking import append_ranked_clips
 
