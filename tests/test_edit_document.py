@@ -628,7 +628,11 @@ def test_clean_confirm_clears_the_document_and_returns_the_new_revision(client):
     clip = _render_clip(creator.id)
     clip.cleaned_render_uri = "clips/x_edit.mp4"
 
-    captured = _install(creator, clip, execute_after_owned=[_result_rows((4,))])
+    # Issue 468: the swap itself is now a compare-and-swap UPDATE (rowcount=1 =
+    # this request won), so the document clear is the THIRD statement.
+    captured = _install(
+        creator, clip, execute_after_owned=[MagicMock(rowcount=1), _result_rows((4,))]
+    )
     try:
         resp = client.post(f"/clips/{clip.id}/clean/confirm")
     finally:
@@ -638,8 +642,9 @@ def test_clean_confirm_clears_the_document_and_returns_the_new_revision(client):
     assert resp.json()["status"] == "swapped"
     assert resp.json()["edit_revision"] == 4
 
-    # The second statement is the document clear, and it must be an UPDATE.
-    assert "UPDATE clip_edit_documents" in str(captured[1]).replace("\n", " ")
+    assert "UPDATE clips" in str(captured[1]).replace("\n", " ")
+    # The statement after the CAS swap is the document clear — an UPDATE.
+    assert "UPDATE clip_edit_documents" in str(captured[2]).replace("\n", " ")
 
 
 def test_clean_discard_does_not_touch_the_document(client):

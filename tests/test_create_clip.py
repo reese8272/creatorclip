@@ -231,6 +231,7 @@ def test_list_clips_impressions_exclude_creator_selections(client):
         cl.suggested_hook = None
         cl.applied_description = None
         cl.style_preset = None
+        cl.downloaded_at = None  # Issue 447
         return cl
 
     engine_clip = _mock_clip(1, None)
@@ -243,7 +244,18 @@ def test_list_clips_impressions_exclude_creator_selections(client):
         s = AsyncMock()
         result = MagicMock()
         result.scalars.side_effect = lambda: iter(clips)  # fresh iter per call
-        s.execute = AsyncMock(return_value=result)
+
+        async def _execute(stmt, *a, **kw):
+            from models import ClipPublication
+
+            # Issue 447: the latest-publication aggregate returns no rows here.
+            if stmt.column_descriptions[0]["type"] is ClipPublication:
+                r = MagicMock()
+                r.scalars.return_value = []
+                return r
+            return result
+
+        s.execute = AsyncMock(side_effect=_execute)
         s.add_all = MagicMock(side_effect=lambda rows: captured.update(rows=rows))
         yield s
 

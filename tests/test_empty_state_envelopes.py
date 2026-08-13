@@ -107,6 +107,7 @@ def _mock_clip(creator_id, video_id):
     c.suggested_hook = None
     c.applied_description = None
     c.style_preset = None  # Issue 373: _clip_response derives `aspect` from it
+    c.downloaded_at = None  # Issue 447
     return c
 
 
@@ -221,7 +222,14 @@ def _clips_session(video, clips):
         pref_result = MagicMock()
         pref_result.first.return_value = None
 
-        session.execute = AsyncMock(side_effect=[owned_result(video), clips_result, pref_result])
+        effects = [owned_result(video), clips_result]
+        if clips:
+            # Issue 447: populated lists fetch the latest-publication aggregate.
+            pubs_result = MagicMock()
+            pubs_result.scalars.return_value = []
+            effects.append(pubs_result)
+        effects.append(pref_result)
+        session.execute = AsyncMock(side_effect=effects)
         yield session
 
     return _session

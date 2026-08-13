@@ -869,6 +869,8 @@ async def test_render_router_fails_open_on_redis_down(mocker):
     clip_stub = MagicMock(spec=Clip)
     clip_stub.creator_id = creator.id
     clip_stub.render_status = RenderStatus.pending
+    clip_stub.cleaned_render_uri = None  # Issue 468: no pending clean/edit
+    clip_stub.downloaded_at = None  # Issue 447
 
     fake_session = AsyncMock()
     fake_session.scalar = AsyncMock(return_value=100)  # balance check passes
@@ -965,6 +967,8 @@ async def test_render_router_uses_clip_id_as_stream_key(mocker):
     clip_stub = MagicMock(spec=Clip)
     clip_stub.creator_id = creator.id
     clip_stub.render_status = RenderStatus.pending
+    clip_stub.cleaned_render_uri = None  # Issue 468: no pending clean/edit
+    clip_stub.downloaded_at = None  # Issue 447
 
     fake_session = AsyncMock()
     fake_session.scalar = AsyncMock(return_value=100)  # check_positive_balance passes

@@ -31,6 +31,7 @@ from models import (
     ClipEditDocument,
     ClipFormat,
     ClipImpression,
+    ClipPublication,
     ClipTriage,
     Creator,
     CreatorStyle,
@@ -55,6 +56,19 @@ from youtube.ingest import probe_duration_s
 router = APIRouter(prefix="/videos", tags=["clips"])
 clips_router = APIRouter(prefix="/clips", tags=["clips"])
 logger = logging.getLogger(__name__)
+
+
+class ClipPublicationSummary(BaseModel):
+    """Latest-publication summary for the Keep-pile finish line (Issue 447).
+
+    A summary, not the full ClipPublication row: the pile chip needs the current
+    state ("Published" / "Scheduled for …" / the watch link), never the task id
+    or error internals — those stay on GET /clips/{id}/publications.
+    """
+
+    status: str
+    scheduled_at: datetime | None = None
+    youtube_video_id: str | None = None
 
 
 class ClipOut(BaseModel):
@@ -106,6 +120,15 @@ class ClipOut(BaseModel):
     # /clips/{id}/triage; distinct from the append-only feedback log, so moving
     # a clip between piles writes no training label.
     triage: str = "pending"
+    # Issue 447 — when a download of the CURRENT render was initiated
+    # (disposition=attachment only); cleared on re-render and on the
+    # /clean/confirm swap. NULL = never downloaded.
+    downloaded_at: datetime | None = None
+    # Issue 447 — newest ClipPublication summary. Populated on the LIST surface
+    # only (one aggregate query per list, never per-clip); other ClipOut
+    # producers return None and the full history stays on
+    # GET /clips/{id}/publications.
+    latest_publication: ClipPublicationSummary | None = None
 
 
 class PersonalizationStatus(BaseModel):
@@ -259,7 +282,7 @@ class ClipMetadataPatch(BaseModel):
         return v
 
 
-def _clip_response(clip: Clip) -> dict:
+def _clip_response(clip: Clip, publication: ClipPublication | None = None) -> dict:
     sj = clip.signals_jsonb or {}
     return {
         "id": str(clip.id),
@@ -286,6 +309,16 @@ def _clip_response(clip: Clip) -> dict:
         "has_poster": clip.poster_uri is not None,
         "has_crop_track": clip.reframe_track_jsonb is not None,
         "triage": clip.triage.value,
+        "downloaded_at": clip.downloaded_at,
+        "latest_publication": (
+            {
+                "status": publication.status.value,
+                "scheduled_at": publication.scheduled_at,
+                "youtube_video_id": publication.youtube_video_id,
+            }
+            if publication is not None
+            else None
+        ),
     }
 
 
@@ -758,6 +791,22 @@ async def list_clips(
     truncated = len(clips_raw) > _LIST_LIMIT
     clips = clips_raw[:_LIST_LIMIT]
 
+    # Latest publication per clip (Issue 447) — ONE aggregate query for the
+    # whole list (DISTINCT ON, newest created_at wins), never a per-clip lookup.
+    # Feeds the Keep pile's rendered → downloaded → published finish line.
+    latest_pub_by_clip: dict[uuid.UUID, ClipPublication] = {}
+    if clips:
+        pub_result = await session.execute(
+            select(ClipPublication)
+            .where(
+                ClipPublication.clip_id.in_([c.id for c in clips]),
+                ClipPublication.creator_id == creator.id,
+            )
+            .order_by(ClipPublication.clip_id, ClipPublication.created_at.desc())
+            .distinct(ClipPublication.clip_id)
+        )
+        latest_pub_by_clip = {p.clip_id: p for p in pub_result.scalars()}
+
     # Impression/position log (Issue 202): record what rank each clip was shown at,
     # and when, so later counterfactual/IPS evaluation is possible (it cannot be
     # reconstructed retroactively). Best-effort — a logging failure must never break
@@ -787,7 +836,7 @@ async def list_clips(
             await session.rollback()
             logger.warning("impression logging failed for video %s", video_id)
 
-    items = [_clip_response(c) for c in clips]
+    items = [_clip_response(c, publication=latest_pub_by_clip.get(c.id)) for c in clips]
     state = build_envelope_state(len(items))
     message: str | None = None
     next_action: dict | None = None
@@ -865,6 +914,20 @@ async def render_clip(
 
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
 
+    # Issue 468 — same conflict its /clean, /cuts and trim siblings already
+    # guard: a re-render fired while a cleaned/edited artifact is pending races
+    # /clean/confirm's render_uri swap (the worker can finish either side first
+    # and clobber or resurrect artifacts). Surface it so the UI can prompt to
+    # confirm or discard the pending version first.
+    if clip.cleaned_render_uri:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "pending_clean_or_edit",
+                "message": "Confirm or discard the pending cleaned/edited version first.",
+            },
+        )
+
     # Pre-check the source BEFORE enqueuing (OFF_COURSE 2026-07-20 / Issue 362):
     # past the retention purge the worker can only fail permanently, so the user
     # got a generic "Render failed" with no explanation. Mirrors the recap
@@ -934,9 +997,14 @@ async def render_clip(
     # watchable render instead of leaving the clip stripped with no task coming.
     reset_applied = clip.render_status == RenderStatus.done
     prior_render_uri = clip.render_uri
+    prior_downloaded_at = clip.downloaded_at
     if reset_applied:
         clip.render_status = RenderStatus.pending
         clip.render_uri = None
+        # Issue 447: the stamp describes the render being replaced — clear it in
+        # the same transaction so "downloaded" never refers to bytes the creator
+        # no longer has access to.
+        clip.downloaded_at = None
     await session.commit()
 
     from worker.tasks import render_clip as render_task
@@ -954,6 +1022,7 @@ async def render_clip(
         if reset_applied:
             clip.render_status = RenderStatus.done
             clip.render_uri = prior_render_uri
+            clip.downloaded_at = prior_downloaded_at
             await session.commit()
         logger.error("render enqueue failed for clip %s: %s", clip_id, exc)
         raise HTTPException(
@@ -1162,33 +1231,70 @@ async def clean_confirm(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Atomically swap the cleaned render into ``render_uri`` and clear
-    ``cleaned_render_uri``. The original mp4 falls under the existing R2
-    lifecycle prefix (no new cleanup code needed). Idempotent: if the swap
-    has already happened (``cleaned_render_uri`` is null) the endpoint
-    returns 200 with ``status="noop"`` so router-retry is safe (Issue 134).
+    ``cleaned_render_uri``. The replaced original mp4 is left in storage —
+    it does NOT fall under any lifecycle rule today; orphan cleanup is tracked
+    separately (Issue 446 sweep) and deliberately not attempted here.
+    Idempotent: if the swap has already happened (``cleaned_render_uri`` is
+    null) the endpoint returns 200 with ``status="noop"`` so router-retry is
+    safe (Issue 134).
+
+    Issue 468 — the swap is a compare-and-swap: one conditional UPDATE whose
+    WHERE re-checks ``cleaned_render_uri`` is still the value this request
+    read, so a concurrent confirm, discard, or freshly-landed clean makes this
+    request a rowcount-0 noop instead of a double swap. The row lock the CAS
+    takes is held until commit, so the ORM assignments below cannot interleave
+    with another writer.
 
     Issue 391 — the swap BAKES the edit into ``render_uri``, so the edit
     document is cleared in the same transaction. Leaving it populated would make
     the next export cut the same spans a second time, out of an already-shortened
     render. ``/clean/discard`` deliberately does not do this.
+
+    Issue 447 — the swap also clears ``downloaded_at``: the current render
+    changed, so a previous download no longer describes it.
     """
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
-    if not clip.cleaned_render_uri:
+    seen_cleaned_uri = clip.cleaned_render_uri
+    prior_render_uri = clip.render_uri
+    if not seen_cleaned_uri:
         return {
             "clip_id": str(clip_id),
-            "render_uri": clip.render_uri,
+            "render_uri": prior_render_uri,
             "cleaned_render_uri": None,
             "status": "noop",
         }
-    clip.render_uri = clip.cleaned_render_uri
+    cas_result = await session.execute(
+        update(Clip)
+        .where(
+            Clip.id == clip_id,
+            Clip.creator_id == creator.id,
+            Clip.cleaned_render_uri == seen_cleaned_uri,
+        )
+        .values(render_uri=seen_cleaned_uri, cleaned_render_uri=None, downloaded_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    if cas_result.rowcount == 0:
+        # Lost the race — another confirm/discard changed the pending artifact
+        # after this request read it. Nothing was swapped by this request, so
+        # the edit document must NOT be cleared either.
+        await session.rollback()
+        return {
+            "clip_id": str(clip_id),
+            "render_uri": prior_render_uri,
+            "cleaned_render_uri": None,
+            "status": "noop",
+        }
+    # Keep the identity map in step with the CAS (synchronize_session=False).
+    clip.render_uri = seen_cleaned_uri
     clip.cleaned_render_uri = None
+    clip.downloaded_at = None
     # Same transaction as the swap: a crash between the two must not leave a
     # render whose cuts are applied AND a document that still describes them.
     edit_revision = await _clear_edit_document(session, clip_id)
     await session.commit()
     return {
         "clip_id": str(clip_id),
-        "render_uri": clip.render_uri,
+        "render_uri": seen_cleaned_uri,
         "cleaned_render_uri": None,
         "status": "swapped",
         "edit_revision": edit_revision,
@@ -1212,14 +1318,48 @@ async def clean_discard(
     ``pending_clean_or_edit`` (Issue 364). Idempotent: if there is nothing
     pending, returns 200 with ``status="noop"``. The R2 artifact is purged
     best-effort after the DB commit — a storage failure must not roll back
-    or fail the request (mirrors the erasure precedent in ``routers/auth.py``)."""
+    or fail the request (mirrors the erasure precedent in ``routers/auth.py``).
+
+    Issue 468 — two delete guards:
+    - The clear is a compare-and-swap (``WHERE cleaned_render_uri = :seen``); a
+      rowcount-0 loss to a concurrent ``/clean/confirm`` returns noop WITHOUT
+      deleting — confirm may have just swapped that object into ``render_uri``.
+    - A SECOND clean of a confirmed clip re-writes the same
+      ``clips/{id}_clean.mp4`` key the first confirm swapped into
+      ``render_uri``, leaving ``cleaned_render_uri == render_uri``; deleting it
+      would kill the live render, so the purge is skipped for that state.
+    """
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
-    if not clip.cleaned_render_uri:
+    stale_uri = clip.cleaned_render_uri
+    live_render_uri = clip.render_uri
+    if not stale_uri:
         return {"clip_id": str(clip_id), "status": "noop"}
 
-    stale_uri = clip.cleaned_render_uri
+    cas_result = await session.execute(
+        update(Clip)
+        .where(
+            Clip.id == clip_id,
+            Clip.creator_id == creator.id,
+            Clip.cleaned_render_uri == stale_uri,
+        )
+        .values(cleaned_render_uri=None)
+        .execution_options(synchronize_session=False)
+    )
+    if cas_result.rowcount == 0:
+        await session.rollback()
+        return {"clip_id": str(clip_id), "status": "noop"}
+    # Keep the identity map in step with the CAS (synchronize_session=False).
     clip.cleaned_render_uri = None
     await session.commit()
+
+    if stale_uri == live_render_uri:
+        logger.warning(
+            "clean discard: pending artifact %s IS the live render for clip %s — "
+            "skipping storage purge",
+            stale_uri,
+            clip_id,
+        )
+        return {"clip_id": str(clip_id), "status": "discarded"}
 
     from worker.storage import adelete_file
 
@@ -1901,6 +2041,11 @@ async def download_clip(
     filler-removed re-render when present. Per-creator isolation: another
     creator's clip — or a missing id — returns 404, never the bytes.
 
+    Issue 447 — an ``attachment`` serve of the CURRENT render stamps
+    ``downloaded_at`` before the response is issued. ``inline`` (watching in
+    the app) and ``variant=cleaned`` (previewing a pending artifact) never
+    stamp — neither means "the creator has the current render on disk".
+
     Prod (R2): 302-redirects to a short-lived presigned GET URL so bandwidth is
     offloaded to object storage. Dev (local disk): streams the file directly.
     """
@@ -1914,18 +2059,26 @@ async def download_clip(
     filename = f"clip-{clip_id}{suffix}.mp4"
 
     presigned = presigned_download_url(uri, filename=filename, disposition=disposition)
+    response: RedirectResponse | FileResponse
     if presigned is not None:
-        return RedirectResponse(url=presigned, status_code=302)
-    # Local-disk dev: stream the file straight from disk.
-    path = Path(uri)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Clip file not found")
-    return FileResponse(
-        path,
-        media_type="video/mp4",
-        filename=filename,
-        content_disposition_type=disposition,
-    )
+        response = RedirectResponse(url=presigned, status_code=302)
+    else:
+        # Local-disk dev: stream the file straight from disk.
+        path = Path(uri)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Clip file not found")
+        response = FileResponse(
+            path,
+            media_type="video/mp4",
+            filename=filename,
+            content_disposition_type=disposition,
+        )
+
+    if disposition == "attachment" and variant == "original":
+        clip.downloaded_at = datetime.now(UTC)
+        await session.commit()
+
+    return response
 
 
 # ── Issue 322: Per-clip Short-title + hook-rewrite suggestions ────────────────
