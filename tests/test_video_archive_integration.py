@@ -12,6 +12,12 @@ Covers, against the real schema and FK graph:
   key (renders, extracted audio, posters, peaks, recap render, export bundle)
 
 Run with: .venv/bin/python -m pytest tests/test_video_archive_integration.py -m integration -q
+
+Harness rule (same as tests/test_billing_integration.py): do NOT override
+get_session — TestClient runs handlers on its own event loop, and sharing the
+pytest-loop AsyncSession across loops raises MissingGreenlet/DetachedInstance.
+Seeds COMMIT so the app's own per-request sessions see them; verification
+re-reads through db_session after rollback + expunge_all.
 """
 
 import uuid
@@ -27,7 +33,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from auth import SESSION_COOKIE, create_session_token, get_current_creator
 from config import settings
-from db import get_session
 from main import app
 from models import (
     Clip,
@@ -61,13 +66,6 @@ async def db_session():
 
 def _cookie_for(creator: Creator) -> dict:
     return {SESSION_COOKIE: create_session_token(creator.id)}
-
-
-def _override_session(session: AsyncSession):
-    async def _dep():
-        yield session
-
-    return _dep
 
 
 async def _seed_creator(session: AsyncSession) -> Creator:
@@ -152,7 +150,6 @@ async def test_archive_end_to_end_preserves_training_data_and_identity_artifacts
     deleted: list[str] = []
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _override_session(db_session)
     try:
         with (
             patch("worker.storage.delete_file", side_effect=deleted.append),
@@ -197,7 +194,6 @@ async def test_restore_round_trip_returns_video_to_the_library(db_session: Async
     video, _ = await _seed_video(db_session, creator, archived=True)
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _override_session(db_session)
     try:
         with TestClient(app) as client:
             listed = client.get("/videos", cookies=_cookie_for(creator)).json()
@@ -234,7 +230,6 @@ async def test_archived_video_disappears_from_list_and_counts_and_analytics(
     )
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _override_session(db_session)
     try:
         with TestClient(app) as client:
             cookies = _cookie_for(creator)
@@ -264,7 +259,6 @@ async def test_archived_catalog_row_disappears_from_channel_browser(db_session: 
     )
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _override_session(db_session)
     try:
         with TestClient(app) as client:
             body = client.get("/videos/catalog", cookies=_cookie_for(creator)).json()
@@ -403,7 +397,6 @@ async def test_erase_video_removes_rows_and_all_media(db_session: AsyncSession):
 
     deleted: list[str] = []
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _override_session(db_session)
     try:
         with (
             patch("worker.storage.delete_file", side_effect=deleted.append),
@@ -464,8 +457,10 @@ async def test_erase_creator_delete_set_covers_every_write_site(db_session: Asyn
 
     deleted: list[str] = []
     prefixes: list[str] = []
-    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
-    app.dependency_overrides[get_session] = _override_session(db_session)
+    # No get_current_creator override here: erase_creator DELETES the Creator
+    # row, and injecting the pytest-session-attached instance makes the request
+    # session raise "already attached to session '1'". The signed cookie drives
+    # the REAL auth dependency, which loads its own instance per request.
     try:
         with (
             patch("worker.storage.delete_file", side_effect=deleted.append),
@@ -474,7 +469,7 @@ async def test_erase_creator_delete_set_covers_every_write_site(db_session: Asyn
             TestClient(app) as client,
         ):
             resp = client.delete("/auth/me", cookies=_cookie_for(creator))
-            assert resp.status_code == 204
+            assert resp.status_code == 204, resp.text
     finally:
         app.dependency_overrides.clear()
 
