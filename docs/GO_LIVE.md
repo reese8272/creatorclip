@@ -88,11 +88,15 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Does no surface promise virality; is every score estimate-framed? | None — structural test runs in every suite | build | GREEN | `tests/test_compliance_no_virality.py` + `tests/test_static.py` pins; FitBadge tiers (#192) |
 | Is billing wired for the beta (minute packs, verified webhooks, reconciliation)? | **Issue 453 fix must land, then a REAL purchase must settle on prod** | build | **RED** (was GREEN — reverted 2026-08-12) | Issue 453: `HTTPXClient(allow_sync_methods=False)` made every sync Stripe call raise from 2026-05-31 to 2026-08-12. Prod log shows 0 `billing checkout_session` lines in 168 h and `reconcile_stripe_ledger` raising every beat. The prior GREEN rested on `doctor.py --full` (2026-07-29), which probes Stripe with a raw `httpx.get` and never exercises our client — see `docs/OFF_COURSE_BUGS.md` 2026-08-12. **No gate returns to GREEN here on code alone; it needs a settled purchase.** |
 
-**Stage A totals:** 32 gates — **15 GREEN · 6 CODE-GREEN · 10 OPEN · 1 RED** (updated 2026-08-12:
-billing flipped GREEN → RED on Issue 453, a 10-week total checkout outage; 2026-08-11:
-#26 flipped GREEN with live evidence; 2026-07-29: #24 + #25). The honest distance-to-beta
-number is **16 gates not fully green**, and the last hard blocker for inviting the first
-friends is now **#28 (friend smoke)** alone.
+**Stage A totals:** 33 gates — **18 GREEN · 4 CODE-GREEN · 10 OPEN · 1 RED** (recounted from the
+rows themselves 2026-08-13; the previous line said 32/15/6/10/1 and had drifted). Changed
+2026-08-13: #284 flags-flip and #290 spend-trip went CODE-GREEN → GREEN, and the W1/W2
+staging-verify residuals row went OPEN → GREEN, all on staging-drills run 31727428785.
+Earlier: 2026-08-12 billing flipped GREEN → RED on Issue 453, a 10-week total checkout
+outage; 2026-08-11 #26 flipped GREEN with live evidence; 2026-07-29 #24 + #25. The honest
+distance-to-beta number is **15 gates not fully green**, and the last hard blocker for
+inviting the first friends is still **#28 (friend smoke)** — with billing's RED (a real
+purchase settling) the thing that must clear before #28 is worth running.
 
 ⚠️ **Correction 2026-08-11.** This paragraph previously named #282 uptime monitoring as a
 blocker "which the 2026-07-29 31-hour silent outage proved beta-critical." That contradicted
