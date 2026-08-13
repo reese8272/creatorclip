@@ -77,6 +77,38 @@ def test_render_endpoint_accepts_style_body(client):
     assert (clip.style_preset or {}).get("zoom_on_peak") is True
 
 
+def test_render_endpoint_rejects_removed_background_key(client):
+    """Issue 442: the never-implemented "background" style is removed end-to-end.
+
+    RenderStyleIn carries extra="forbid", so a body still sending the dead key
+    is a hard 422 — DELIBERATE: the SPA deploys together with the API, so the
+    only senders of "background" post-deploy are stale scripts, which should
+    fail loudly rather than have their intent silently dropped.
+    """
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session(clip)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        try:
+            resp = client.post(
+                f"/clips/{clip.id}/render",
+                json={"background": "blur"},
+                cookies={"session": "x"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 422
+    mock_task.delay.assert_not_called()
+
+
 def test_render_endpoint_no_style_body_still_works(client):
     """POST /clips/{id}/render without a body still returns 202."""
     creator = _mock_creator()

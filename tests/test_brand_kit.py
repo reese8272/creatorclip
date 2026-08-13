@@ -137,7 +137,8 @@ def test_brand_kit_get_returns_defaults_when_no_row(client):
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["subtitle"] is None
-        assert data["background"] is None
+        # Issue 442: the never-implemented background style is removed end-to-end.
+        assert "background" not in data
         assert data["captions_enabled"] is False
         assert data["zoom_on_peak"] is False
         assert data["denoise"] is False
@@ -156,6 +157,9 @@ def test_brand_kit_get_returns_stored_values(client):
     creator = MagicMock()
     creator.id = uuid.uuid4()
 
+    # The stored JSONB deliberately carries the legacy "background" key (Issue
+    # 442 removed the style with NO migration — old rows keep the dead key and
+    # the API must silently ignore it, never emit it, never error on it).
     style_row = MagicMock(spec=CreatorStyle)
     style_row.style = {
         "subtitle": "bold_pop",
@@ -183,7 +187,8 @@ def test_brand_kit_get_returns_stored_values(client):
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["subtitle"] == "bold_pop"
-        assert data["background"] == "blur"
+        # Issue 442: a stored legacy "background" key must NOT leak into the API.
+        assert "background" not in data
         assert data["captions_enabled"] is True
         assert data["denoise"] is True
         assert data["aspect"] == "1:1"
@@ -250,6 +255,8 @@ def test_brand_kit_put_merges_onto_existing_row(client):
     creator = MagicMock()
     creator.id = uuid.uuid4()
 
+    # Legacy row: still carries the removed "background" key (Issue 442, no
+    # migration). The PUT/GET round-trip must succeed without emitting it.
     existing = MagicMock(spec=CreatorStyle)
     existing.style = {"subtitle": "bold_pop", "background": "blur"}
 
@@ -268,14 +275,18 @@ def test_brand_kit_put_merges_onto_existing_row(client):
     app.dependency_overrides[get_current_creator] = _override_creator(creator)
     app.dependency_overrides[get_session] = _fake_session
     try:
-        # Only update the denoise field — the existing subtitle+background survive.
+        # Only update the denoise field — the existing subtitle survives.
         resp = client.put("/creators/me/brand-kit", json={"denoise": True})
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["denoise"] is True
         # The existing row's style must have been merged.
         assert existing.style.get("subtitle") == "bold_pop"
+        # Issue 442 no-migration contract: the stored legacy "background" key is
+        # left untouched in the JSONB (silent-ignore by construction) but is
+        # never emitted by the API.
         assert existing.style.get("background") == "blur"
+        assert "background" not in data
         # session.add() should NOT be called — we update the existing row.
         session.add.assert_not_called()
     finally:
@@ -331,6 +342,8 @@ def test_brand_kit_render_applies_kit_defaults(client):
     clip.render_status = RenderStatus.pending
     clip.style_preset = None  # no per-clip style set
 
+    # The kit row deliberately keeps a legacy "background" key (Issue 442, no
+    # migration) — it must not break the render or the kit merge.
     kit_row = MagicMock(spec=CreatorStyle)
     kit_row.style = {"subtitle": "bold_pop", "background": "blur"}
 
@@ -367,9 +380,8 @@ def test_brand_kit_render_applies_kit_defaults(client):
             app.dependency_overrides.clear()
 
     assert resp.status_code == 202, resp.text
-    # The kit's subtitle + background + the request's zoom_on_peak must all land on the clip.
+    # The kit's subtitle + the request's zoom_on_peak must both land on the clip.
     assert (clip.style_preset or {}).get("subtitle") == "bold_pop"
-    assert (clip.style_preset or {}).get("background") == "blur"
     assert (clip.style_preset or {}).get("zoom_on_peak") is True
 
 
