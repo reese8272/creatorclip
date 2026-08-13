@@ -488,9 +488,27 @@ async def score_candidates(
         logger.warning("Claude scoring returned non-JSON; falling back to signal scores")
         scored = []
 
-    score_map = {
-        item["index"]: item for item in scored if isinstance(item, dict) and "index" in item
-    }
+    # Issue 461 — validation layer over the model response. The scorer must never
+    # trust the payload shape: indexes are int()-coerced (a string "0" previously
+    # missed the int-keyed lookup and silently discarded the whole batch), numeric
+    # coercion is guarded per-item (one malformed item degrades that candidate to
+    # cold-start instead of failing the generation task), and the principle is
+    # checked against the registry (validate_context drops, clip_explain raises —
+    # here we default so the candidate keeps its LLM score).
+    _valid_principles = set(_PRINCIPLES)
+    score_map: dict[int, dict] = {}
+    for item in scored:
+        if not isinstance(item, dict) or "index" not in item:
+            continue
+        try:
+            idx = int(item["index"])
+        except (TypeError, ValueError):
+            logger.warning(
+                "clip_scoring: un-coercible index %r in model response — item skipped",
+                item["index"],
+            )
+            continue
+        score_map[idx] = item
     for i, c in enumerate(candidates):
         hit = score_map.get(i)
         if hit:
@@ -499,10 +517,29 @@ async def score_candidates(
             # (collinearity fix — Issue 103 #5). Claude returns both fields; fall back to
             # the composite score if the model omits dna_score (graceful degradation).
             _dna = hit.get("dna_score")
-            raw_dna: float = float(_dna if _dna is not None else hit.get("score", 0.5))
+            try:
+                raw_dna: float = float(_dna if _dna is not None else hit.get("score", 0.5))
+                raw_score: float = float(hit.get("score", 0.5))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "clip_scoring: non-numeric score/dna_score for index %d — "
+                    "cold-start fallback for this item",
+                    i,
+                )
+                _cold_start_annotate(c)
+                if c.get("origin") != "llm":
+                    c["reasoning"] = "Fallback: signal-only score"
+                continue
             c["dna_match"] = min(1.0, max(0.0, raw_dna))
-            c["score"] = min(1.0, max(0.0, float(hit.get("score", 0.5))))
-            c["principle"] = hit.get("principle", "Audience-fit over generic virality")
+            c["score"] = min(1.0, max(0.0, raw_score))
+            principle = str(hit.get("principle", "")).strip()
+            if principle not in _valid_principles:
+                logger.warning(
+                    "clip_scoring: off-registry principle %r — replaced with default",
+                    principle[:80],
+                )
+                principle = "Audience-fit over generic virality"
+            c["principle"] = principle
             c["reasoning"] = hit.get("reasoning", "")
         else:
             _cold_start_annotate(c)

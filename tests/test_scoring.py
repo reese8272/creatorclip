@@ -5,6 +5,7 @@ Claude calls are patched at the AsyncAnthropic boundary.
 """
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -549,3 +550,122 @@ async def test_score_candidates_clamps_anthropic_scores_outside_unit_interval():
     for candidate in result:
         score = candidate["score"]
         assert 0.0 <= score <= 1.0, f"score {score} is outside [0.0, 1.0] — clamping did not apply"
+
+
+# ── Issue 461: response-validation layer ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_off_registry_principle_replaced_with_default(
+    caplog: pytest.LogCaptureFixture,
+):
+    """An off-registry principle from the model must be replaced with the safe
+    default ("Audience-fit over generic virality") plus a warning — never
+    persisted verbatim. (Issue 461 defect 1: the primary scorer alone trusted
+    the model; validate_context drops, clip_explain raises.)
+    """
+    candidates = [_candidate(setup=10.0, peak=60.0, end=80.0)]
+    claude_scores = [
+        {
+            "index": 0,
+            "dna_score": 0.6,
+            "score": 0.7,
+            "principle": "Go viral fast",
+            "reasoning": "x",
+        }
+    ]
+    mock_resp = _mock_claude_response(claude_scores)
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        with caplog.at_level(logging.WARNING, logger="clip_engine.scoring"):
+            result = await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    assert result[0]["principle"] == "Audience-fit over generic virality"
+    # The numeric fields are still the model's — only the principle is defaulted.
+    assert result[0]["score"] == pytest.approx(0.7)
+    assert result[0]["dna_match"] == pytest.approx(0.6)
+    combined = " ".join(r.getMessage() for r in caplog.records)
+    assert "Go viral fast" in combined, f"expected off-registry warning, got: {combined!r}"
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_non_numeric_score_degrades_that_item_only(
+    caplog: pytest.LogCaptureFixture,
+):
+    """A non-numeric score on ONE item cold-starts that item only — it must not
+    raise ValueError out of score_candidates and kill the whole generation task.
+    (Issue 461 defect 2: unguarded float() at the per-item coercion.)
+    """
+    candidates = [
+        _candidate(setup=5.0, peak=30.0, end=50.0),
+        _candidate(setup=60.0, peak=90.0, end=110.0),
+    ]
+    claude_scores = [
+        {
+            "index": 0,
+            "dna_score": 0.5,
+            "score": "high",
+            "principle": "Loop-ability",
+            "reasoning": "a",
+        },
+        {
+            "index": 1,
+            "dna_score": 0.6,
+            "score": 0.9,
+            "principle": "Loop-ability",
+            "reasoning": "b",
+        },
+    ]
+    mock_resp = _mock_claude_response(claude_scores)
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        with caplog.at_level(logging.WARNING, logger="clip_engine.scoring"):
+            result = await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    # Item 0 degrades to the signal-only cold-start annotation.
+    assert result[0]["principle"] == "Pattern interrupt"
+    assert result[0]["reasoning"] == "Fallback: signal-only score"
+    assert result[0]["dna_match"] is None
+    # Item 1 is scored normally — the batch is NOT discarded.
+    assert result[1]["score"] == pytest.approx(0.9)
+    assert result[1]["dna_match"] == pytest.approx(0.6)
+    assert result[1]["principle"] == "Loop-ability"
+    combined = " ".join(r.getMessage() for r in caplog.records)
+    assert "non-numeric" in combined, f"expected non-numeric warning, got: {combined!r}"
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_accepts_string_index():
+    """A model emitting "index": "0" (string) must still apply the score —
+    previously the int-keyed lookup missed and every LLM score was silently
+    discarded (full-batch signal-only fallback). An un-coercible index is
+    skipped without exception. (Issue 461 defect 3.)
+    """
+    candidates = [_candidate(setup=10.0, peak=60.0, end=80.0)]
+    claude_scores = [
+        {
+            "index": "0",
+            "dna_score": 0.7,
+            "score": 0.85,
+            "principle": "Hook in the first 3 seconds",
+            "reasoning": "x",
+        },
+        # Un-coercible index → skipped with a warning, never an exception.
+        {
+            "index": "not-a-number",
+            "dna_score": 0.1,
+            "score": 0.1,
+            "principle": "Loop-ability",
+            "reasoning": "y",
+        },
+    ]
+    mock_resp = _mock_claude_response(claude_scores)
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        result = await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    assert result[0]["score"] == pytest.approx(0.85)
+    assert result[0]["principle"] == "Hook in the first 3 seconds"
