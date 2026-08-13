@@ -147,9 +147,9 @@ async def test_rerank_at_cap_weight_flips_the_dna_order() -> None:
         f"preference rerank did not flip the DNA order: got {_ids(reranked)}"
     )
     # Issue-465 contract: fit score never mutated; blend lands in blended_score.
-    assert sorted(
-        (c.score for c in reranked), reverse=True
-    ) == original_scores, "rerank mutated clip.score — Issue 465 contract broken"
+    assert sorted((c.score for c in reranked), reverse=True) == original_scores, (
+        "rerank mutated clip.score — Issue 465 contract broken"
+    )
     assert all(c.blended_score is not None for c in reranked)
     # Ordering (never float equality): blended_score order matches the new rank.
     blended = [c.blended_score for c in reranked]

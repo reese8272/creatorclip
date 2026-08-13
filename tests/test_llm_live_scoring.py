@@ -184,16 +184,32 @@ _TRICKSHOT_SEGMENTS = [
         "start": 10.0,
         "end": 17.0,
     },
-    {"text": "Here we go. Lining it up. No hesitation, no practice throw.", "start": 17.5, "end": 23.0},
-    {"text": "AND IT LANDS! ARE YOU KIDDING ME! FIRST TRY! PAY UP MARCUS!", "start": 24.0, "end": 30.0},
+    {
+        "text": "Here we go. Lining it up. No hesitation, no practice throw.",
+        "start": 17.5,
+        "end": 23.0,
+    },
+    {
+        "text": "AND IT LANDS! ARE YOU KIDDING ME! FIRST TRY! PAY UP MARCUS!",
+        "start": 24.0,
+        "end": 30.0,
+    },
     {"text": "I still cannot believe that just happened, man.", "start": 30.5, "end": 36.0},
-    {"text": "So after that we all just kind of stood around for a while.", "start": 40.5, "end": 46.0},
+    {
+        "text": "So after that we all just kind of stood around for a while.",
+        "start": 40.5,
+        "end": 46.0,
+    },
     {
         "text": "Marcus kept replaying the clip on his phone and shaking his head.",
         "start": 46.5,
         "end": 53.0,
     },
-    {"text": "Then we went to get burritos and argued about the next challenge.", "start": 53.5, "end": 60.0},
+    {
+        "text": "Then we went to get burritos and argued about the next challenge.",
+        "start": 53.5,
+        "end": 60.0,
+    },
     {"text": "Honestly the burrito place was mid, not going to lie.", "start": 60.5, "end": 68.0},
 ]
 
@@ -277,15 +293,43 @@ _COOKING_TIMELINE = {
 }
 
 _COOKING_SEGMENTS = [
-    {"text": "Three ingredients. That is all this pasta needs, I promise.", "start": 30.0, "end": 35.0},
-    {"text": "Salt the water like the sea, drop the pasta, save a cup of that starchy water.", "start": 35.5, "end": 43.0},
-    {"text": "Olive oil, garlic, the pasta water — watch it turn into an actual sauce.", "start": 43.5, "end": 52.0},
-    {"text": "Okay, taste test. Oh. OH. That is restaurant pasta from three ingredients.", "start": 53.0, "end": 60.0},
+    {
+        "text": "Three ingredients. That is all this pasta needs, I promise.",
+        "start": 30.0,
+        "end": 35.0,
+    },
+    {
+        "text": "Salt the water like the sea, drop the pasta, save a cup of that starchy water.",
+        "start": 35.5,
+        "end": 43.0,
+    },
+    {
+        "text": "Olive oil, garlic, the pasta water — watch it turn into an actual sauce.",
+        "start": 43.5,
+        "end": 52.0,
+    },
+    {
+        "text": "Okay, taste test. Oh. OH. That is restaurant pasta from three ingredients.",
+        "start": 53.0,
+        "end": 60.0,
+    },
     {"text": "Total cost, about ninety cents a serving.", "start": 60.5, "end": 65.0},
     {"text": "Quick tangent while the next pot boils.", "start": 150.5, "end": 154.0},
-    {"text": "Everyone keeps asking what I think about crypto, so here is my honest take on index funds versus coins.", "start": 154.5, "end": 162.0},
-    {"text": "I put half my sponsorship money into a boring index fund every single month.", "start": 162.5, "end": 169.0},
-    {"text": "Dollar cost averaging is not exciting but neither is being broke at forty.", "start": 169.5, "end": 176.0},
+    {
+        "text": "Everyone keeps asking what I think about crypto, so here is my honest take on index funds versus coins.",
+        "start": 154.5,
+        "end": 162.0,
+    },
+    {
+        "text": "I put half my sponsorship money into a boring index fund every single month.",
+        "start": 162.5,
+        "end": 169.0,
+    },
+    {
+        "text": "Dollar cost averaging is not exciting but neither is being broke at forty.",
+        "start": 169.5,
+        "end": 176.0,
+    },
     {"text": "Anyway, financial advice over, back to the stove.", "start": 176.5, "end": 181.0},
 ]
 

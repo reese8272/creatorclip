@@ -87,7 +87,9 @@ def test_goldens_exist() -> None:
     """Both goldens + the inputs file must be checked in. A missing golden means
     the recorded-response lane silently stopped covering the scorer (Issue 476)."""
     missing = [
-        n for n in (*_GOLDEN_NAMES, "inputs.json") if not os.path.isfile(os.path.join(_GOLDENS_DIR, n))
+        n
+        for n in (*_GOLDEN_NAMES, "inputs.json")
+        if not os.path.isfile(os.path.join(_GOLDENS_DIR, n))
     ]
     assert not missing, (
         f"missing golden fixture(s) {missing} in {_GOLDENS_DIR}. "
