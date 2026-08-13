@@ -218,34 +218,55 @@ async def drill_spend_trip() -> None:
 
 
 async def _clear_rate_limit_buckets(creator_id: str) -> int:
-    """Delete this creator's slowapi/limits buckets so the drill starts at zero.
+    """Delete EVERY limits bucket on the staging stack so the drill starts at zero.
 
-    The daily ceiling is a PERSISTENT per-creator counter in Redis, so a second
-    run on the same day starts with the quota already spent. Without this the
-    drill's first probe is 429, ``first_429 == 0``, and the pre-quota guard
-    degenerates to ``all([]) == True`` — it would confirm "a 429 occurs" while
-    proving nothing about WHEN. Mirrors drill_spend_trip, which likewise clears
-    its own counters rather than depending on inherited state.
+    Both render limits are per-creator counters that outlive a run — the daily
+    one for a day — so a second run the same day starts with the quota spent.
+    Without this the drill's first probe is 429, ``first_429 == 0``, and the
+    pre-quota guard degenerates to ``all([]) == True``: it confirms "a 429
+    occurs" while proving nothing about WHEN. Mirrors drill_spend_trip, which
+    likewise clears its own counters rather than inheriting state.
 
-    `limits` (5.x) namespaces every bucket under the ``LIMITS:`` prefix and the
-    key embeds the limiter key — here the creator id (limiter.py `_creator_key`).
-    Scoped to that id so no other tenant's buckets are touched.
+    Scope note: this deletes all ``LIMITS:*`` keys, not just ones containing the
+    creator id. `creator_key` (limiter.py) falls back to the REMOTE ADDRESS when
+    ``request.state.creator_id`` is unset, so a creator-scoped pattern can miss
+    the very bucket that is throttling us — run 31724339587 cleared 1 key and
+    was still 429 on probe #1. This is a single-tenant staging stack whose only
+    traffic is this drill, so clearing the whole namespace is safe here and
+    would NOT be acceptable against prod.
+
+    Logs every key it finds, so a future surprise is diagnosable from the run log
+    instead of another round trip.
     """
     from youtube._redis import get_redis_client
 
     r = get_redis_client()
-    keys = [k async for k in r.scan_iter(match=f"LIMITS:*{creator_id}*", count=500)]
+    keys = [k async for k in r.scan_iter(match="LIMITS:*", count=500)]
+    for k in keys:
+        log.info("rate-limit:   bucket %s%s", k, "  <- this creator" if creator_id in k else "")
     if keys:
         await r.delete(*keys)
     return len(keys)
 
 
+# The render routes stack TWO per-creator limits (routers/clips.py:938-939 and
+# 1241-1242): a "20/hour" burst guard AND the RENDER_DAILY_JOB_LIMIT ceiling. The
+# BURST is the binding one — it trips at 20 long before the daily 60 — so that is
+# the boundary this drill must expect. Asserting against the daily limit is wrong
+# and fails even on a healthy system (run 31724339587 asserted `>= 60` when a
+# correct stack 429s at 21). Keep in sync with the decorators; if the burst string
+# changes this drill fails loudly and the message says so.
+_RENDER_BURST_PER_HOUR = 20
+
+
 async def drill_rate_limit() -> None:
-    """#228: the render daily quota 429s past the cap; normal request unaffected."""
+    """#228: the render quota 429s past the cap; pre-quota requests unaffected."""
     from config import settings
 
     creator_id, token = _mint_token()
-    limit = int(settings.RENDER_DAILY_JOB_LIMIT)
+    daily = int(settings.RENDER_DAILY_JOB_LIMIT)
+    # Whichever stacked limit trips first is the boundary we can actually observe.
+    limit = min(_RENDER_BURST_PER_HOUR, daily)
     ghost = uuid.uuid4()
     path = f"/clips/{ghost}/render"
     try:
@@ -258,19 +279,21 @@ async def drill_rate_limit() -> None:
                 break
         assert 429 in codes, f"no 429 within {limit + 5} calls; tail={codes[-5:]}"
         first_429 = codes.index(429)
-        # THE property (#228): the 429 must arrive only AFTER the quota, not on
-        # some arbitrary earlier request. This is what makes the guard below
-        # non-vacuous — first_429 == 0 now fails loudly instead of passing.
-        assert first_429 >= limit, (
-            f"429 arrived at request #{first_429 + 1} but the limit is {limit} — "
-            "the bucket was not empty at the start, so this run proves nothing "
-            "about the quota boundary"
+        # THE property (#228): the 429 must arrive only AFTER the quota is spent,
+        # not on some arbitrary earlier request. This is what makes the 404 guard
+        # below non-vacuous — first_429 == 0 now fails loudly instead of passing.
+        assert first_429 == limit, (
+            f"429 arrived at request #{first_429 + 1}, expected #{limit + 1} "
+            f"(binding limit = min(burst {_RENDER_BURST_PER_HOUR}/hour, "
+            f"daily {daily}) = {limit}). Either the buckets were not empty at the "
+            "start, or the route's limits changed and _RENDER_BURST_PER_HOUR is "
+            "stale — this run proves nothing about the quota boundary"
         )
         assert all(c == 404 for c in codes[:first_429]), (
             f"pre-quota probes should be cheap 404s: {set(codes[:first_429])}"
         )
         log.info(
-            "rate-limit: %d cheap 404 probes then 429 at request #%d (limit=%d). PASS",
+            "rate-limit: %d cheap 404 probes then 429 at request #%d (binding limit=%d). PASS",
             first_429,
             first_429 + 1,
             limit,
