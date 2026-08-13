@@ -29,7 +29,7 @@ starts the clip there. The clip ends after the payoff resolves — not at the re
 | 7 | **Loop-ability** | Shorts that loop cleanly retain; favor cut points that resolve. |
 | 8 | **Front-load value** | Never bury the payoff late in the clip. |
 | 9 | **One idea per Short** | A single clear beat outperforms a montage. |
-| 10 | **Native length over generic length** | Match *this creator's* proven optimal Short length, not a fixed 60s. |
+| 10 | **Native length over generic length** | The creator's native length is the median watch duration of their top SHORTS (long-form watch time measures a different consumption mode and is excluded). It acts as a per-creator CEILING on clip length — effective max = clamp(native × 1.25, 45 s, 90 s) — applied to both signal and LLM windows at the sentence-aligned cut. It never stretches a clip: a moment naturally shorter than the ceiling keeps its natural length. Without Shorts data the platform 30–90 s band applies unchanged. (Wired by Issue 464, 2026-08-13.) |
 | 11 | **Audience-fit over generic virality** | Every score is against this creator's DNA and audience, never a one-size signal. |
 | 12 | **Clean Context Boundary** | Clips must never start or end mid-sentence. Both cut points are snapped to the nearest terminal-punctuation token or silence gap so every clip opens and closes on a complete thought. This is the direct fix for the #1 user complaint about every competing tool. |
 

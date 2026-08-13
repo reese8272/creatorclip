@@ -102,6 +102,37 @@ def test_trained_scorer_path_ranks_correctly() -> None:
     assert m.ndcg["dna_preference"] == pytest.approx(1.0)
 
 
+def test_blend_parity_with_shared_helper() -> None:
+    """Issue 465(d) — the Issue-475 pre-work interface: the harness blend and the
+    production rerank blend are the SAME function, `preference.model.blend_scores`.
+    For identical inputs, `_blend_scores` must equal the helper applied to
+    (dna_composite, predict_score, preference_weight(label_count)) per clip."""
+    from preference.model import blend_scores, preference_weight
+    from tests.eval.efficacy import _blend_scores
+
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    # 30 train clips (above threshold 20) → weight > 0; separable features.
+    train = []
+    for i in range(15):
+        train.append(_clip(1.0, 5.0, 0.9, base + timedelta(days=i)))
+        train.append(_clip(0.0, 0.0, 0.1, base + timedelta(days=i, hours=1)))
+    ev = [
+        _clip(1.0, 5.0, 0.9, base + timedelta(days=40)),
+        _clip(0.0, 0.0, 0.1, base + timedelta(days=41)),
+    ]
+    scorer = _train_scorer(train)
+    if scorer is None:
+        pytest.skip("scorer did not fit on this host")
+    weight = preference_weight(scorer.label_count)
+    assert weight > 0.0  # the parity claim is vacuous at weight 0
+
+    expected = [blend_scores(c.dna_composite, scorer.predict_score(c.features), weight) for c in ev]
+    assert _blend_scores(train, ev) == pytest.approx(expected)
+
+    # And the helper itself is the documented formula.
+    assert blend_scores(0.8, 0.2, 0.25) == pytest.approx(0.75 * 0.8 + 0.25 * 0.2)
+
+
 def test_downvote_with_good_outcome_trains_negative_like_production() -> None:
     """Assessment 2026-07-20: _train_scorer labels from the ACTION, exactly like
     preference.train — a downvoted clip whose outcome performed well (eval

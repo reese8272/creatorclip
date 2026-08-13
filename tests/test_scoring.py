@@ -5,6 +5,7 @@ Claude calls are patched at the AsyncAnthropic boundary.
 """
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,9 +30,11 @@ def _candidate(setup=10.0, peak=60.0, end=80.0):
 
 
 def _mock_claude_response(scores: list[dict]) -> MagicMock:
+    # Issue 461: structured output constrains the response to the root-object
+    # wrapper {"scores": [...]} — fixtures mirror the schema-guaranteed shape.
     block = MagicMock()
     block.type = "text"
-    block.text = json.dumps(scores)
+    block.text = json.dumps({"scores": scores})
     usage = MagicMock()
     usage.input_tokens = 300
     usage.output_tokens = 150
@@ -245,6 +248,70 @@ def test_transcript_context_before_excludes_clip_text():
     )
     assert "before only" in before_section
     assert "clip only" not in before_section
+
+
+def _section_text(result: str, name: str) -> str:
+    """Decode the JSON-encoded payload of one wrap_untrusted section."""
+    import re
+
+    m = re.search(rf'<untrusted name="{name}">(.*?)</untrusted>', result, re.S)
+    assert m is not None, f"section {name!r} missing from: {result!r}"
+    return json.loads(m.group(1))
+
+
+def test_transcript_context_before_keeps_tail_nearest_cut():
+    """Issue 462: [BEFORE] over the 200-char cap must keep the TAIL — the words
+    immediately before the cut are what the setup judgment needs. Head-keep
+    retained t≈0-15s text and dropped the sentence adjacent to the clip start.
+    """
+    far = ("FAR_TEXT " * 30).strip()  # ~270 chars at t≈0-15s
+    near = ("NEAR_CUT " * 30).strip()  # ~270 chars adjacent to the setup
+    segs = [
+        {"start": 0.0, "end": 15.0, "text": far},
+        {"start": 50.0, "end": 59.0, "text": near},
+        {"start": 60.0, "end": 70.0, "text": "clip body"},
+    ]
+    result = _transcript_context(60.0, 90.0, segs)
+    before_text = _section_text(result, "transcript_before")
+    assert before_text.endswith("NEAR_CUT"), (
+        f"[BEFORE] must end with the words nearest the cut, got: {before_text[-40:]!r}"
+    )
+    assert "FAR_TEXT" not in before_text, "[BEFORE] must drop the far end, not the cut end"
+    assert len(before_text) <= 200, "per-section cap for [BEFORE] must stay 200"
+
+
+def test_transcript_context_after_keeps_head_nearest_clip_end():
+    """Issue 462 companion pin: [AFTER] over the 150-char cap keeps its HEAD —
+    the words nearest the clip end (already correct; regression guard).
+    """
+    payoff = "PAYOFF right after the clip ends"
+    later = ("LATER_TEXT " * 30).strip()  # pushes [AFTER] past its 150-char cap
+    segs = [
+        {"start": 60.0, "end": 70.0, "text": "clip body"},
+        {"start": 91.0, "end": 95.0, "text": payoff},
+        {"start": 100.0, "end": 110.0, "text": later},
+    ]
+    result = _transcript_context(60.0, 90.0, segs)
+    after_text = _section_text(result, "transcript_after")
+    assert after_text.startswith("PAYOFF"), (
+        f"[AFTER] must start with the words nearest the clip end, got: {after_text[:40]!r}"
+    )
+    assert len(after_text) <= 150, "per-section cap for [AFTER] must stay 150"
+
+
+def test_transcript_context_section_caps_unchanged():
+    """Issue 462: the 200/250/150 per-section caps are prompt-size guarantees —
+    the tail-keep fix must not change them.
+    """
+    segs = [
+        {"start": 30.0, "end": 59.0, "text": "b" * 400},
+        {"start": 61.0, "end": 89.0, "text": "c" * 400},
+        {"start": 91.0, "end": 110.0, "text": "a" * 400},
+    ]
+    result = _transcript_context(60.0, 90.0, segs)
+    assert len(_section_text(result, "transcript_before")) == 200
+    assert len(_section_text(result, "transcript_clip")) == 250
+    assert len(_section_text(result, "transcript_after")) == 150
 
 
 def test_transcript_context_straddling_segment_assigned_once():
@@ -549,3 +616,180 @@ async def test_score_candidates_clamps_anthropic_scores_outside_unit_interval():
     for candidate in result:
         score = candidate["score"]
         assert 0.0 <= score <= 1.0, f"score {score} is outside [0.0, 1.0] — clamping did not apply"
+
+
+# ── Issue 461: response-validation layer ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_off_registry_principle_replaced_with_default(
+    caplog: pytest.LogCaptureFixture,
+):
+    """An off-registry principle from the model must be replaced with the safe
+    default ("Audience-fit over generic virality") plus a warning — never
+    persisted verbatim. (Issue 461 defect 1: the primary scorer alone trusted
+    the model; validate_context drops, clip_explain raises.)
+    """
+    candidates = [_candidate(setup=10.0, peak=60.0, end=80.0)]
+    claude_scores = [
+        {
+            "index": 0,
+            "dna_score": 0.6,
+            "score": 0.7,
+            "principle": "Go viral fast",
+            "reasoning": "x",
+        }
+    ]
+    mock_resp = _mock_claude_response(claude_scores)
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        with caplog.at_level(logging.WARNING, logger="clip_engine.scoring"):
+            result = await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    assert result[0]["principle"] == "Audience-fit over generic virality"
+    # The numeric fields are still the model's — only the principle is defaulted.
+    assert result[0]["score"] == pytest.approx(0.7)
+    assert result[0]["dna_match"] == pytest.approx(0.6)
+    combined = " ".join(r.getMessage() for r in caplog.records)
+    assert "Go viral fast" in combined, f"expected off-registry warning, got: {combined!r}"
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_non_numeric_score_degrades_that_item_only(
+    caplog: pytest.LogCaptureFixture,
+):
+    """A non-numeric score on ONE item cold-starts that item only — it must not
+    raise ValueError out of score_candidates and kill the whole generation task.
+    (Issue 461 defect 2: unguarded float() at the per-item coercion.)
+    """
+    candidates = [
+        _candidate(setup=5.0, peak=30.0, end=50.0),
+        _candidate(setup=60.0, peak=90.0, end=110.0),
+    ]
+    claude_scores = [
+        {
+            "index": 0,
+            "dna_score": 0.5,
+            "score": "high",
+            "principle": "Loop-ability",
+            "reasoning": "a",
+        },
+        {
+            "index": 1,
+            "dna_score": 0.6,
+            "score": 0.9,
+            "principle": "Loop-ability",
+            "reasoning": "b",
+        },
+    ]
+    mock_resp = _mock_claude_response(claude_scores)
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        with caplog.at_level(logging.WARNING, logger="clip_engine.scoring"):
+            result = await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    # Item 0 degrades to the signal-only cold-start annotation.
+    assert result[0]["principle"] == "Pattern interrupt"
+    assert result[0]["reasoning"] == "Fallback: signal-only score"
+    assert result[0]["dna_match"] is None
+    # Item 1 is scored normally — the batch is NOT discarded.
+    assert result[1]["score"] == pytest.approx(0.9)
+    assert result[1]["dna_match"] == pytest.approx(0.6)
+    assert result[1]["principle"] == "Loop-ability"
+    combined = " ".join(r.getMessage() for r in caplog.records)
+    assert "non-numeric" in combined, f"expected non-numeric warning, got: {combined!r}"
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_accepts_string_index():
+    """A model emitting "index": "0" (string) must still apply the score —
+    previously the int-keyed lookup missed and every LLM score was silently
+    discarded (full-batch signal-only fallback). An un-coercible index is
+    skipped without exception. (Issue 461 defect 3.)
+    """
+    candidates = [_candidate(setup=10.0, peak=60.0, end=80.0)]
+    claude_scores = [
+        {
+            "index": "0",
+            "dna_score": 0.7,
+            "score": 0.85,
+            "principle": "Hook in the first 3 seconds",
+            "reasoning": "x",
+        },
+        # Un-coercible index → skipped with a warning, never an exception.
+        {
+            "index": "not-a-number",
+            "dna_score": 0.1,
+            "score": 0.1,
+            "principle": "Loop-ability",
+            "reasoning": "y",
+        },
+    ]
+    mock_resp = _mock_claude_response(claude_scores)
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        result = await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    assert result[0]["score"] == pytest.approx(0.85)
+    assert result[0]["principle"] == "Hook in the first 3 seconds"
+
+
+# ── Issue 461: structured output (output_config.format) ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_sends_structured_output_schema():
+    """The scoring call must request structured output (output_config.format,
+    json_schema) with a root-object wrapper {"scores": [...]} and a principle
+    enum built FROM the _PRINCIPLES registry — a hand-listed enum would desync
+    on the next registry addition. (Issue 461; supersedes the 2026-06-29
+    scoring deferral in DECISIONS.)
+    """
+    from clip_engine.scoring import _OUTPUT_SCHEMA, _PRINCIPLES
+
+    candidates = [_candidate()]
+    mock_resp = _mock_claude_response(
+        [{"index": 0, "score": 0.7, "principle": "Loop-ability", "reasoning": "x"}]
+    )
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    output_config = mock_client.messages.create.call_args.kwargs.get("output_config")
+    assert output_config == {"format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}}
+    item_schema = _OUTPUT_SCHEMA["properties"]["scores"]["items"]
+    assert item_schema["properties"]["principle"]["enum"] == list(_PRINCIPLES), (
+        "the principle enum must be built from _PRINCIPLES — registry additions "
+        "must not desync the schema"
+    )
+    assert item_schema["additionalProperties"] is False
+    assert _OUTPUT_SCHEMA["additionalProperties"] is False
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_accepts_legacy_bare_array():
+    """Defense-in-depth: refusal / max_tokens paths are NOT schema-guaranteed,
+    so the parse still accepts the pre-structured-output bare-array shape
+    (also keeps out-of-file fixtures like test_style_distill green).
+    """
+    candidates = [_candidate(setup=10.0, peak=60.0, end=80.0)]
+    block = MagicMock()
+    block.type = "text"
+    block.text = json.dumps(
+        [{"index": 0, "score": 0.85, "principle": "Loop-ability", "reasoning": "x"}]
+    )
+    resp = MagicMock()
+    resp.content = [block]
+    resp.usage = MagicMock(input_tokens=10, output_tokens=5)
+    del resp.usage.cache_read_input_tokens
+    del resp.usage.cache_creation_input_tokens
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=resp)
+        result = await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    assert result[0]["score"] == pytest.approx(0.85)
+    assert result[0]["principle"] == "Loop-ability"

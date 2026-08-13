@@ -3380,11 +3380,13 @@ coercion per-item (bad item → cold-start annotate that item only), coerce `ind
 `int(...)`-with-guard. Consider structured output (`output_config.format`) as video_context
 already uses — that removes the whole class.
 
+**Status: DONE 2026-08-13 (W3 Batch B, branch `fix/issue-461-462-scoring-hardening`, commits 57e1306 + 9ca402f).** Per-item validate-and-degrade layer (int()-guarded index, guarded float coercion → per-item cold-start, registry-checked principle → safe default + warning), THEN structured output adopted per owner `[DEC]` (supersedes the 2026-06-29 deferral): root-object `{"scores": [...]}`, principle enum BUILT FROM `_PRINCIPLES`, `additionalProperties: false`; extract_json_block + validator retained as defense-in-depth (refusal/max_tokens are not schema-guaranteed); numeric clamps stay in code. SDK `anthropic==0.105.2` supports `output_config` natively (signature-verified). Red-first: off-registry principle persisted verbatim; `ValueError: could not convert string to float: 'high'` killed the task; string `"0"` index silently discarded every LLM score.
+
 **Acceptance**
-- [ ] Off-registry principle → replaced with a valid default + warning log (unit test)
-- [ ] Non-numeric score/dna_score on ONE item degrades that item only (unit test)
-- [ ] String `index` values are accepted (unit test)
-- [ ] No behavior change on well-formed responses (existing `test_scoring.py` green)
+- [x] Off-registry principle → replaced with a valid default + warning log (unit test)
+- [x] Non-numeric score/dna_score on ONE item degrades that item only (unit test)
+- [x] String `index` values are accepted (unit test)
+- [x] No behavior change on well-formed responses (existing `test_scoring.py` green)
 
 ### Issue 462: scoring's `[BEFORE]` transcript context keeps the wrong end
 
@@ -3400,10 +3402,12 @@ sentence at the cut.
 **Fix direction (CHECK phase):** truncate keeping the tail for `[BEFORE]` (and audit `[AFTER]`
 for the mirror-image bug: it should keep its head).
 
+**Status: DONE 2026-08-13 (same branch, commit bd5a1a6).** `_gather` grew `keep='head'|'tail'`; `[BEFORE]` tail-keeps so the sentence adjacent to the cut reaches the model (red proof: head-keep emitted t≈0–15 s FAR_TEXT and dropped NEAR_CUT). **Audit finding: `[AFTER]` had NO mirror bug** — already head-keeps correctly; now pinned by regression test. Section caps 200/250/150 unchanged and pinned.
+
 **Acceptance**
-- [ ] Unit test: `[BEFORE]` ends with the words nearest the cut; `[AFTER]` starts with the words
+- [x] Unit test: `[BEFORE]` ends with the words nearest the cut; `[AFTER]` starts with the words
       nearest the clip end
-- [ ] Prompt-size caps unchanged
+- [x] Prompt-size caps unchanged
 
 ### Issue 463: `video_context` prompt-security diverges from the Issue-224 rules
 
@@ -3419,11 +3423,13 @@ injection surface).
 **Fix direction (CHECK phase):** align video_context with the brief's placement rules; wrap the
 summary where it is re-consumed. Check DECISIONS Issue 224/371 rulings for the exact contract.
 
+**Status: DONE 2026-08-13 (W3 Batch B, branch `fix/issue-463-prompt-placement`, commits ef41d0a red / e1e8b81 fix).** Creator identity moved to `wrap_untrusted('creator_stated_identity', …)` in the user turn; video_context block 2 is DNA-only via `dna_system_block` (PROMPT_VERSION 2→3); clip_metadata's system Block 3 deleted — the model-authored summary rides `wrap_untrusted('video_context_summary', …)` in the user turn. Structural tests mirror the 224 pattern; NEW byte-identity pins: system blocks identical with/without identity and with/without summary. Scoring leg verified already wrapped (scoring.py:347-350) — closed by verification. Issue-371 third block untouched.
+
 **Acceptance**
-- [ ] Creator-authored text appears only via `wrap_untrusted` in the user turn (structural test,
+- [x] Creator-authored text appears only via `wrap_untrusted` in the user turn (structural test,
       mirroring `tests/test_prompt_safety.py` patterns)
-- [ ] Model-authored summary wrapped at every downstream consumption site
-- [ ] Prompt-cache behavior unchanged (cache-floor gates still hit)
+- [x] Model-authored summary wrapped at every downstream consumption site
+- [x] Prompt-cache behavior unchanged (cache-floor gates still hit)
 
 ### Issue 464: Principle 10 "Native length" is computed, stored, surfaced — and never used
 
@@ -3439,9 +3445,11 @@ prose inside the DNA brief, so the scorer may cite Principle 10 while geometry c
 (bounded by platform limits) — or descope: remove the fields and the principle's "native length"
 claim from docs/UI. An explicit `[DEC]` either way.
 
+**Status: DONE 2026-08-13 (W3 Batch B, owner ruled OPTION A — wire; branch `fix/issue-464-native-length-wire`).** Estimator fixed to median watch duration over top SHORTS only (red proof: mixed pool yielded 167 s from a 42 s-Shorts creator); wiring: `effective_max_len_s = clamp(optimal × 1.25, 45 s, 90 s)` derived once in `score_and_rank` and threaded to the sentence-snap and LLM-window clamps; max-clamp ONLY, never stretches; MIN_CLIP_S/POST_PEAK_S untouched. Cold start byte-identical (all 31 pre-existing scenarios untouched and green). Stale prod rows clamp harmlessly to the 90 s constant until the next DNA build. New eval fixture `native_length_clamp` (kind: merge).
+
 **Acceptance**
-- [ ] `[DEC]` recorded in `docs/DECISIONS.md`
-- [ ] If wired: geometry test showing a creator with `optimal_clip_len_s=45` gets ≈45 s targets;
+- [x] `[DEC]` recorded in `docs/DECISIONS.md`
+- [x] If wired: geometry test showing a creator with `optimal_clip_len_s=45` gets ≈45 s targets;
       if descoped: fields removed + docs/PRINCIPLES updated
 
 ### Issue 465: preference rerank overwrites the persisted composite score
@@ -3458,10 +3466,12 @@ holds blended ranks 1–12 and raw ranks 13+ on the same column.
 **Fix direction (CHECK phase):** persist the blend separately (e.g. `blended_score` or recompute
 at read time) and keep `score` stable as the fit composite; migrate readers deliberately.
 
+**Status: DONE 2026-08-13 (W3 Batch B, branch `fix/issue-465-blended-score`, commits d5ca655 red / 64985ee fix).** Migration 0059 adds nullable `clips.blended_score`; `clip.score` is now the immutable DNA/LLM fit composite (rerank writes/sorts by the new column; append path writes fit + NULL uniformly — the registered mixed-column behavior resolved). NO backfill: historical fits were destroyed by the overwrite. Shared `preference.model.blend_scores` helper = Issue 475's parity interface, pinned by test. Red proofs on main: rerank mutated fit 0.9→0.45; efficacy's `dna_composite` ingested the blend. Reader map verified by structural test — no reader reads `blended_score` today.
+
 **Acceptance**
-- [ ] `clip.score` semantics documented and stable across the rerank
-- [ ] Recap/generate-more readers explicitly choose fit vs blended (test each)
-- [ ] Migration/backfill decision recorded if a column is added
+- [x] `clip.score` semantics documented and stable across the rerank
+- [x] Recap/generate-more readers explicitly choose fit vs blended (test each)
+- [x] Migration/backfill decision recorded if a column is added
 
 ### Batch C — Pipeline & render (466–471)
 

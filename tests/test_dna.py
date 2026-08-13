@@ -122,15 +122,34 @@ def test_best_source_region_none_on_zero_duration():
 
 
 # ── _optimal_clip_len_s ────────────────────────────────────────────────────────
+# Issue 464 (Option A): the estimator reads the creator's SHORTS only. Long-form
+# watch durations run minutes and measure a different consumption mode; mixing
+# them in (the pre-464 behavior) produced an estimate no deliverable Short could
+# honor — which is why the stored value was never wired into clip geometry.
 
 
-def test_optimal_clip_len_odd_count():
-    videos = [{"avg_view_duration_s": v} for v in [30.0, 45.0, 60.0]]
-    assert _optimal_clip_len_s(videos) == pytest.approx(45.0)
+def _short(avg: float | None) -> dict:
+    return {"kind": "short", "avg_view_duration_s": avg}
 
 
-def test_optimal_clip_len_even_count():
-    videos = [{"avg_view_duration_s": v} for v in [20.0, 40.0, 60.0, 80.0]]
+def _long(avg: float | None) -> dict:
+    return {"kind": "long", "avg_view_duration_s": avg}
+
+
+def test_optimal_clip_len_ignores_long_form_watch_durations():
+    """Top longs averaging ~300 s must not drag the estimate: shorts ≈42 s win."""
+    videos = [_long(290.0), _long(300.0), _long(310.0), _short(40.0), _short(42.0), _short(44.0)]
+    assert _optimal_clip_len_s(videos) == pytest.approx(42.0)
+
+
+def test_optimal_clip_len_none_without_shorts():
+    """A longs-only creator has no native-Short signal — None, not a minutes-scale median."""
+    videos = [_long(290.0), _long(300.0), _long(310.0)]
+    assert _optimal_clip_len_s(videos) is None
+
+
+def test_optimal_clip_len_even_count_median():
+    videos = [_short(v) for v in [20.0, 40.0, 60.0, 80.0]]
     assert _optimal_clip_len_s(videos) == pytest.approx(50.0)
 
 
@@ -139,7 +158,7 @@ def test_optimal_clip_len_none_on_empty():
 
 
 def test_optimal_clip_len_skips_none_values():
-    videos = [{"avg_view_duration_s": None}, {"avg_view_duration_s": 50.0}]
+    videos = [_short(None), _short(50.0)]
     assert _optimal_clip_len_s(videos) == pytest.approx(50.0)
 
 

@@ -85,9 +85,21 @@ def test_build_request_each_clip_owns_its_window() -> None:
     # Window text never leaks into any (trusted) system block.
     for block in system:
         assert "WINDOW A ONLY" not in block["text"]
-    # Context summary is an uncached block AFTER the DNA cache breakpoint.
-    assert system[2]["text"].startswith("VIDEO CONTEXT:")
-    assert "cache_control" not in system[2]
+    # The model-authored context summary rides the user turn, wrapped — never a
+    # system block (Issue 463 — second-order injection surface).
+    assert '<untrusted name="video_context_summary">' in user
+    assert json.dumps("summary") in user
+
+
+def test_system_always_two_blocks_regardless_of_context_summary() -> None:
+    """Issue 463 pin: system is exactly [static, DNA] whether or not a context
+    summary exists — and byte-identical across the two, so a per-video summary
+    can never invalidate the creator's DNA cache breakpoint."""
+    sys_with, _ = _build_request("Chan", "brief", "A model-authored summary.", _payloads())
+    sys_without, _ = _build_request("Chan", "brief", None, _payloads())
+    assert len(sys_with) == 2
+    assert len(sys_without) == 2
+    assert sys_with == sys_without
 
 
 def test_build_request_opening_text_wrapped_when_present() -> None:

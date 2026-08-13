@@ -476,6 +476,7 @@ clips
     per-video by GET /videos/clips/counts. server_default is load-bearing —
     the previous image's INSERT does not name the column during a rolling restart)
   reframe_track_jsonb (NULLABLE, migration 0055 — Issue 421: the speaker-aware
+- `clips.blended_score FLOAT NULL` (migration 0059, Issue 465) — preference-rerank blend `(1-w)*score + w*pref`; `score` is now guaranteed the immutable DNA/LLM fit composite; NULL = personalization never applied (below threshold, no model, or append path)
     crop track in the unified wire contract; keyframe x = the exact ffmpeg
     sendcmd left-edge values. Recomputed + replaced (or nulled) in the same
     done-marking transaction as render_uri on EVERY render — never stale.

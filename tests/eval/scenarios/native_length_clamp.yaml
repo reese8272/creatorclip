@@ -1,0 +1,43 @@
+# Issue 464 — Principle 10 "Native length over generic length", Option A wiring.
+# The creator's DNA carries a Shorts-derived optimal_clip_len_s = 45 s, so the
+# per-creator length ceiling is clamp(45 * 1.25, 45.0, 90.0) = 56.25 s.
+#
+# Two LLM moments on a flat timeline (no signal candidates):
+#   1. A 115 s rambling story starting at 10 s. Without input.optimal_clip_len_s
+#      the generic CLIP_TARGET_MAX_S clamp leaves it at 90 s; with the native
+#      ceiling it must come out <= 56.25 s (len_s_max pins this — the fixture
+#      fails on the constants path, so the difference is real).
+#   2. A 45 s story starting at 200 s — already at the creator's native length.
+#      It must pass through UNTOUCHED (end pinned at ≈245 s): the ceiling is a
+#      max-clamp only, windows are never stretched toward it.
+scenario: native_length_clamp
+kind: merge
+input:
+  optimal_clip_len_s: 45.0
+  timeline:
+    duration_s: 300.0
+    events: []
+  moments:
+    - start_s: 10.0
+      end_s: 125.0
+      reason: "Long rambling story that must be cut to the creator's native band"
+      principle: "Native length over generic length"
+      confidence: 0.9
+    - start_s: 200.0
+      end_s: 245.0
+      reason: "A story already at the creator's native length"
+      principle: "Native length over generic length"
+      confidence: 0.8
+expected:
+  llm_candidates: 2
+  max_total: 2
+  candidates:
+    - origin: llm
+      setup_start_s_min: 9.9
+      setup_start_s_max: 10.1
+      len_s_max: 56.3 # ceiling = clamp(45 * 1.25, 45, 90) = 56.25
+    - origin: llm
+      setup_start_s_min: 199.9
+      setup_start_s_max: 200.1
+      end_s_min: 244.9 # pinned at its natural ≈45 s — never stretched toward the max
+      end_s_max: 245.1

@@ -10,11 +10,14 @@ delivered flat). Moments feed the Issue-416 hybrid candidate merge.
 Prompt-cache structure (Issue 315 discipline):
   Block 1 — static instructions + the 12 named principles + output guidance.
             Byte-identical across all creators and calls.
-  Block 2 — per-creator identity (dna/identity.py::format_for_prompt) + DNA
-            brief. cache_control {ephemeral, ttl:1h} is attached only when the
-            measured block1+block2 prefix clears Sonnet 4.6's 1024-token
-            cacheable floor (chars/4 rule — the scoring.py gate).
-  User msg — volatile per-video transcript, wrap_untrusted-wrapped (OWASP
+  Block 2 — DNA brief only (knowledge.util.dna_system_block). cache_control
+            {ephemeral, ttl:1h} is attached only when the measured
+            block1+block2 prefix clears Sonnet 4.6's 1024-token cacheable
+            floor (chars/4 rule — the scoring.py gate). Omitted entirely when
+            no brief exists.
+  User msg — creator identity (creator-authored → wrap_untrusted, the Issue-224
+            rule; moved out of the system role by Issue 463) followed by the
+            volatile per-video transcript, wrap_untrusted-wrapped (OWASP
             LLM01; Issue 224). Never cached.
 
 Structured output is forced via ``output_config.format`` (json_schema with
@@ -39,6 +42,7 @@ from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLi
 from config import settings
 from knowledge.util import (
     UNTRUSTED_CONTENT_POLICY,
+    dna_system_block,
     extract_json_block,
     has_1h_cache_marker,
     wrap_untrusted,
@@ -55,7 +59,7 @@ _ANTHROPIC = AsyncAnthropic(
 )
 
 # Bump whenever the prompt or context_jsonb schema changes (stored on the row).
-PROMPT_VERSION = 2  # v2 (Issue 428): 60-90 s target + sentence-boundary edges in MOMENT SELECTION
+PROMPT_VERSION = 3  # v3 (Issue 463): identity → user turn (wrap_untrusted); DNA-only cached block 2
 
 # Paragraph granularity for the rendered transcript (seconds).
 _PARAGRAPH_S = 30.0
@@ -77,10 +81,6 @@ CLIPPING_PRINCIPLES: tuple[str, ...] = (
     "Audience-fit over generic virality",
     "Clean Context Boundary",
 )
-
-# Sonnet 4.6's minimum cacheable-prefix size (tokens), chars/4 estimate — the
-# scoring.py Issue-315 gate.
-_CACHE_FLOOR_TOKENS = 1024
 
 # Block 1: static — never contains per-creator or per-video data. Byte-identical
 # across all calls so the cache marker on block 2 is never invalidated.
@@ -310,26 +310,22 @@ def _build_request(
 ) -> tuple[list[dict], list[dict]]:
     """Assemble (system_blocks, messages) for the whole-video context call.
 
-    Block 2 (identity + DNA) carries the 1h cache marker only when the measured
-    block1+block2 prefix clears the 1024-token floor. When neither identity nor
-    brief exists the block is omitted entirely (format_for_prompt convention —
-    a "(none)" placeholder would only add volatile bytes).
+    Block 2 (DNA brief only) carries the 1h cache marker only when the measured
+    block1+block2 prefix clears the 1024-token floor (dna_system_block). When
+    no brief exists the block is omitted entirely (format_for_prompt
+    convention — a "(none)" placeholder would only add volatile bytes).
+    identity_text is creator-authored (attacker-influenceable) and rides the
+    user turn via wrap_untrusted — never the system role (Issues 224/463).
     """
     static_text = _SYSTEM_STATIC.format(principles="\n".join(f"- {p}" for p in CLIPPING_PRINCIPLES))
     system: list[dict] = [{"type": "text", "text": static_text}]
-
-    creator_parts = []
-    if identity_text:
-        creator_parts.append(identity_text)
     if dna_brief:
-        creator_parts.append(f"CREATOR DNA:\n{dna_brief}")
-    if creator_parts:
-        creator_block: dict = {"type": "text", "text": "\n\n".join(creator_parts)}
-        if (len(static_text) + len(creator_block["text"])) // 4 >= _CACHE_FLOOR_TOKENS:
-            creator_block["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
-        system.append(creator_block)
+        system.append(dna_system_block(static_text, dna_brief))
 
-    user_content = (
+    user_content = ""
+    if identity_text:
+        user_content += wrap_untrusted("creator_stated_identity", identity_text)
+    user_content += (
         wrap_untrusted("video_transcript", transcript_rendered)
         + f"Video duration: {duration_s:.0f}s. Analyze the full transcript and "
         "return the structured context JSON."

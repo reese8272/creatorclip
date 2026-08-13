@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from clip_engine.candidates import extract_candidates
 from clip_engine.scoring import score_candidates
-from clip_engine.sentence_snap import snap_candidates_to_sentences
+from clip_engine.sentence_snap import effective_max_len_s, snap_candidates_to_sentences
 from models import Clip, ClipFormat, ClipTriage, RenderStatus
 
 logger = logging.getLogger(__name__)
@@ -163,9 +163,14 @@ async def rerank_with_preference(
     """
     Re-rank an already-scored clip list using the creator's preference model.
     Falls back silently if no model is trained yet (below threshold).
+
+    Issue 465 contract: ``clip.score`` (the DNA/LLM fit composite) is NEVER
+    mutated here. The blend ``(1-w)*fit + w*pref`` is written to
+    ``clip.blended_score`` and drives the sort/rank; a NULL ``blended_score``
+    after this call means personalization was not applied to that clip.
     """
     from preference.features import clip_features
-    from preference.model import preference_weight
+    from preference.model import blend_scores, preference_weight
     from preference.train import load_latest
 
     scorer = await load_latest(session, creator_id)
@@ -200,9 +205,9 @@ async def rerank_with_preference(
         logger.warning("Preference rerank failed (%s) — keeping DNA ranking", exc)
         return clips
 
-    # A non-finite prediction (NaN/inf) would blend into clip.score and make the
-    # subsequent sort order undefined. Treat it as a broken model and fall back to
-    # the DNA ranking untouched — the same honest behavior as a predict exception.
+    # A non-finite prediction (NaN/inf) would blend into blended_score and make
+    # the subsequent sort order undefined. Treat it as a broken model and fall
+    # back to the DNA ranking untouched — same honest behavior as an exception.
     if not all(math.isfinite(s) for s in pref_scores):
         logger.warning(
             "Preference model produced a non-finite score for creator %s — keeping DNA ranking",
@@ -210,10 +215,15 @@ async def rerank_with_preference(
         )
         return clips
 
+    # Issue 465: the blend goes to blended_score; clip.score stays the immutable
+    # DNA/LLM fit composite every downstream fit reader depends on.
     for clip, pref_score in zip(clips, pref_scores, strict=True):
-        clip.score = (1.0 - weight) * (clip.score or 0.0) + weight * pref_score
+        clip.blended_score = blend_scores(clip.score or 0.0, pref_score, weight)
 
-    clips.sort(key=lambda c: _safe_score(c.score), reverse=True)
+    clips.sort(
+        key=lambda c: _safe_score(c.blended_score if c.blended_score is not None else c.score),
+        reverse=True,
+    )
     for i, clip in enumerate(clips):
         clip.rank = i + 1
 
@@ -252,8 +262,16 @@ async def score_and_rank(
     style_notes: str | None = None,
     video_context: dict | None = None,
     exclude_windows: list[dict] | None = None,
+    optimal_clip_len_s: float | None = None,
 ) -> list[dict]:
     """Extract candidates → merge LLM moments → score (ONE LLM call) → rank → trim.
+
+    ``optimal_clip_len_s`` (Issue 464 — Principle 10, Option A): the active
+    DNA's Shorts-derived native length. ``effective_max_len_s`` turns it into
+    the per-creator length ceiling threaded to the sentence-snap clamp and the
+    LLM-window clamp. A max-clamp only — windows are never stretched toward
+    it. None (cold start / no metered Shorts) keeps the platform constants,
+    byte-identical to pre-464 behavior.
 
     ``exclude_windows`` (Issue 431 — append-mode regeneration): windows of
     ALREADY-PERSISTED clips (``{"setup_start_s", "end_s"}`` dicts). After the
@@ -293,9 +311,13 @@ async def score_and_rank(
     segments = list(transcript_segments or [])
     duration_s = float(timeline.get("duration_s", 0.0))
     signal_pool_max = max(settings.CLIP_SIGNAL_POOL_MAX, max_candidates)
+    max_len_s = effective_max_len_s(optimal_clip_len_s)
     candidates = await asyncio.to_thread(
         lambda: snap_candidates_to_sentences(
-            extract_candidates(timeline, signal_pool_max), segments, duration_s
+            extract_candidates(timeline, signal_pool_max),
+            segments,
+            duration_s,
+            max_len_s=max_len_s,
         )
     )
 
@@ -304,7 +326,9 @@ async def score_and_rank(
         from clip_engine.merge import llm_moments_to_candidates, merge_candidates
 
         llm_candidates = await asyncio.to_thread(
-            lambda: llm_moments_to_candidates(moments, timeline, segments=segments or None)
+            lambda: llm_moments_to_candidates(
+                moments, timeline, segments=segments or None, max_len_s=max_len_s
+            )
         )
         if llm_candidates:
             candidates = merge_candidates(candidates, llm_candidates)

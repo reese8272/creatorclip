@@ -3576,6 +3576,9 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
 
             dna_profile = await get_active(session, video.creator_id)
             dna_brief = dna_profile.brief_text if dna_profile else None
+            # Issue 464: the DNA's Shorts-derived native length rides into clip
+            # geometry as a length ceiling; None (cold start) keeps constants.
+            dna_optimal_len_s = dna_profile.optimal_clip_len_s if dna_profile else None
 
             # Issue 371: distilled review-feedback preferences ride into scoring
             # as a separate system block (fetched before this session closes).
@@ -3607,6 +3610,7 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                 ledger_session_factory=partial(db.tenant_session, creator_id),
                 style_notes=style_notes,
                 video_context=video_context,
+                optimal_clip_len_s=dna_optimal_len_s,
             )
 
         async with db.tenant_session(creator_id) as session:
