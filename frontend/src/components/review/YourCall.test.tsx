@@ -282,6 +282,25 @@ describe('YourCall — keep/drop write failures (Issue 437)', () => {
   })
 })
 
+// Issue 472 — Skip is queue navigation, not feedback. The old handler POSTed
+// {action:'skip'}, which the server treated as a RETRACTION in the training
+// partition: Trim → Skip silently erased the trim label while the pile stayed
+// kept. Skip must advance the queue and touch the network not at all.
+describe('YourCall — skip is pure navigation (Issue 472)', () => {
+  it('advances the queue without POSTing feedback', async () => {
+    const fetchMock = vi.fn(async () => ({ status: 201, ok: true, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const onAdvance = vi.fn()
+    renderYourCall(CLIP, onAdvance)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip' }))
+
+    expect(onAdvance).toHaveBeenCalledTimes(1)
+    expect(postsTo(fetchMock, '/clips/c1/feedback')).toHaveLength(0)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
 // Issue 451 — the re-render affordance for an ALREADY-rendered clip.
 //
 // The trigger used to live only inside StagePlaceholder, which the stage swaps out the

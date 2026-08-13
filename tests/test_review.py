@@ -100,13 +100,40 @@ def test_submit_trim_with_times():
     assert resp.json()["action"] == "trim"
 
 
-def test_submit_skip():
+def test_submit_skip_is_acknowledged_but_never_persisted():
+    """Issue 472: skip is queue navigation, not a verdict — a 201 ack with
+    id=None, no ClipFeedback row, no triage change, no retrain enqueue."""
+    from unittest.mock import patch
+
     creator = _make_creator()
     clip = _make_clip(creator.id)
-    client = _build_client(creator, clip)
+    clip.triage = "kept"
+    session_holder = {}
 
-    resp = client.post(f"/clips/{clip.id}/feedback", json={"action": "skip"})
+    async def fake_session():
+        session = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, clip)
+        )
+        session.add = MagicMock()
+        session.commit = AsyncMock()
+        session_holder["session"] = session
+        yield session
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = fake_session
+    client = TestClient(app, raise_server_exceptions=True)
+
+    with patch("worker.tasks.retrain_preference") as task:
+        resp = client.post(f"/clips/{clip.id}/feedback", json={"action": "skip"})
+
     assert resp.status_code == 201
+    assert resp.json() == {"id": None, "action": "skip"}
+    session = session_holder["session"]
+    session.add.assert_not_called()
+    session.commit.assert_not_awaited()
+    assert clip.triage == "kept", "skip must not move the pile"
+    task.apply_async.assert_not_called()
 
 
 def test_feedback_invalid_action_rejected():

@@ -51,7 +51,9 @@ _KEEP_ACTIONS: frozenset[FeedbackAction] = frozenset(
 
 
 class FeedbackOut(BaseModel):
-    id: str
+    # `id` is None for `skip` (Issue 472): skip is acknowledged, never persisted,
+    # so there is no feedback row to identify.
+    id: str | None
     action: str
 
 
@@ -204,8 +206,23 @@ async def submit_feedback(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Record a feedback action for a clip."""
+    """Record a feedback action for a clip.
+
+    ``skip`` is the one action that is acknowledged but NOT recorded (Issue 472,
+    SEV1): on this surface it means "advance past this clip" — UI navigation —
+    while in the training partition a ``skip`` row is a RETRACTION that
+    supersedes the clip's latest real label and then drops out at the trainable
+    filter. The shipped Trim → Skip flow therefore silently erased keep labels
+    while the pile stayed ``kept``. Retraction remains available where it is
+    meant: ``PUT /clips/{id}/triage`` back to ``pending``.
+    """
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+
+    # Issue 472 — pure ack: no ClipFeedback row, no triage change, no retrain
+    # enqueue, no activation probe. 201 with id=None keeps the response shape
+    # stable for clients that fire-and-forget the POST.
+    if body.action is FeedbackAction.skip:
+        return {"id": None, "action": FeedbackAction.skip.value}
 
     # Issue 339 (timebase corrected, ready-pass W1): trim values are
     # CLIP-RELATIVE seconds over the rendered mp4 — origin is
@@ -244,11 +261,15 @@ async def submit_feedback(
     # Issue 444 — a rating IS a verdict, so the pile moves with it in the same
     # transaction. Deriving triage server-side rather than making the client
     # send both is what makes it structurally impossible for the rating and the
-    # pile to disagree. `skip` is absent from the map on purpose: skipping is
-    # not a verdict, so the clip keeps whatever state it had and stays in the
-    # queue. The reverse direction is NOT symmetric — PUT /clips/{id}/triage
-    # moves a clip between piles WITHOUT writing a label, which is what stops a
-    # restore-from-drop from poisoning the training set.
+    # pile to disagree. The invariant (pinned by the integration lane): a
+    # `kept`/`dropped` pile implies exactly one surviving matching-polarity
+    # label in the verdict partition; `pending` implies none. `skip` never
+    # reaches this point — it early-returns above without writing a row
+    # (Issue 472), so it can neither move the pile nor retract a label; the
+    # only retraction path is PUT /clips/{id}/triage back to `pending`, which
+    # records the `skip` row that wins the partition and then drops out. The
+    # reverse direction is NOT symmetric — PUT /clips/{id}/triage moves a clip
+    # between piles while writing the matching label in the same transaction.
     implied_triage = TRIAGE_BY_FEEDBACK_ACTION.get(body.action)
     if implied_triage is not None:
         clip.triage = implied_triage
