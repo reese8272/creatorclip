@@ -167,6 +167,18 @@ def preference_weight(label_count: int) -> float:
     return round(min(cap, cap * ramp), 4)
 
 
+def blend_scores(fit_score: float, pref_score: float, weight: float) -> float:
+    """The ONE personalization blend: (1-weight)*fit + weight*pref.
+
+    Shared by ``rerank_with_preference`` (which persists it to
+    ``Clip.blended_score``) and the efficacy harness's ``_blend_scores`` — the
+    Issue-475 parity interface. Keeping a single implementation is what makes
+    the offline NDCG numbers measure the formula production actually serves
+    (Issue 465).
+    """
+    return (1.0 - weight) * fit_score + weight * pref_score
+
+
 def fit(
     X: np.ndarray,
     y: np.ndarray,

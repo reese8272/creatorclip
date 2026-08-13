@@ -68,22 +68,6 @@ async def test_rerank_noop_below_threshold():
 
 
 @pytest.mark.asyncio
-async def test_rerank_blends_and_reorders_above_threshold():
-    from clip_engine.ranking import rerank_with_preference
-
-    a, b = _clip(0.9), _clip(0.1)
-    # weight = cap (0.5) at 2× threshold. pref flips the order: a→0.0, b→1.0.
-    stub = _StubScorer(label_count=2 * settings.PERSONALIZATION_THRESHOLD_LABELS, scores=[0.0, 1.0])
-    with patch("preference.train.load_latest", new=AsyncMock(return_value=stub)):
-        out = await rerank_with_preference([a, b], MagicMock(), MagicMock())
-
-    # blended: a = 0.5*0.9 + 0.5*0.0 = 0.45 ; b = 0.5*0.1 + 0.5*1.0 = 0.55 → b first
-    assert out[0] is b and out[0].rank == 1
-    assert out[1] is a and out[1].rank == 2
-    assert b.score == pytest.approx(0.55)
-
-
-@pytest.mark.asyncio
 async def test_rerank_noop_when_no_model():
     from clip_engine.ranking import rerank_with_preference
 

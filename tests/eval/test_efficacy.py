@@ -108,7 +108,6 @@ def test_blend_parity_with_shared_helper() -> None:
     For identical inputs, `_blend_scores` must equal the helper applied to
     (dna_composite, predict_score, preference_weight(label_count)) per clip."""
     from preference.model import blend_scores, preference_weight
-
     from tests.eval.efficacy import _blend_scores
 
     base = datetime(2026, 1, 1, tzinfo=UTC)
@@ -127,9 +126,7 @@ def test_blend_parity_with_shared_helper() -> None:
     weight = preference_weight(scorer.label_count)
     assert weight > 0.0  # the parity claim is vacuous at weight 0
 
-    expected = [
-        blend_scores(c.dna_composite, scorer.predict_score(c.features), weight) for c in ev
-    ]
+    expected = [blend_scores(c.dna_composite, scorer.predict_score(c.features), weight) for c in ev]
     assert _blend_scores(train, ev) == pytest.approx(expected)
 
     # And the helper itself is the documented formula.

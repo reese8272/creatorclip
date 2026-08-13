@@ -165,7 +165,7 @@ async def rerank_with_preference(
     Falls back silently if no model is trained yet (below threshold).
     """
     from preference.features import clip_features
-    from preference.model import preference_weight
+    from preference.model import blend_scores, preference_weight
     from preference.train import load_latest
 
     scorer = await load_latest(session, creator_id)
@@ -200,9 +200,9 @@ async def rerank_with_preference(
         logger.warning("Preference rerank failed (%s) — keeping DNA ranking", exc)
         return clips
 
-    # A non-finite prediction (NaN/inf) would blend into clip.score and make the
-    # subsequent sort order undefined. Treat it as a broken model and fall back to
-    # the DNA ranking untouched — the same honest behavior as a predict exception.
+    # A non-finite prediction (NaN/inf) would blend into blended_score and make
+    # the subsequent sort order undefined. Treat it as a broken model and fall
+    # back to the DNA ranking untouched — same honest behavior as an exception.
     if not all(math.isfinite(s) for s in pref_scores):
         logger.warning(
             "Preference model produced a non-finite score for creator %s — keeping DNA ranking",
@@ -210,10 +210,15 @@ async def rerank_with_preference(
         )
         return clips
 
+    # Issue 465: the blend goes to blended_score; clip.score stays the immutable
+    # DNA/LLM fit composite every downstream fit reader depends on.
     for clip, pref_score in zip(clips, pref_scores, strict=True):
-        clip.score = (1.0 - weight) * (clip.score or 0.0) + weight * pref_score
+        clip.blended_score = blend_scores(clip.score or 0.0, pref_score, weight)
 
-    clips.sort(key=lambda c: _safe_score(c.score), reverse=True)
+    clips.sort(
+        key=lambda c: _safe_score(c.blended_score if c.blended_score is not None else c.score),
+        reverse=True,
+    )
     for i, clip in enumerate(clips):
         clip.rank = i + 1
 

@@ -756,7 +756,15 @@ class Clip(Base):
     start_s: Mapped[float] = mapped_column(sa.Float, nullable=False)
     end_s: Mapped[float] = mapped_column(sa.Float, nullable=False)
     peak_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    # Score semantics (Issue 465, migration 0059):
+    # `score` is the IMMUTABLE DNA/LLM fit composite, set once at persist time
+    # and never rewritten — every fit reader (recap candidates, proof-of-lift,
+    # chat tools, efficacy's dna_composite) depends on that stability.
+    # `blended_score` is (1-w)*score + w*pref, written by rerank_with_preference;
+    # NULL = personalization never applied (below threshold, no trained model,
+    # or the append path, which skips the rerank by design).
     score: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    blended_score: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     dna_match: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     signals_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     format: Mapped[ClipFormat] = mapped_column(
