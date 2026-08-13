@@ -4,7 +4,31 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-12 (latest) — Issue 453 SEV1 found and fixed; 451 + 452 closed
+## 2026-08-12/13 (latest) — Beta close-out Wave 0: Lane L29 filed; 479 DONE; 454 code-complete
+
+The full beta close-out plan (7 waves, L29 + open tail + drills + billing proof, with a concrete
+back-testing spine) was approved and started. W0 so far:
+
+- **Audit deliverables merged** (PR #85): `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md`,
+  Lane L29 (Issues 456–482) in `docs/issues.md`, plus the W0 preservation snapshot
+  (`docs/assessment/exports/7e988321_pre_l29_snapshot.json` — 13-clip geometry exported read-only
+  from prod; all 11 rendered artifacts HEAD-verified on R2, so the visual "before" survives the
+  2026-08-13 source purge). Owner decisions recorded in DECISIONS: Batch-E gate `[DEC]` and the
+  448-lapse (live drill moves to the W6 same-recording fresh-upload back-test).
+- **Issue 479 DONE** (PR #86 merged; drill PR #87 closed red-by-design): per-module coverage
+  floors + diff-cover had been silently "skipped" in CI since 2026-06-23 (`run_layer0.py` deleted
+  `_coverage.xml` between ci.yml's two invocations). Now: cleanup at the producing gate's start,
+  ONE CI invocation, and a generic `--require` flag that turns a skipped required gate into a hard
+  failure. Drill proof: a planted clip_engine floor of 99.9 failed the job with real numbers.
+  Riders: `ci_local.sh` unit lane no longer demands Postgres (the unit lane mocks the DB by
+  design), pre-push hook installed (`core.hooksPath → .githooks`), root `.nvmrc` 22.17.1.
+- **Issue 454 CODE-COMPLETE** (PR #88): checkout intent id re-scoped from the browser tab to one
+  purchase attempt (useRef map + synchronous in-flight latch); `stripe.IdempotencyError` → 409
+  `{code: checkout_conflict}`; failure logs carry classification fields and never the key or
+  intent_id; first-ever `buyPack` tests. Live half (a real purchase) is the next W0 step and the
+  only thing that flips the GO_LIVE billing gate.
+
+## 2026-08-12 — Issue 453 SEV1 found and fixed; 451 + 452 closed
 
 ### Issue 453 — billing had never worked, in production, for 10 weeks
 

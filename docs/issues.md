@@ -3770,11 +3770,25 @@ coverage,module_coverage,diff_cover --require-coverage`) or stop deleting the XM
 cleanup to the producing gate's start). Add `--require` semantics to module_coverage/diff_cover in
 CI so "skipped" fails there. Fix ci_local.sh's precondition; install the hook.
 
+**Status: DONE 2026-08-12 (PR #86, merged; drill PR #87 closed unmerged).** Fix took BOTH
+directions: cleanup moved to the producing gate's start (order-independent) AND the CI job
+single-invocationed with a new generic `--require coverage,module_coverage,diff_cover` flag.
+`tests/test_ci_config.py` pins the shape. Rider: root `.nvmrc` (22.17.1) + PATH honor in
+`ci_local.sh`, because the freshly-installed hook's first run reproduced the node-26 jsdom
+phantom and would otherwise fail every push.
+
 **Acceptance**
-- [ ] CI log shows module floors + diff-cover actually evaluating (numbers, not "skipped")
-- [ ] A deliberate floor-violation branch fails the job (drill on a scratch PR)
-- [ ] "skipped" is a failure in CI context for these two gates
-- [ ] `ci_local.sh` runs the unit lane with Redis only; hook installation documented/verified
+- [x] CI log shows module floors + diff-cover actually evaluating — PR #86's coverage job:
+      `coverage ok 84.18 · module_coverage ok {clip_engine 93.03/91.0, preference 90.24/88.0,
+      crypto/limiter/auth 100/99} · diff_cover ok`
+- [x] A deliberate floor-violation branch fails the job — drill PR #87 (clip_engine floor 99.9):
+      `module_coverage fail ['clip_engine: 93.0% < floor 99.9%'] → GATES FAILED → exit 1`,
+      log excerpt recorded on #86
+- [x] "skipped" is a failure in CI context for these two gates — `--require` flag; red-path
+      proven locally (missing XML → exit 1 with explicit FAILs)
+- [x] `ci_local.sh` runs the unit lane with Redis only (2977 green locally, no Postgres); hook
+      installed via `scripts/setup_hooks.sh` (`core.hooksPath → .githooks`) and verified live —
+      it blocked a real push before the node pin
 
 ### Issue 480: preference-model evaluation gap — the DNA fixture proves a sort, the rerank has no eval
 
