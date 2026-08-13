@@ -1307,7 +1307,9 @@ async def clean_confirm(
         try:
             await adelete_file(prior_render_uri)
         except Exception as exc:
-            logger.warning("Storage purge failed for superseded render %s: %s", prior_render_uri, exc)
+            logger.warning(
+                "Storage purge failed for superseded render %s: %s", prior_render_uri, exc
+            )
     return {
         "clip_id": str(clip_id),
         "render_uri": seen_cleaned_uri,
