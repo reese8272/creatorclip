@@ -329,6 +329,8 @@ def test_brand_kit_render_applies_kit_defaults(client):
     clip.id = uuid.uuid4()
     clip.creator_id = creator.id
     clip.render_status = RenderStatus.pending
+    clip.cleaned_render_uri = None  # Issue 468: no pending clean/edit
+    clip.downloaded_at = None  # Issue 447
     clip.style_preset = None  # no per-clip style set
 
     kit_row = MagicMock(spec=CreatorStyle)
@@ -396,6 +398,8 @@ def test_brand_kit_render_applies_kit_with_no_request_body(client):
     clip.id = uuid.uuid4()
     clip.creator_id = creator.id
     clip.render_status = RenderStatus.pending
+    clip.cleaned_render_uri = None  # Issue 468: no pending clean/edit
+    clip.downloaded_at = None  # Issue 447
     clip.style_preset = None  # the clip was persisted outside the auto-render slice
 
     kit_row = MagicMock(spec=CreatorStyle)
@@ -447,6 +451,8 @@ def test_brand_kit_render_request_body_overrides_kit(client):
     clip.id = uuid.uuid4()
     clip.creator_id = creator.id
     clip.render_status = RenderStatus.pending
+    clip.cleaned_render_uri = None  # Issue 468: no pending clean/edit
+    clip.downloaded_at = None  # Issue 447
     clip.style_preset = None
 
     kit_row = MagicMock(spec=CreatorStyle)

@@ -35,7 +35,13 @@ def _mock_clip(creator_id, cleaned_render_uri="clips/x_clean.mp4"):
     return clip
 
 
-def _post_discard(client, clip, creator):
+def _post_discard(client, clip, creator, cas_rowcount: int = 1):
+    """POST /clean/discard with a mocked session.
+
+    ``cas_rowcount`` feeds the compare-and-swap UPDATE's result (Issue 468):
+    1 = this request cleared the pending artifact; 0 = a concurrent
+    confirm/discard got there first.
+    """
     from auth import get_current_creator
     from db import get_session
     from main import app
@@ -43,7 +49,19 @@ def _post_discard(client, clip, creator):
     async def _session():
         s = AsyncMock()
         stub_get_owned(s, clip)
+
+        async def _execute(stmt, *a, **kw):
+            if not _execute.first_done:
+                _execute.first_done = True
+                from tests._helpers import owned_result
+
+                return owned_result(clip)
+            return MagicMock(rowcount=cas_rowcount)
+
+        _execute.first_done = False
+        s.execute = AsyncMock(side_effect=_execute)
         s.commit = AsyncMock()
+        s.rollback = AsyncMock()
         yield s
 
     app.dependency_overrides[get_current_creator] = lambda: creator
@@ -119,6 +137,38 @@ def test_clean_discard_tolerates_storage_purge_failure(client):
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "discarded"
     assert clip.cleaned_render_uri is None
+
+
+def test_clean_discard_double_clean_state_never_deletes_the_live_render(client):
+    """Issue 468 audit find: a SECOND clean writes the same ``clips/{id}_clean.mp4``
+    key the first confirm already swapped into ``render_uri``, so
+    ``cleaned_render_uri == render_uri``. Discarding that pending artifact must
+    NOT purge the object — it is the live render the creator is watching."""
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id, cleaned_render_uri="clips/x_clean.mp4")
+    clip.render_uri = "clips/x_clean.mp4"  # first clean already confirmed
+
+    with patch("worker.storage.adelete_file", AsyncMock(return_value=None)) as mock_delete:
+        resp = _post_discard(client, clip, creator)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "discarded"
+    mock_delete.assert_not_awaited()
+
+
+def test_clean_discard_lost_race_is_noop_without_delete(client):
+    """Issue 468: a discard that loses the CAS race to a concurrent
+    /clean/confirm must not delete the artifact — confirm may have just swapped
+    it into ``render_uri``. rowcount 0 → noop, storage untouched."""
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+
+    with patch("worker.storage.adelete_file", AsyncMock(return_value=None)) as mock_delete:
+        resp = _post_discard(client, clip, creator, cas_rowcount=0)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "noop"
+    mock_delete.assert_not_awaited()
 
 
 def test_clean_discard_unblocks_subsequent_clean(client):

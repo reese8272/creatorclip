@@ -841,6 +841,16 @@ class Clip(Base):
     # has_crop_track (a track is ~15–20 KB). NOT part of ClipEditDocument —
     # worker writes there would bump CAS revisions and kill client autosaves.
     reframe_track_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Download record (Issue 447, migration 0060) — semantics: download initiated
+    # (302 issued with disposition=attachment) for the CURRENT render; cleared on
+    # re-render (the Issue-353 reset in POST /clips/{id}/render) and on
+    # /clean/confirm's artifact swap, both of which replace the render the stamp
+    # described. The same endpoint backs the in-app player with
+    # disposition=inline, which never stamps — watching is not downloading.
+    # NULL = the current render was never downloaded.
+    downloaded_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
