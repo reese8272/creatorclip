@@ -34,6 +34,7 @@ import logging
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -81,6 +82,41 @@ async def _post(path: str, token: str) -> int:
         return r.status_code
 
 
+async def _await_post_status(
+    path: str,
+    token: str,
+    *,
+    accept: Callable[[int], bool],
+    what: str,
+    timeout_s: float,
+) -> int:
+    """Poll POST ``path`` until ``accept(status)`` holds; AssertionError on timeout.
+
+    A flag flip is NOT instantaneous across processes. ``flags._reset_cache()``
+    clears THIS process's cache, but the probe travels over HTTP to the uvicorn
+    app, which keeps its own ``FLAG_TTL_S`` (~30 s) cache — so a flip is only
+    guaranteed visible after one TTL window, exactly as flags.py documents
+    ("running processes converge within one TTL window").
+
+    Asserting immediately after a flip races that window. The 2026-08-13 run
+    failed on precisely this ("still 503 after re-enable: 503"): the disable
+    probe warmed the app's cache with False, and the re-enable was asserted
+    ~90 ms later against that still-valid cache entry. The disable assertion was
+    equally racy and only passed because the app's cache happened to be cold.
+    """
+    import httpx
+
+    deadline = time.monotonic() + timeout_s
+    async with httpx.AsyncClient(timeout=15.0) as c:
+        while True:
+            code = (await c.post(f"{_BASE}{path}", cookies={"cc_session": token})).status_code
+            if accept(code):
+                return code
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"{what}: still {code} after {timeout_s:.0f}s (flag TTL)")
+            await asyncio.sleep(1.0)
+
+
 async def drill_flags_flip() -> None:
     """#284: kill switch disables a live LLM surface without a deploy."""
     import flags
@@ -91,14 +127,22 @@ async def drill_flags_flip() -> None:
     assert await _get(probe, token) == 200, "staging auth probe failed"
 
     llm_probe = "/creators/me/improvement-brief"  # POST is require_flag-gated
+    # Allow two TTL windows for the app process to observe each flip (see
+    # _await_post_status): one for the entry to expire, one for slack.
+    converge_s = flags.FLAG_TTL_S * 2
     try:
         async with AsyncSessionLocal() as s:
             await flags.set_flag(
                 "llm_generation", False, updated_by="drill", reason="flags-flip drill", session=s
             )
         flags._reset_cache()
-        code = await _post(llm_probe, token)
-        assert code == 503, f"expected 503 while disabled, got {code}"
+        code = await _await_post_status(
+            llm_probe,
+            token,
+            accept=lambda c: c == 503,
+            what="expected 503 while llm_generation disabled",
+            timeout_s=converge_s,
+        )
         log.info("flags-flip: disabled -> %s (503 confirmed)", code)
     finally:
         async with AsyncSessionLocal() as s:
@@ -110,8 +154,13 @@ async def drill_flags_flip() -> None:
                 session=s,
             )
         flags._reset_cache()
-    code = await _post(llm_probe, token)
-    assert code != 503, f"still 503 after re-enable: {code}"
+    code = await _await_post_status(
+        llm_probe,
+        token,
+        accept=lambda c: c != 503,
+        what="still 503 after re-enable",
+        timeout_s=converge_s,
+    )
     log.info("flags-flip: re-enabled -> %s. PASS", code)
 
 
