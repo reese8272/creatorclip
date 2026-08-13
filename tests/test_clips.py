@@ -254,3 +254,100 @@ def test_build_personalization_status_above_threshold():
     status = _build_personalization_status(scorer)
     assert status.active is True
     assert abs(status.weight - cap) < 1e-6
+
+
+# ── Issue 447: downloaded_at + latest-publication summary on the list surface ──
+
+
+def _full_clip(creator_id: uuid.UUID, video_id: uuid.UUID, rank: int) -> MagicMock:
+    """Mock clip carrying every attribute _clip_response reads."""
+    from datetime import UTC, datetime
+
+    from models import Clip, ClipTriage, RenderStatus
+
+    c = MagicMock(spec=Clip)
+    c.id = uuid.uuid4()
+    c.video_id = video_id
+    c.creator_id = creator_id
+    c.setup_start_s = 5.0
+    c.start_s = 5.0
+    c.end_s = 65.0
+    c.peak_s = 50.0
+    c.score = 0.8
+    c.rank = rank
+    c.signals_jsonb = {"principle": "Hook in the first 3 seconds", "reasoning": "Strong."}
+    c.render_status = RenderStatus.done
+    c.render_uri = f"s3://b/clips/{c.id}.mp4"
+    c.cleaned_render_uri = None
+    c.applied_title = None
+    c.applied_description = None
+    c.suggested_title = None
+    c.suggested_description = None
+    c.suggested_hook = None
+    c.style_preset = None
+    c.poster_uri = None
+    c.reframe_track_jsonb = None
+    c.triage = ClipTriage.kept
+    c.downloaded_at = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    return c
+
+
+def test_list_clips_carries_download_and_publication_state_without_n_plus_1(client):
+    """Issue 447: each clip carries ``downloaded_at`` and a latest-publication
+    summary (status / scheduled_at / youtube_video_id), fetched for the WHOLE
+    list in ONE aggregate query — execute count stays flat as clips grow."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from models import ClipPublication, PublishStatus
+    from tests._helpers import owned_result
+
+    creator = _creator()
+    video = _video(creator.id)
+    clip_a = _full_clip(creator.id, video.id, rank=1)
+    clip_b = _full_clip(creator.id, video.id, rank=2)
+
+    pub = MagicMock(spec=ClipPublication)
+    pub.clip_id = clip_a.id
+    pub.status = PublishStatus.done
+    pub.scheduled_at = datetime(2026, 8, 11, 18, 0, tzinfo=UTC)
+    pub.youtube_video_id = "yt-abc123"
+
+    clips_result = MagicMock()
+    clips_result.scalars.return_value = iter([clip_a, clip_b])
+    pubs_result = MagicMock()
+    pubs_result.scalars.return_value = [pub]
+
+    async def _session():
+        session = AsyncMock(spec=AsyncSession)
+        # Three executes TOTAL for a two-clip list: get_owned(Video), the clip
+        # select, and ONE publications aggregate (load_latest is patched out).
+        # A per-clip lookup would exhaust this side_effect list and error.
+        session.execute = AsyncMock(
+            side_effect=[owned_result(video), clips_result, pubs_result]
+        )
+        yield session
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _session
+    try:
+        with patch("preference.train.load_latest", new=AsyncMock(return_value=None)):
+            resp = client.get(f"/videos/{video.id}/clips", cookies={"session": "x"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200, resp.text
+    clips = resp.json()["clips"]
+    assert len(clips) == 2
+
+    a = next(c for c in clips if c["id"] == str(clip_a.id))
+    b = next(c for c in clips if c["id"] == str(clip_b.id))
+    assert a["downloaded_at"] is not None
+    assert a["latest_publication"] == {
+        "status": "done",
+        "scheduled_at": "2026-08-11T18:00:00Z",
+        "youtube_video_id": "yt-abc123",
+    }
+    # clip_b has no publications — honest null, never a fabricated state.
+    assert b["latest_publication"] is None

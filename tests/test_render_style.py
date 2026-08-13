@@ -25,6 +25,8 @@ def _mock_clip(creator_id: uuid.UUID, style: dict | None = None) -> MagicMock:
     clip.creator_id = creator_id
     clip.render_status = RenderStatus.pending
     clip.style_preset = style
+    clip.cleaned_render_uri = None  # Issue 468: no pending clean/edit by default
+    clip.downloaded_at = None  # Issue 447: download stamp
     return clip
 
 
@@ -353,6 +355,102 @@ def test_render_clip_file_no_style_unchanged(tmp_path):
     vf = called_args["cmd"][vf_arg_index + 1]
     assert "subtitles=" not in vf
     assert "drawtext" not in vf
+
+
+def test_render_endpoint_409_when_clean_or_edit_pending(client):
+    """Issue 468: a re-render fired while a cleaned/edited artifact is pending
+    races /clean/confirm's render_uri swap — the plain render endpoint must
+    carry the same pending_clean_or_edit 409 its /clean, /cuts and trim
+    siblings already have."""
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+    clip.render_status = RenderStatus.done
+    clip.render_uri = f"s3://test/clips/{clip.id}.mp4"
+    clip.cleaned_render_uri = f"s3://test/clips/{clip.id}_clean.mp4"
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session(clip)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+    ):
+        try:
+            resp = client.post(f"/clips/{clip.id}/render", cookies={"session": "x"})
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "pending_clean_or_edit"
+    mock_task.delay.assert_not_called()
+    # The Issue-353 reset must not have fired either — the watchable render stays.
+    assert clip.render_status == RenderStatus.done
+    assert clip.render_uri is not None
+
+
+def test_render_endpoint_reset_clears_downloaded_at(client):
+    """Issue 447: downloaded_at describes the CURRENT render. The Issue-353
+    re-render reset replaces that render, so the stamp must clear in the same
+    transaction as the render_status/render_uri reset."""
+    from datetime import UTC, datetime
+
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+    clip.render_status = RenderStatus.done
+    clip.render_uri = f"s3://test/clips/{clip.id}.mp4"
+    clip.downloaded_at = datetime(2026, 8, 1, tzinfo=UTC)
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session(clip)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        mock_task.delay.return_value = MagicMock(id="task-clear-stamp")
+        try:
+            resp = client.post(f"/clips/{clip.id}/render", cookies={"session": "x"})
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 202
+    assert clip.downloaded_at is None
+
+
+def test_render_endpoint_enqueue_failure_restores_downloaded_at(client):
+    """Issue 447 companion to the 359c snapshot: when the broker throw restores
+    the previous render, the download stamp that described it comes back too —
+    the clip is byte-for-byte the one that was downloaded."""
+    from datetime import UTC, datetime
+
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+    clip.render_status = RenderStatus.done
+    prior_uri = f"s3://test/clips/{clip.id}.mp4"
+    prior_stamp = datetime(2026, 8, 1, tzinfo=UTC)
+    clip.render_uri = prior_uri
+    clip.downloaded_at = prior_stamp
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session(clip)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        mock_task.delay.side_effect = RuntimeError("broker down")
+        try:
+            resp = client.post(f"/clips/{clip.id}/render", cookies={"session": "x"})
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 503
+    assert clip.render_status == RenderStatus.done
+    assert clip.render_uri == prior_uri
+    assert clip.downloaded_at == prior_stamp
 
 
 def test_render_endpoint_409_when_source_expired(client):

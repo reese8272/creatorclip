@@ -25,6 +25,7 @@ def _clip(
     clip.creator_id = creator_id
     clip.render_uri = render_uri
     clip.cleaned_render_uri = cleaned_render_uri
+    clip.downloaded_at = None  # Issue 447: unstamped until an attachment download
     return clip
 
 
@@ -127,6 +128,65 @@ def test_download_cleaned_variant_uses_cleaned_uri(client):
         app.dependency_overrides.clear()
     assert resp.status_code == 302
     assert captured["uri"] == "s3://b/clean.mp4"
+
+
+def test_download_attachment_stamps_downloaded_at(client):
+    """Issue 447: a disposition=attachment download of the current render is the
+    'the creator has this file' event — the endpoint stamps ``downloaded_at``
+    before issuing the 302."""
+    from datetime import datetime
+
+    creator = _creator()
+    clip = _clip(creator.id, render_uri="s3://bucket/clips/x.mp4")
+    _overrides(creator, clip)
+    try:
+        with patch("routers.clips.presigned_download_url", return_value="https://signed/clip"):
+            resp = client.get(
+                f"/clips/{clip.id}/download", cookies={"session": "x"}, follow_redirects=False
+            )
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 302
+    assert isinstance(clip.downloaded_at, datetime)
+
+
+def test_download_inline_does_not_stamp_downloaded_at(client):
+    """Issue 447 RED line: the same endpoint backs the in-app player with
+    disposition=inline — watching a clip is not downloading it, so inline must
+    never stamp."""
+    creator = _creator()
+    clip = _clip(creator.id, render_uri="s3://bucket/clips/x.mp4")
+    _overrides(creator, clip)
+    try:
+        with patch("routers.clips.presigned_download_url", return_value="https://signed/clip"):
+            resp = client.get(
+                f"/clips/{clip.id}/download?disposition=inline",
+                cookies={"session": "x"},
+                follow_redirects=False,
+            )
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 302
+    assert clip.downloaded_at is None
+
+
+def test_download_cleaned_variant_does_not_stamp_downloaded_at(client):
+    """Issue 447: ``downloaded_at`` describes the CURRENT render. Downloading
+    the pending cleaned preview (variant=cleaned) is not that — no stamp."""
+    creator = _creator()
+    clip = _clip(creator.id, render_uri="s3://b/orig.mp4", cleaned_render_uri="s3://b/clean.mp4")
+    _overrides(creator, clip)
+    try:
+        with patch("routers.clips.presigned_download_url", return_value="https://signed/clean"):
+            resp = client.get(
+                f"/clips/{clip.id}/download?variant=cleaned",
+                cookies={"session": "x"},
+                follow_redirects=False,
+            )
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 302
+    assert clip.downloaded_at is None
 
 
 def test_download_local_file_streams_as_attachment(client, tmp_path):
