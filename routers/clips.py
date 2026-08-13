@@ -446,6 +446,7 @@ async def generate_clips(
         style_notes=style_notes,
         video_context=video_context,
         optimal_clip_len_s=dna_optimal_len_s,
+        container_duration_s=video.duration_s,
     )
     if not ranked:
         return {"clips": []}
@@ -559,6 +560,7 @@ async def generate_more_clips(
         video_context=video_context,
         exclude_windows=exclude_windows,
         optimal_clip_len_s=dna_optimal_len_s,
+        container_duration_s=video.duration_s,
     )
 
     async with db.AsyncSessionLocal() as persist_session:
@@ -1294,6 +1296,18 @@ async def clean_confirm(
     # render whose cuts are applied AND a document that still describes them.
     edit_revision = await _clear_edit_document(session, clip_id)
     await session.commit()
+    # Issue 446/471 (L143): the swap orphans the replaced original — no row
+    # references it anymore, so DB-driven purges can't reach it until the
+    # archive/erase enumeration reconstructs the key. Best-effort delete now
+    # (after commit, mirroring discard's posture); skip in the double-clean
+    # state where the "prior" object IS the one just swapped in.
+    if prior_render_uri and prior_render_uri != seen_cleaned_uri:
+        from worker.storage import adelete_file
+
+        try:
+            await adelete_file(prior_render_uri)
+        except Exception as exc:
+            logger.warning("Storage purge failed for superseded render %s: %s", prior_render_uri, exc)
     return {
         "clip_id": str(clip_id),
         "render_uri": seen_cleaned_uri,
