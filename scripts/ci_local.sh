@@ -41,6 +41,16 @@ esac
 [ -d "$REPO_ROOT/.venv/bin" ] && export PATH="$REPO_ROOT/.venv/bin:$PATH"
 LAYER0=".claude/skills/production-assessment/scripts/run_layer0.py"
 
+# ── Node: honor .nvmrc when that version is installed via nvm (mirrors the .venv
+#    PATH prefix above). Without this the hook runs whatever node is default —
+#    node 26's jsdom breaks vitest with ~35 phantom failures (OFF_COURSE
+#    2026-08-05), which would fail every push on a box that never chose node 26.
+#    CI pins node 22 in actions/setup-node; this keeps the hook consistent. ──────
+if [ -f "$REPO_ROOT/.nvmrc" ]; then
+  NVM_NODE="$HOME/.nvm/versions/node/v$(tr -d 'v[:space:]' < "$REPO_ROOT/.nvmrc")/bin"
+  [ -d "$NVM_NODE" ] && export PATH="$NVM_NODE:$PATH"
+fi
+
 # ── Change base: what are we about to push? Diff against origin/main, falling back
 #    gracefully so a missing remote ref never errors the hook. ───────────────────
 BASE="$(git merge-base origin/main HEAD 2>/dev/null || true)"
@@ -84,24 +94,23 @@ gate_static() {
   if python3 "$LAYER0" --gates "$gates"; then pass "static ($gates)"; else fail "static ($gates)"; fi
 }
 
-# ── pytest unit — needs Redis (limiter) AND Postgres (conftest session guard). Skip
-#    with a loud note when either is absent; the self-hosted CI always has both. ──
+# ── pytest unit — needs Redis (limiter) only. The unit lane mocks the DB at the
+#    session boundary BY DESIGN (CLAUDE.md testing rules), so the old Postgres
+#    :5432 precondition was wrong and silently skipped the whole lane on every
+#    Docker-less box — the exact machines this local gate exists for (Issue 479;
+#    the lane runs 2975 tests green here with no Postgres). ─────────────────────
 gate_unit() {
   hdr "pytest -m 'not integration'"
   command -v pytest >/dev/null 2>&1 || { skip "pytest unit" "pytest not installed"; return; }
   redis-cli ping >/dev/null 2>&1 || { skip "pytest unit" "Redis down on :6379 — CI covers it"; return; }
-  if ! python3 -c "import socket;socket.create_connection(('localhost',5432),2).close()" 2>/dev/null; then
-    skip "pytest unit" "Postgres down on :5432 — runs on self-hosted CI"; return; fi
   if pytest -m "not integration" -q; then pass "pytest unit"; else fail "pytest unit"; fi
 }
 
-# ── coverage floor (full profile only) ──────────────────────────────────────────
+# ── coverage floor (full profile only; Redis-only for the same Issue-479 reason) ─
 gate_coverage() {
   [ "$PROFILE" = "full" ] || return 0
   hdr "coverage floor (run_layer0: coverage)"
   redis-cli ping >/dev/null 2>&1 || { skip "coverage" "Redis down"; return; }
-  python3 -c "import socket;socket.create_connection(('localhost',5432),2).close()" 2>/dev/null \
-    || { skip "coverage" "Postgres down — CI covers it"; return; }
   if python3 "$LAYER0" --gates coverage --require-coverage; then pass "coverage"; else fail "coverage"; fi
 }
 

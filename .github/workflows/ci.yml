@@ -210,19 +210,21 @@ jobs:
             || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install deps
         run: pip install -r requirements.txt -r requirements-dev.txt
-      - name: Run coverage gate
-        # --require-coverage turns a skipped coverage run into a hard failure so
-        # the floor is genuinely enforced in CI (unlike local runs).
-        run: >-
-          python3 .claude/skills/production-assessment/scripts/run_layer0.py
-          --gates coverage --require-coverage
-      - name: Run per-module coverage floors + diff/patch coverage gate (Issue 269)
-        # Runs after coverage produces _coverage.xml. module_coverage checks per-module
-        # floors for clip_engine/, preference/, crypto.py, limiter.py, auth.py.
+      - name: Run coverage gates (global floor + per-module floors + diff/patch, Issues 269/479)
+        # ONE invocation, deliberately (Issue 479): the three gates share
+        # _coverage.xml, and the old two-invocation shape let the script's
+        # end-of-run cleanup delete the XML between steps — module_coverage and
+        # diff_cover then reported "skipped" with exit 0 on every PR from
+        # 2026-06-23 to 2026-08-12 while printing "All runnable gates passed".
+        # --require lists all three so a skip of ANY of them (missing XML,
+        # missing diff-cover, pytest crash) is a hard job failure, never a
+        # green no-op. module_coverage checks per-module floors for
+        # clip_engine/, preference/, crypto.py, limiter.py, auth.py;
         # diff_cover checks changed-line coverage vs origin/main (--fail-under=80).
         run: >-
           python3 .claude/skills/production-assessment/scripts/run_layer0.py
-          --gates module_coverage,diff_cover
+          --gates coverage,module_coverage,diff_cover
+          --require coverage,module_coverage,diff_cover
 
   migration-lint:
     # Issue 270: Squawk migration linter — detect unsafe DDL before it reaches prod.
