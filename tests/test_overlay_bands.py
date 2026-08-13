@@ -370,6 +370,52 @@ def test_span_times_survive_dropped_frames_and_a_budget_cut(monkeypatch) -> None
     assert doc["sample_interval_s"] == pytest.approx(0.5)
 
 
+@pytest.mark.integration
+def test_real_sampler_finds_band_spans_on_a_600s_source(tmp_path: Path) -> None:
+    """Issue 466 acceptance: the REAL sampler, end to end, past 999 samples.
+
+    A generated 600 s source carries a white lower-frame band at exactly
+    200-230 s and 400-477 s. Detection at 0.5 s cadence issues 1200 seeks —
+    crossing the f999/f1000 boundary that scrambled the glob read-back — and
+    must report both spans at their true times with the full runtime scanned.
+    ~50 s of ffmpeg work, hence the integration marker.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+
+    import clip_engine.overlay_bands as ob
+
+    src = tmp_path / "band_source.mp4"
+    draw = (
+        "drawbox=x=0:y=ih*0.85:w=iw:h=ih*0.10:color=white:t=fill"
+        ":enable='between(t,200,230)+between(t,400,477)'"
+    )
+    gen = subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=5:duration=600",
+         "-vf", draw, "-c:v", "libx264", "-preset", "ultrafast", "-g", "10",
+         "-pix_fmt", "yuv420p", str(src)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert gen.returncode == 0, gen.stderr[-800:]
+
+    doc = ob.detect_overlay_spans(src, 600.0, 320, 180, sample_interval_s=0.5, timeout_s=600.0)
+
+    assert doc is not None
+    assert doc["version"] == OVERLAY_SPANS_VERSION
+    assert doc["samples"] >= 1190, "the 1200-seek pass must not silently thin out"
+    assert doc["scanned_until_s"] == pytest.approx(600.0, abs=1.0)
+    assert len(doc["spans"]) == 2, f"expected both banner instances, got {doc['spans']}"
+    assert doc["spans"][0]["start_s"] == pytest.approx(200.0, abs=1.0)
+    assert doc["spans"][0]["end_s"] == pytest.approx(230.0, abs=1.0)
+    assert doc["spans"][1]["start_s"] == pytest.approx(400.0, abs=1.0)
+    assert doc["spans"][1]["end_s"] == pytest.approx(477.0, abs=1.0)
+
+
 def test_detect_swallows_detector_errors(monkeypatch) -> None:
     """A raising sampler must not propagate into ingest."""
     import clip_engine.overlay_bands as ob
