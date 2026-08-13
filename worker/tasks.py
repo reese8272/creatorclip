@@ -2228,6 +2228,17 @@ async def _transcribe_async(video_id: str, creator_id: str | None = None) -> Non
                 timeout=settings.TRANSCRIPTION_TIMEOUT_S,
             )
 
+        # Issue 481: the normalizer flags silent degradation (e.g. Deepgram's
+        # no-utterances one-segment fallback). Surface it as its own SSE step
+        # so the collapse is visible in the progress stream, not just stored.
+        if isinstance(result, dict) and result.get("degraded"):
+            await aemit(
+                video_id,
+                "step",
+                label="transcript_degraded",
+                stage="transcribe",
+                reason=result["degraded"],
+            )
         await aemit(
             video_id,
             "step",

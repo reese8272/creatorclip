@@ -211,6 +211,17 @@ def _deepgram_word(w: dict) -> dict:
 
 
 def _normalize_deepgram(raw: dict) -> dict:
+    """Normalize a raw Deepgram response to the internal schema.
+
+    Degradation flag (Issue 481): when the response carries NO utterances the
+    fallback collapses every channel word into ONE whole-video segment —
+    sentence snapping then has no real segment boundaries to anchor on (the
+    Issue-456 collapse input). That state used to be silent; it now logs a
+    WARNING and stamps an ADDITIVE top-level ``"degraded": "no_utterances"``
+    key (omitted on the healthy path — old stored transcripts keep their exact
+    shape and every consumer reads it via ``.get()``). Deepgram-specific by
+    design: the AssemblyAI normalizer is single-segment by construction.
+    """
     utterances = (raw.get("results") or {}).get("utterances") or []
     if utterances:
         segments = []
@@ -257,6 +268,13 @@ def _normalize_deepgram(raw: dict) -> dict:
             if words
             else []
         )
+        logger.warning(
+            "Deepgram response has no utterances — falling back to a single "
+            "whole-audio segment (%d words); sentence-boundary granularity is "
+            "degraded for this transcript.",
+            len(words),
+        )
+        return {"source": "deepgram", "segments": segments, "degraded": "no_utterances"}
     return {"source": "deepgram", "segments": segments}
 
 
