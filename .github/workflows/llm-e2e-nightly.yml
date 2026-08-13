@@ -87,6 +87,37 @@ jobs:
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           exit $EXIT_CODE
 
+      - name: Run transcription_live tests (Issue 481)
+        # Live ASR timing-fidelity leg: re-transcribes the checked-in 5 s
+        # LibriSpeech fixture against real Deepgram and asserts every word
+        # timing within ±0.25 s of tests/fixtures/transcription/
+        # expected_words.json. One tiny metered call per night; rides this
+        # nightly (same schedule, same stub-env needs) instead of a separate
+        # workflow. `if: always()` keeps the ASR signal independent of an LLM
+        # failure; a red here still fails the job.
+        if: always()
+        env:
+          RUN_TRANSCRIPTION_LIVE: "1"
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          ANTHROPIC_API_KEY: "stub"
+          DATABASE_URL: "postgresql+psycopg://creatorclip:dev_password@localhost:5432/creatorclip"
+          REDIS_URL: "redis://localhost:6379/0"
+          GOOGLE_OAUTH_CLIENT_ID: "stub"
+          GOOGLE_OAUTH_CLIENT_SECRET: "stub"
+          OAUTH_REDIRECT_URI: "http://localhost:8000/auth/callback"
+          TOKEN_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          JWT_SECRET_KEY: "stub-jwt-secret-32-bytes-minimum-!"
+          ALLOWED_ORIGINS: "http://localhost:8000"
+          LOG_DIR: ""
+        run: |
+          python -m pytest tests/ingestion/test_transcription_live.py \
+            -m transcription_live \
+            -v \
+            --tb=short \
+            --no-header \
+            2>&1 | tee transcription_live_results.txt
+          exit "${PIPESTATUS[0]}"
+
       - name: Post result summary
         if: always()
         run: |
@@ -99,4 +130,12 @@ jobs:
           else
             echo "## LLM E2E Nightly Results" >> "$GITHUB_STEP_SUMMARY"
             echo "No result file found — test step may have failed to start." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "## Transcription live (Issue 481)" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f transcription_live_results.txt ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -10 transcription_live_results.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No ASR result file — the transcription_live step did not run." >> "$GITHUB_STEP_SUMMARY"
           fi

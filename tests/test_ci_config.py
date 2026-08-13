@@ -434,6 +434,28 @@ def test_render_env_step_is_hard_and_guarded() -> None:
     assert "pytest -m render_env -q" in run, "the render-env step must actually run the lane"
 
 
+def test_nightly_runs_transcription_live_leg() -> None:
+    """The nightly workflow must actually run the transcription_live leg
+    (Issue 481) — the marker + addopts exclusion alone would leave the live
+    ASR test executing NOWHERE, the exact silent-empty-lane failure mode of
+    Issue 478. Pins the file path, the marker, the gate env var, and the
+    real secret."""
+    nightly = _load_workflow("llm-e2e-nightly.yml")
+    assert "tests/ingestion/test_transcription_live.py" in nightly, (
+        "llm-e2e-nightly.yml must run the transcription_live test file"
+    )
+    assert "-m transcription_live" in nightly.replace("\\\n", " ").replace("  ", " "), (
+        "the nightly must select the transcription_live marker explicitly"
+    )
+    assert 'RUN_TRANSCRIPTION_LIVE: "1"' in nightly, (
+        "the nightly must set RUN_TRANSCRIPTION_LIVE=1 — without it the live "
+        "test skips and the leg silently stops running"
+    )
+    assert "secrets.DEEPGRAM_API_KEY" in nightly, (
+        "the nightly must inject the real DEEPGRAM_API_KEY secret"
+    )
+
+
 def test_render_env_marker_excluded_from_default_lane() -> None:
     """pytest.ini must keep the underscored `render_env` marker registered and
     excluded from the default addopts lane. The hyphenated `render-env`
