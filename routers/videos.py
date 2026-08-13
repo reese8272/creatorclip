@@ -1408,6 +1408,10 @@ class VideoTranscriptOut(BaseModel):
     segments: list[TranscriptSegmentOut]
     state: EmptyState
     message: str | None = None
+    # Issue 481: additive degradation flag from the normalizer (e.g.
+    # "no_utterances" when Deepgram's one-segment fallback ran). None for
+    # every pre-481 stored transcript — the key is simply absent there.
+    degraded: str | None = None
 
 
 @router.get("/{video_id}/transcript", response_model=VideoTranscriptOut)
@@ -1432,7 +1436,10 @@ async def video_transcript(
     transcript = await session.get(Transcript, video_id)
 
     segments: list[TranscriptSegmentOut] = []
-    raw = (transcript.segments_jsonb or {}).get("segments", []) if transcript else []
+    stored = (transcript.segments_jsonb or {}) if transcript else {}
+    raw = stored.get("segments", [])
+    degraded = stored.get("degraded")
+    degraded = degraded if isinstance(degraded, str) else None
     for i, seg in enumerate(raw):
         try:
             segments.append(
@@ -1460,6 +1467,7 @@ async def video_transcript(
             segments=[],
             state="empty_initial",
             message="This video hasn't been transcribed yet — transcripts are generated during analysis.",
+            degraded=degraded,
         )
     return VideoTranscriptOut(
         video_id=str(video_id),
@@ -1467,4 +1475,5 @@ async def video_transcript(
         source=transcript.source if transcript else None,
         segments=segments,
         state="populated",
+        degraded=degraded,
     )

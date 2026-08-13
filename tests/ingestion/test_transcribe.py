@@ -12,6 +12,7 @@ Also tests: docs/SUBPROCESSORS.md existence (Art. 30 record presence gate).
 from __future__ import annotations
 
 import importlib
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch  # noqa: E402
 
@@ -399,6 +400,75 @@ def test_normalize_deepgram_channels_path_carries_word_speakers():
     # Mixed speakers in the single synthetic segment → NO segment-level key.
     assert "speaker" not in seg
     assert [w["speaker"] for w in seg["words"]] == [0, 1]
+
+
+# ── Issue 481: no-utterances fallback must WARN and set the degraded flag ────
+#
+# The fallback branch silently collapses the whole video into ONE synthetic
+# segment (Issue 456's collapse input). Deepgram-specific by design: the
+# AssemblyAI normalizer is structurally single-segment by construction, so a
+# single segment there is normal, not degradation.
+
+
+def _no_utterances_raw() -> dict:
+    return {
+        "results": {
+            "channels": [
+                {
+                    "alternatives": [
+                        {
+                            "transcript": "hi there friend",
+                            "words": [
+                                {"word": "hi", "start": 0.0, "end": 0.5},
+                                {"word": "there", "start": 0.5, "end": 1.0},
+                                {"word": "friend", "start": 1.2, "end": 1.8},
+                            ],
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+
+
+def test_normalize_deepgram_no_utterances_warns_and_sets_degraded(caplog):
+    """The one-segment fallback must be LOUD: a WARNING log plus an additive
+    ``degraded: no_utterances`` key, so silent degradation becomes visible to
+    the worker (SSE step) and the transcript endpoint."""
+    from ingestion.transcribe import _normalize_deepgram
+
+    with caplog.at_level(logging.WARNING, logger="ingestion.transcribe"):
+        out = _normalize_deepgram(_no_utterances_raw())
+
+    assert out["degraded"] == "no_utterances"
+    assert len(out["segments"]) == 1  # the collapse itself is unchanged behavior
+    assert any(
+        "no utterances" in r.message.lower() for r in caplog.records if r.levelno == logging.WARNING
+    ), "the fallback must log a WARNING naming the no-utterances degradation"
+
+
+def test_normalize_deepgram_utterances_path_omits_degraded_key():
+    """Old-shape compatibility: the healthy utterances path must produce
+    transcripts WITHOUT the key (additive field, omitted when absent — the
+    same contract as the Issue-418 speaker fields)."""
+    from ingestion.transcribe import _normalize_deepgram
+
+    out = _normalize_deepgram(_diarized_deepgram_raw())
+    assert "degraded" not in out
+
+
+def test_normalize_assemblyai_never_sets_degraded():
+    """AssemblyAI is single-segment BY CONSTRUCTION — its normalizer must not
+    flag its normal shape as degraded."""
+    from ingestion.transcribe import _normalize_assemblyai
+
+    word = MagicMock()
+    word.text, word.start, word.end, word.speaker = "hello", 1000, 1500, None
+    transcript = MagicMock()
+    transcript.words = [word]
+    transcript.text = "hello"
+    out = _normalize_assemblyai(transcript)
+    assert "degraded" not in out
 
 
 def test_assemblyai_letter_labels_map_to_ints():
