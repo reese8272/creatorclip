@@ -1,0 +1,33 @@
+scenario: no_utterance_single_segment
+kind: snap
+description: >
+  Issue 456 degenerate half: the Deepgram no-utterance fallback
+  (ingestion/transcribe.py) emits ONE whole-video segment with no terminal
+  punctuation, so the sentence index is a single unterminated span. Pre-fix,
+  every candidate's start snapped to that span's start and the 90 s clamp cut
+  every end at start+90: two distinct moments (peaks ~120 and ~300) collapsed
+  onto the SAME [0.2, 90.2] window — both peaks outside it, and containment
+  suppression then left ONE clip for the entire video. A degenerate index
+  must disable snapping (one warning) and leave the raw candidate geometry
+  intact: two candidates, disjoint setups, each containing its own peak.
+  Principle: "One idea per Short"
+
+input:
+  timeline:
+    version: 1
+    duration_s: 400.0
+    events:
+      - {type: retention_spike, start_s: 119.0, end_s: 121.0, value: 1.6}
+      - {type: retention_spike, start_s: 299.0, end_s: 301.0, value: 1.6}
+  segments:
+    - start: 0.5
+      end: 399.5
+      text: "the whole video is one long unterminated span with no punctuation anywhere"
+
+expected:
+  min_candidates: 2
+  candidates:
+    - setup_start_s_min: 40.0
+      setup_start_s_max: 50.0
+    - setup_start_s_min: 220.0
+      setup_start_s_max: 230.0

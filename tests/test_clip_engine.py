@@ -427,6 +427,17 @@ def _assert_snap_scenario(scenario: dict) -> None:
         f"[{name}] expected >= {min_c} candidates, got {len(candidates)}"
     )
 
+    # Issue 456: the peak must sit strictly inside EVERY snapped window,
+    # unconditionally — no YAML key opts in. The snap branch previously
+    # asserted no peak relationship at all, so a fixture could pass while the
+    # detected moment sat entirely outside the delivered clip.
+    for c in candidates:
+        assert c["setup_start_s"] < c["peak_s"] < c["end_s"], (
+            f"[{name}] peak_s={c['peak_s']} outside snapped window "
+            f"[{c['setup_start_s']}, {c['end_s']}] — the delivered clip would not "
+            "contain the moment it was cut for"
+        )
+
     if expected.get("starts_on_sentence_start", False):
         sentences = build_sentence_index(segments)
         for c in candidates:
