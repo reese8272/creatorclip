@@ -1,0 +1,20 @@
+scenario: silence_only
+description: >
+  Issue 458: a timeline containing ONLY silence events. The composite is 0
+  everywhere except -0.5 inside the silences, so the flat 0 stretches between
+  and around them are local maxima with prominence 0.5 — find_peaks fabricated
+  clip candidates (phantom peaks at ~155s/~255s) from literally nothing.
+  Requiring positive evidence (absolute peak height) means zero candidates —
+  the only honest output for a video with no positive signal at all.
+  Principle: "Retention curve is ground truth" (no positive signal, no clip).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 300.0
+    events:
+      - {type: silence, start_s: 100.0, end_s: 110.0}
+      - {type: silence, start_s: 200.0, end_s: 210.0}
+
+expected:
+  max_candidates: 0

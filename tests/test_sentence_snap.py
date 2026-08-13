@@ -1,9 +1,13 @@
 """Unit tests for clip_engine/sentence_snap.py (Issue 428).
 
-Covers the sentence-index build from Deepgram-shaped segments, the absolute
+Covers the sentence-index build from Deepgram-shaped segments, the bounded
 never-start-mid-sentence guard (the meaning-inverting live cut), the length
-clamp for LLM windows, and the invariant-repair tail.
+clamp for LLM windows, and the invariant-repair tail (Issues 456 + 449:
+bounded backward snapping, the post-snap peak invariant, the degenerate
+no-utterance index, and the pause-before-weak-opener walk-back).
 """
+
+import logging
 
 from clip_engine.sentence_snap import (
     CLIP_TARGET_MAX_S,
@@ -305,3 +309,224 @@ def test_clamp_window_to_target_hard_cut_without_sentences():
 
 def test_clamp_window_to_target_within_target_unchanged():
     assert clamp_window_to_target(0.0, 88.0, [{"start_s": 0.0, "end_s": 50.0}]) == 88.0
+
+
+# ── Issues 456 + 449: bounded backward snap + post-snap peak invariant ───────
+
+# Issue 456 repro geometry: a 30 s unpunctuated run-on utterance (205–235)
+# spans the raw setup at 225; the peak sits at 300, so the run-on's sentence
+# start is 95 s before the peak — further back than the 90 s length ceiling
+# can ever recover from. Punctuated content follows around the peak.
+RUN_ON_SEGMENTS = [
+    _segment(
+        205.0,
+        235.0,
+        [
+            ("so", 205.0, 205.4),
+            ("the", 205.5, 205.8),
+            ("story", 205.9, 212.0),
+            ("kept", 212.1, 220.0),
+            ("going", 220.1, 226.0),
+            ("and", 226.1, 228.0),
+            ("going", 228.1, 231.0),
+            ("without", 231.1, 232.5),
+            ("a", 232.6, 232.9),
+            ("single", 233.0, 233.9),
+            ("pause", 234.0, 235.0),
+        ],
+    ),
+    _segment(
+        240.0,
+        250.0,
+        [("That", 240.0, 240.4), ("part", 240.5, 241.0), ("mattered.", 241.1, 250.0)],
+    ),
+    _segment(
+        296.0,
+        308.0,
+        [
+            ("Here", 296.0, 296.4),
+            ("is", 296.5, 296.8),
+            ("the", 296.9, 297.1),
+            ("payoff.", 297.2, 308.0),
+        ],
+    ),
+    _segment(
+        310.0,
+        330.0,
+        [("And", 310.0, 310.3), ("it", 310.4, 310.6), ("landed.", 310.7, 330.0)],
+    ),
+]
+
+
+def test_snap_candidates_bounded_backward_keeps_peak_inside():
+    """Issue 456 repro: raw {setup 225, peak 300, end 320}. Pre-fix the
+    absolute backward rule dragged the start to 204.7 and the 90 s clamp cut
+    the end at 294.7 — shipping [204.7, 294.7] with the peak at 300 entirely
+    OUTSIDE the delivered clip. Bounded snapping keeps the raw start and the
+    persisted window must contain the peak."""
+    candidates = [{"setup_start_s": 225.0, "start_s": 225.0, "peak_s": 300.0, "end_s": 320.0}]
+    out = snap_candidates_to_sentences(candidates, RUN_ON_SEGMENTS, duration_s=400.0)
+    assert len(out) == 1
+    assert out[0]["setup_start_s"] >= 215.0
+    assert out[0]["end_s"] > 300.1
+    assert out[0]["setup_start_s"] + 0.1 <= out[0]["peak_s"] <= out[0]["end_s"] - 0.1
+
+
+def test_snap_candidates_degenerate_single_span_disables_snapping(caplog):
+    """Issue 456 degenerate half: the Deepgram no-utterance fallback emits ONE
+    whole-video unpunctuated segment. Pre-fix every candidate collapsed onto
+    the same [0.2, 90.2] window (both peaks outside). A degenerate index must
+    disable snapping with ONE warning and keep raw candidate geometry."""
+    segments = [
+        {"start": 0.5, "end": 399.5, "text": "one long unterminated span with no punctuation"}
+    ]
+    candidates = [
+        {"setup_start_s": 45.0, "start_s": 45.0, "peak_s": 120.0, "end_s": 140.0},
+        {"setup_start_s": 225.0, "start_s": 225.0, "peak_s": 300.0, "end_s": 320.0},
+    ]
+    with caplog.at_level(logging.WARNING, logger="clip_engine.sentence_snap"):
+        out = snap_candidates_to_sentences(candidates, segments, duration_s=400.0)
+    assert out == candidates  # raw geometry preserved, both moments survive
+    degenerate_warnings = [r for r in caplog.records if "degenerate" in r.message]
+    assert len(degenerate_warnings) == 1  # one warning per video, not per candidate
+
+
+def test_snap_candidates_drop_backstop_when_repair_impossible(caplog):
+    """Issue 456 stage-2 backstop: when even the restored raw end cannot put
+    the peak back inside the window (peak within 0.1 s of the container
+    duration), the candidate is DROPPED with a warning — a peak-outside window
+    must never be returned."""
+    segments = [
+        _segment(0.0, 40.0, [("Early", 0.0, 0.5), ("beat.", 0.6, 40.0)]),
+        _segment(41.0, 85.0, [("Middle", 41.0, 41.5), ("beat.", 41.6, 85.0)]),
+    ]
+    candidates = [{"setup_start_s": 5.0, "start_s": 5.0, "peak_s": 88.0, "end_s": 90.0}]
+    with caplog.at_level(logging.WARNING, logger="clip_engine.sentence_snap"):
+        out = snap_candidates_to_sentences(candidates, segments, duration_s=88.05)
+    assert out == []
+    assert any("dropped candidate" in r.message for r in caplog.records)
+
+
+def test_snap_candidates_repairs_end_snapped_before_peak():
+    """Issue 456 stage-1 repair: a backward end-snap that lands BEFORE the peak
+    (raw end 101 inside a long sentence, previous sentence end 92.5 < peak 93)
+    is repaired by restoring the pre-snap raw end."""
+    segments = [
+        _segment(
+            38.0,
+            44.0,
+            [("The", 38.0, 38.3), ("setup", 38.4, 39.0), ("began.", 39.1, 44.0)],
+        ),
+        _segment(
+            60.0,
+            92.5,
+            [("He", 60.0, 60.2), ("kept", 60.3, 61.0), ("building.", 61.1, 92.5)],
+        ),
+        _segment(
+            95.0,
+            130.0,
+            [
+                ("Then", 95.0, 95.4),
+                ("it", 95.5, 95.7),
+                ("kept", 95.8, 100.0),
+                ("rolling", 100.1, 130.0),
+            ],
+        ),
+    ]
+    candidates = [{"setup_start_s": 40.5, "start_s": 40.5, "peak_s": 93.0, "end_s": 101.0}]
+    out = snap_candidates_to_sentences(candidates, segments, duration_s=200.0)
+    assert len(out) == 1
+    assert out[0]["end_s"] == 101.0  # pre-snap raw end restored
+    assert out[0]["end_s"] > out[0]["peak_s"]
+
+
+def test_snap_start_raw_fallback_beyond_backward_limit(caplog):
+    """When the backward target violates the caller's backward_limit_s and
+    forward is unusable, the RAW start is kept (debug breadcrumb) — a
+    mid-sentence open is recoverable in review; a clip without its peak is not."""
+    sentences = build_sentence_index(RUN_ON_SEGMENTS)
+    with caplog.at_level(logging.DEBUG, logger="clip_engine.sentence_snap"):
+        out = snap_start(225.0, sentences, forward_limit_s=290.0, backward_limit_s=215.0)
+    assert out == 225.0
+    assert any("kept raw start" in r.message for r in caplog.records)
+
+
+def test_snap_start_raw_fallback_beyond_run_on_cap():
+    """Backward drag past _RUN_ON_BACKWARD_CAP_S (35 s here) keeps the raw
+    start even with no caller-supplied backward_limit_s."""
+    segments = [
+        _segment(
+            190.0,
+            235.0,
+            [
+                ("it", 190.0, 190.3),
+                ("just", 190.4, 210.0),
+                ("went", 210.1, 226.0),
+                ("on", 226.1, 235.0),
+            ],
+        ),
+        _segment(
+            240.0,
+            250.0,
+            [("That", 240.0, 240.4), ("part", 240.5, 241.0), ("mattered.", 241.1, 250.0)],
+        ),
+    ]
+    sentences = build_sentence_index(segments)
+    assert snap_start(225.0, sentences) == 225.0
+
+
+def test_snap_start_moderate_run_on_still_snaps_backward():
+    """A run-on beyond the 10 s budget but within the 30 s cap (20 s here, no
+    backward_limit_s) still takes the never-mid-sentence backward snap."""
+    sentences = build_sentence_index(RUN_ON_SEGMENTS)
+    assert snap_start(225.0, sentences) == 204.7  # 205.0 - 0.3 lead-in
+
+
+# ── Issue 449: a pause start audibly opens on the NEXT sentence ──────────────
+
+# The live geometry from video 7e988321 rank 4, in real absolute seconds: the
+# shipped start 1306.43 sits in the inter-sentence pause [1306.27, 1306.51],
+# 0.08 s before "Yeah." — outside _BOUNDARY_EPSILON_S = 0.05, so the pre-fix
+# pause branch returned it untouched and the clip opened on a discourse marker,
+# bypassing the Issue-441 weak-opener guard entirely.
+PAUSE_WEAK_SEGMENTS = [
+    _segment(
+        1297.5,
+        1301.87,
+        [
+            ("The", 1297.5, 1297.8),
+            ("corner", 1297.9, 1298.4),
+            ("room", 1298.5, 1299.3),
+            ("thin.", 1299.4, 1301.87),
+        ],
+    ),
+    _segment(
+        1301.87,
+        1306.27,
+        [
+            ("We", 1301.87, 1302.1),
+            ("could", 1302.2, 1302.6),
+            ("trade", 1302.7, 1303.2),
+            ("back.", 1303.3, 1306.27),
+        ],
+    ),
+    _segment(
+        1306.51,
+        1310.0,
+        [
+            ("Yeah.", 1306.51, 1306.9),
+            ("They've", 1307.2, 1307.5),
+            ("been", 1307.6, 1307.9),
+            ("awesome.", 1308.0, 1310.0),
+        ],
+    ),
+]
+
+
+def test_snap_start_pause_before_weak_opener_walks_back():
+    """Issue 449: the clip audibly opens on the first sentence at/after the
+    start, so a weak opener there must take the same bounded walk-back as the
+    in-sentence path. Cost here is 4.56 s against the 10.0 s budget; the
+    walked-back open is the previous sentence's start, 1301.87."""
+    sentences = build_sentence_index(PAUSE_WEAK_SEGMENTS)
+    assert snap_start(1306.43, sentences) == 1301.87

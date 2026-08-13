@@ -4,10 +4,10 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-12/13 (latest) — Beta close-out Wave 0: Lane L29 filed; 479 DONE; 454 code-complete
+## 2026-08-12/13 (latest) — Beta close-out W0–W2: L29 filed; 479/454/477 + Batch A DONE
 
 The full beta close-out plan (7 waves, L29 + open tail + drills + billing proof, with a concrete
-back-testing spine) was approved and started. W0 so far:
+back-testing spine) was approved and started. W0–W2 so far:
 
 - **Audit deliverables merged** (PR #85): `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md`,
   Lane L29 (Issues 456–482) in `docs/issues.md`, plus the W0 preservation snapshot
@@ -27,6 +27,19 @@ back-testing spine) was approved and started. W0 so far:
   `{code: checkout_conflict}`; failure logs carry classification fields and never the key or
   intent_id; first-ever `buyPack` tests. Live half (a real purchase) is the next W0 step and the
   only thing that flips the GO_LIVE billing gate.
+- **W1 — Issue 477 DONE** (PR #89 merged): the eval runner rejects unread expectation keys
+  (typo'd-key proof tests), enforces setup-before-peak unconditionally, supports `max_candidates`
+  (4 flood-shaped scenarios), matches expectations one-to-one, and the two dead scenarios now
+  assert something real; `SCENARIO_FLOOR` pinned in a second file.
+- **W2 Batch A — Issues 456, 449, 457, 458, 459, 460 DONE** (integration/w2-batch-a): two
+  parallel worktree lanes, every fix failing-test-first with the red runs recorded in commit
+  messages. Sentence-snap backward rule bounded (peak−85 s + 30 s run-on cap) with a post-snap
+  repair-then-drop peak invariant and degenerate-index handling; laughter/energy de-overlap
+  (one class per sample + max-not-sum); positive-evidence peak floor + truthful
+  `no_positive_signal` skip reason; endpoint padding with the t=0 clamp; nearest-spike ruling.
+  Seven new eval fixtures; `SCENARIO_FLOOR` 23→30; landing-page claim 24→31; zero pre-existing
+  fixture expectations changed. Two DECISIONS entries incl. the amendment of the 2026-08-05
+  "absolute never-mid-sentence" ruling.
 
 ## 2026-08-12 — Issue 453 SEV1 found and fixed; 451 + 452 closed
 

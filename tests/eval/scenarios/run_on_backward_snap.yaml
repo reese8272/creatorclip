@@ -1,0 +1,63 @@
+scenario: run_on_backward_snap
+kind: snap
+description: >
+  Issue 456 (SEV1) repro: candidate {setup 225, peak 300, end 320} with a 30 s
+  unpunctuated run-on utterance (205-235) spanning the setup region. The
+  run-on's sentence start is 95 s before the peak; pre-fix the absolute
+  never-mid-sentence rule dragged the start there and the 90 s length clamp
+  then cut the end at setup+90 — shipping [204.7, 294.7] with the detected
+  peak at 300 entirely OUTSIDE the delivered clip. Bounded snapping must keep
+  the raw start (a mid-sentence open is recoverable in review; a clip without
+  its peak is not) and the persisted window must contain the peak.
+  Principle: "Clip the setup, not the aftermath"
+
+input:
+  timeline:
+    version: 1
+    duration_s: 400.0
+    events:
+      - {type: retention_spike, start_s: 299.0, end_s: 301.0, value: 1.6}
+  segments:
+    - start: 205.0
+      end: 235.0
+      text: "so the story kept going and going without a single pause"
+      words:
+        - {word: "so",      start: 205.0, end: 205.4}
+        - {word: "the",     start: 205.5, end: 205.8}
+        - {word: "story",   start: 205.9, end: 212.0}
+        - {word: "kept",    start: 212.1, end: 220.0}
+        - {word: "going",   start: 220.1, end: 226.0}
+        - {word: "and",     start: 226.1, end: 228.0}
+        - {word: "going",   start: 228.1, end: 231.0}
+        - {word: "without", start: 231.1, end: 232.5}
+        - {word: "a",       start: 232.6, end: 232.9}
+        - {word: "single",  start: 233.0, end: 233.9}
+        - {word: "pause",   start: 234.0, end: 235.0}
+    - start: 240.0
+      end: 250.0
+      text: "That part mattered."
+      words:
+        - {word: "That",      start: 240.0, end: 240.4}
+        - {word: "part",      start: 240.5, end: 241.0}
+        - {word: "mattered.", start: 241.1, end: 250.0}
+    - start: 296.0
+      end: 308.0
+      text: "Here is the payoff."
+      words:
+        - {word: "Here",    start: 296.0, end: 296.4}
+        - {word: "is",      start: 296.5, end: 296.8}
+        - {word: "the",     start: 296.9, end: 297.1}
+        - {word: "payoff.", start: 297.2, end: 308.0}
+    - start: 310.0
+      end: 330.0
+      text: "And it landed."
+      words:
+        - {word: "And",     start: 310.0, end: 310.3}
+        - {word: "it",      start: 310.4, end: 310.6}
+        - {word: "landed.", start: 310.7, end: 330.0}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - setup_start_s_min: 215.0
+      end_s_min: 300.1

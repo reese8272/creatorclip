@@ -15,10 +15,14 @@ https://developers.deepgram.com/docs/punctuation) and snaps candidate edges to
 sentence STARTS/ends with a sentence-scale search radius.
 
 Principle #12 "Clean Context Boundary": a clip never opens or closes
-mid-sentence. The start guard is absolute — when a start falls strictly inside
-a sentence it is always moved to a sentence start, even beyond
-``SENTENCE_SNAP_MAX_S`` (preserving a negation like "I don't…" outranks the
-window nudge).
+mid-sentence. The start guard is bounded — when a start falls strictly inside
+a sentence it is moved to a sentence start, even beyond ``SENTENCE_SNAP_MAX_S``
+(preserving a negation like "I don't…" outranks the window nudge), but never
+past ``_RUN_ON_BACKWARD_CAP_S`` or the caller's ``backward_limit_s``: beyond
+those bounds the raw start is kept, because a start dragged too far back makes
+the 90 s length ceiling cut the clip BEFORE its own peak (Issue 456). The
+post-snap invariant ``setup + 0.1 <= peak <= end - 0.1`` is enforced on every
+returned candidate — repair by restoring the pre-snap end, then drop.
 """
 
 import logging
@@ -100,6 +104,30 @@ _MAX_OPENER_STEPS = 3
 # search radius.
 _BOUNDARY_EPSILON_S = 0.05
 
+# Post-snap invariant margin (Issue 456): the peak must sit strictly inside the
+# persisted window with this much clearance on both sides. Matches the
+# ``peak - 0.1`` setup clamp extract_candidates has always applied.
+_PEAK_MARGIN_S = 0.1
+
+# Minimum payoff tail the 90 s length clamp must be able to keep after the
+# peak. snap_candidates_to_sentences derives snap_start's backward bound from
+# it: a start dragged earlier than ``peak - (CLIP_TARGET_MAX_S -
+# _MIN_PAYOFF_TAIL_S)`` puts even the clamp's own ceiling before ``peak +
+# _MIN_PAYOFF_TAIL_S``, so the clip would ship without the moment it was cut
+# for (Issue 456).
+_MIN_PAYOFF_TAIL_S = 5.0
+
+# Absolute cap on backward drag beyond the SENTENCE_SNAP_MAX_S budget (Issue
+# 456). The never-mid-sentence rule may still cross the budget for a moderate
+# run-on, but a Deepgram no-punctuation span can put the "sentence start"
+# minutes earlier — past this cap the raw start is kept instead.
+_RUN_ON_BACKWARD_CAP_S = 30.0
+
+# A single unterminated sentence covering at least this fraction of the video
+# is the Deepgram no-utterance fallback, not prose (Issue 456): snapping
+# against it collapses every candidate onto one [0, CLIP_TARGET_MAX_S] window.
+_DEGENERATE_COVERAGE = 0.8
+
 
 def _normalize_token(word: str) -> str:
     """Lowercase a transcript token and strip surrounding punctuation."""
@@ -179,6 +207,7 @@ def snap_start(
     max_snap_s: float = SENTENCE_SNAP_MAX_S,
     lead_in_s: float = SENTENCE_LEAD_IN_S,
     forward_limit_s: float | None = None,
+    backward_limit_s: float | None = None,
 ) -> float:
     """Snap a clip start to a sentence start when it falls mid-sentence.
 
@@ -189,8 +218,12 @@ def snap_start(
     the detected setup point IS setup content, and moving backward only adds
     context while moving forward would discard it. Forward is used only for a
     run-on sentence whose start is more than ``max_snap_s`` back; when forward
-    is unusable the start snaps backward regardless of distance — a start is
-    NEVER left mid-sentence.
+    is unusable the start still snaps backward beyond the budget, but BOUNDED
+    (Issue 456) by ``backward_limit_s`` (the caller's floor — earlier than
+    this and the 90 s length ceiling would cut the clip before its own peak)
+    and by ``_RUN_ON_BACKWARD_CAP_S``. Past either bound the RAW start is
+    kept: a mid-sentence open is recoverable in review; a clip without its
+    peak is not.
 
     The chosen start gets a small lead-in breath, clamped so it never swallows
     the previous sentence's last word.
@@ -199,15 +232,15 @@ def snap_start(
         return t
     idx = _containing_index(t, sentences)
     if idx is None:
-        # Already on a boundary or inside a pause. That is a clean open ONLY if
-        # the sentence starting here can stand alone (Issue 441) — a Deepgram
-        # utterance boundary is a pause, not a grammatical break, so "because …"
-        # lands here and used to be returned untouched.
-        # Exact coincidence only. A start sitting in an inter-sentence PAUSE is a
-        # clean open and must stay untouched — widening this to the lead-in
-        # window would let a pause start claim the following sentence's opener.
+        # Already on a boundary or inside a pause. The clip will audibly open
+        # on the FIRST sentence at or after ``t``, so test THAT opener (Issue
+        # 449: the old exact-coincidence lookup missed a start sitting 0.08 s
+        # inside the pause, and "Yeah." shipped untouched). A strong opener is
+        # a clean open and stays untouched — a pause start is never snapped
+        # FORWARD to claim the next sentence's opener. A weak opener falls
+        # through to the bounded Issue-441 walk-back, which only moves BACK.
         at = next(
-            (i for i, s in enumerate(sentences) if abs(s["start_s"] - t) <= _BOUNDARY_EPSILON_S),
+            (i for i, s in enumerate(sentences) if s["start_s"] >= t - _BOUNDARY_EPSILON_S),
             None,
         )
         if at is None or not is_weak_opener(sentences[at].get("first_word")):
@@ -225,8 +258,23 @@ def snap_start(
     back_dist = t - back_target
     if back_dist > max_snap_s and fwd_valid:
         chosen, chosen_idx = float(fwd_target), idx + 1  # type: ignore[arg-type]
-    else:
+    elif back_dist <= max_snap_s or (
+        back_dist <= _RUN_ON_BACKWARD_CAP_S
+        and (backward_limit_s is None or back_target >= backward_limit_s)
+    ):
         chosen, chosen_idx = float(back_target), idx
+    else:
+        # Issue 456: both directions are unusable — keep the raw start rather
+        # than drag it so far back that the length ceiling amputates the peak.
+        logger.debug(
+            "sentence snap kept raw start %.2f s: backward target %.2f s is past "
+            "backward_limit_s=%s or the %.0f s run-on cap, and forward is unusable",
+            t,
+            back_target,
+            backward_limit_s,
+            _RUN_ON_BACKWARD_CAP_S,
+        )
+        return t
 
     # Issue 441: a sentence opening on a subordinator, a discourse marker or a
     # dangling third-person referent depends on the sentence before it. Step back
@@ -275,6 +323,20 @@ def snap_end(
     return t
 
 
+def _sentence_index_is_degenerate(sentences: list[dict], duration_s: float) -> bool:
+    """True when the index is ONE unterminated span covering ~the whole video.
+
+    The Deepgram no-utterance fallback (``ingestion/transcribe.py``) emits a
+    single whole-video segment with no terminal punctuation; snapping against
+    it drags every candidate onto the same [0, CLIP_TARGET_MAX_S] window with
+    every peak outside it (Issue 456).
+    """
+    if len(sentences) != 1 or duration_s <= 0:
+        return False
+    span = sentences[0]["end_s"] - sentences[0]["start_s"]
+    return span >= _DEGENERATE_COVERAGE * duration_s
+
+
 def snap_candidates_to_sentences(
     candidates: list[dict],
     segments: list[dict],
@@ -285,24 +347,50 @@ def snap_candidates_to_sentences(
     Replays the exact invariant-repair tail of ``extract_candidates``: re-extend
     to ``MIN_CLIP_S`` → clamp ``end_s`` to the container duration → force
     ``setup_start_s <= peak_s - 0.1`` → drop when ``MIN_CLIP_S`` is impossible.
-    Graceful no-op when segments are absent (no-transcript videos and the eval
-    harness's geometry scenarios are unaffected).
+    The post-snap invariant ``setup + 0.1 <= peak <= end - 0.1`` (Issue 456) is
+    then enforced: repair by restoring the pre-snap end, drop as backstop — a
+    candidate whose peak sits outside its window is never returned. Graceful
+    no-op when segments are absent (no-transcript videos and the eval
+    harness's geometry scenarios are unaffected) and when the sentence index
+    is the degenerate single-span no-utterance fallback.
     """
     if not candidates or not segments:
         return candidates
     sentences = build_sentence_index(segments)
     if not sentences:
         return candidates
+    if _sentence_index_is_degenerate(sentences, duration_s):
+        logger.warning(
+            "sentence index degenerate: single unterminated span [%.1f, %.1f] over the "
+            "%.1f s video — sentence snapping disabled (transcript punctuation likely "
+            "absent); candidates keep raw geometry",
+            sentences[0]["start_s"],
+            sentences[0]["end_s"],
+            duration_s,
+        )
+        return candidates
 
     snapped: list[dict] = []
     for c in candidates:
         cand = dict(c)
         peak = cand["peak_s"]
+        # Pre-snap raw end, kept for the Issue-456 repair: extract_candidates
+        # guarantees it reaches peak + POST_PEAK_S when the container allows.
+        raw_end = float(cand["end_s"])
         # A forward-snapped start must still leave a valid clip: before the
         # peak, and long enough against the (pre-snap) end.
-        forward_limit = min(peak - 0.1, cand["end_s"] - MIN_CLIP_S)
+        forward_limit = min(peak - _PEAK_MARGIN_S, cand["end_s"] - MIN_CLIP_S)
+        # A backward-snapped start must leave the 90 s ceiling room to keep a
+        # payoff tail after the peak (Issue 456).
+        backward_limit = peak - (CLIP_TARGET_MAX_S - _MIN_PAYOFF_TAIL_S)
         cand["setup_start_s"] = round(
-            snap_start(cand["setup_start_s"], sentences, forward_limit_s=forward_limit), 2
+            snap_start(
+                cand["setup_start_s"],
+                sentences,
+                forward_limit_s=forward_limit,
+                backward_limit_s=backward_limit,
+            ),
+            2,
         )
         cand["end_s"] = round(snap_end(cand["end_s"], sentences), 2)
 
@@ -322,10 +410,32 @@ def snap_candidates_to_sentences(
             cand["end_s"] = round(cand["setup_start_s"] + MIN_CLIP_S, 2)
         if duration_s > 0:
             cand["end_s"] = round(min(cand["end_s"], duration_s), 2)
-        cand["setup_start_s"] = min(cand["setup_start_s"], peak - 0.1)
+        cand["setup_start_s"] = min(cand["setup_start_s"], peak - _PEAK_MARGIN_S)
+
+        # Issue 456, stage 1 — REPAIR: snapping/clamping ended the clip at or
+        # before its own peak. Restore the pre-snap raw end (which extended
+        # past the peak by construction), re-clamped to the container and the
+        # length ceiling.
+        if cand["end_s"] <= peak + _PEAK_MARGIN_S:
+            repaired = min(raw_end, cand["setup_start_s"] + CLIP_TARGET_MAX_S)
+            if duration_s > 0:
+                repaired = min(repaired, duration_s)
+            cand["end_s"] = round(repaired, 2)
+
         if cand["end_s"] - cand["setup_start_s"] < MIN_CLIP_S:
             logger.debug(
                 "sentence snap dropped candidate: window [%.1f, %.1f] cannot satisfy MIN_CLIP_S",
+                cand["setup_start_s"],
+                cand["end_s"],
+            )
+            continue
+        # Issue 456, stage 2 — DROP backstop: a candidate violating the peak
+        # invariant must never be returned, whatever path produced it.
+        if not (cand["setup_start_s"] + _PEAK_MARGIN_S <= peak <= cand["end_s"] - _PEAK_MARGIN_S):
+            logger.warning(
+                "sentence snap dropped candidate: peak %.1f s outside snapped window "
+                "[%.1f, %.1f] and repair could not restore it",
+                peak,
                 cand["setup_start_s"],
                 cand["end_s"],
             )

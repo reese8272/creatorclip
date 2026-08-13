@@ -124,12 +124,17 @@ def extract_audio_events(audio_path: str | Path) -> dict:
     # Energy spikes and laughter stay relative to the creator's own baseline, but a
     # frame below the absolute silence floor can never be a spike — that was the
     # near-silent-file false-positive vector. (Issue 352 Batch E)
-    energy_mask = (rms_norm >= _ENERGY_THRESHOLD) & ~silence_mask
-    energy_spikes = _merge_runs(times, energy_mask, rms_norm, frame_dur, _MIN_ENERGY_DURATION_S)
-    silences = _merge_runs(times, silence_mask, None, frame_dur, _MIN_SILENCE_DURATION_S)
     laughter_mask = (
         (rms_norm >= _LAUGHTER_ENERGY_MIN) & (zcr_norm >= _LAUGHTER_ZCR_THRESHOLD) & ~silence_mask
     )
+    # One event class per sample (Issue 457): a loud laugh satisfies both
+    # detectors, and emitting it as laughter AND energy_spike stacked 3.5x
+    # weight on the same samples downstream — biasing peaks toward the
+    # aftermath. Laughter is the stricter detector (energy + spectral ZCR)
+    # and wins; frames it claims are excluded from the energy mask.
+    energy_mask = (rms_norm >= _ENERGY_THRESHOLD) & ~silence_mask & ~laughter_mask
+    energy_spikes = _merge_runs(times, energy_mask, rms_norm, frame_dur, _MIN_ENERGY_DURATION_S)
+    silences = _merge_runs(times, silence_mask, None, frame_dur, _MIN_SILENCE_DURATION_S)
     laughter = _merge_runs(times, laughter_mask, zcr_norm, frame_dur, _MIN_LAUGHTER_DURATION_S)
 
     return {

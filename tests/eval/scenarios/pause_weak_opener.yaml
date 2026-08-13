@@ -1,0 +1,91 @@
+scenario: pause_weak_opener
+kind: snap
+description: >
+  Issue 449, scaled from video 7e988321 rank 4 into a self-contained fixture
+  (real geometry shifted by -1240 s: shipped start 1306.43 in the pause
+  [1306.27, 1306.51], "Yeah." at 1306.51, previous sentence start 1301.87 →
+  correct open 1301.87). The raw setup (silence end 66.43) sits in the
+  inter-sentence pause 0.08 s before "Yeah." — outside the exact-coincidence
+  epsilon, so the pre-fix pause branch returned it untouched and the clip
+  opened on a discourse marker, bypassing the Issue-441 weak-opener guard.
+  The clip audibly opens on the NEXT sentence: a weak opener there must take
+  the same bounded walk-back (cost 4.56 s against the 10 s budget → the
+  walked-back open 61.87).
+  Principle: "Clean Context Boundary"
+
+input:
+  timeline:
+    version: 1
+    duration_s: 200.0
+    events:
+      - {type: silence,         start_s: 65.9,  end_s: 66.43}
+      - {type: retention_spike, start_s: 129.0, end_s: 131.0, value: 1.6}
+  segments:
+    - start: 55.5
+      end: 61.87
+      text: "The corner room is thin."
+      words:
+        - {word: "The",    start: 55.5,  end: 55.8}
+        - {word: "corner", start: 55.9,  end: 56.4}
+        - {word: "room",   start: 56.5,  end: 57.0}
+        - {word: "is",     start: 57.1,  end: 57.4}
+        - {word: "thin.",  start: 57.5,  end: 61.87}
+    - start: 61.87
+      end: 66.27
+      text: "We could still trade back."
+      words:
+        - {word: "We",    start: 61.87, end: 62.1}
+        - {word: "could", start: 62.2,  end: 62.6}
+        - {word: "still", start: 62.7,  end: 63.1}
+        - {word: "trade", start: 63.2,  end: 63.7}
+        - {word: "back.", start: 63.8,  end: 66.27}
+    - start: 66.51
+      end: 74.0
+      text: "Yeah. They've been strong for a month."
+      words:
+        - {word: "Yeah.",   start: 66.51, end: 66.9}
+        - {word: "They've", start: 67.2,  end: 67.5}
+        - {word: "been",    start: 67.6,  end: 67.9}
+        - {word: "strong",  start: 68.0,  end: 68.5}
+        - {word: "for",     start: 68.6,  end: 68.8}
+        - {word: "a",       start: 68.9,  end: 69.0}
+        - {word: "month.",  start: 69.1,  end: 74.0}
+    - start: 75.0
+      end: 96.0
+      text: "The film backs it up completely."
+      words:
+        - {word: "The",         start: 75.0, end: 75.3}
+        - {word: "film",        start: 75.4, end: 75.8}
+        - {word: "backs",       start: 75.9, end: 76.4}
+        - {word: "it",          start: 76.5, end: 76.7}
+        - {word: "up",          start: 76.8, end: 77.0}
+        - {word: "completely.", start: 77.1, end: 96.0}
+    - start: 97.0
+      end: 126.0
+      text: "Every rep in camp went the same direction."
+      words:
+        - {word: "Every",      start: 97.0,  end: 97.4}
+        - {word: "rep",        start: 97.5,  end: 97.8}
+        - {word: "in",         start: 97.9,  end: 98.1}
+        - {word: "camp",       start: 98.2,  end: 98.6}
+        - {word: "went",       start: 98.7,  end: 99.1}
+        - {word: "the",        start: 99.2,  end: 99.4}
+        - {word: "same",       start: 99.5,  end: 99.9}
+        - {word: "direction.", start: 100.0, end: 126.0}
+    - start: 127.0
+      end: 145.0
+      text: "That is why the grade changed."
+      words:
+        - {word: "That",     start: 127.0, end: 127.3}
+        - {word: "is",       start: 127.4, end: 127.6}
+        - {word: "why",      start: 127.7, end: 128.0}
+        - {word: "the",      start: 128.1, end: 128.3}
+        - {word: "grade",    start: 128.4, end: 128.9}
+        - {word: "changed.", start: 129.0, end: 145.0}
+
+expected:
+  min_candidates: 1
+  opens_on_content_word: true
+  candidates:
+    - setup_start_s_min: 61.5
+      setup_start_s_max: 62.0
