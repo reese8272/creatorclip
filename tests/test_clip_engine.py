@@ -366,12 +366,17 @@ def _assert_merge_scenario(scenario: dict) -> None:
     starts = [c["setup_start_s"] for c in merged]
     assert starts == sorted(starts), f"[{name}] merged pool not chronological: {starts}"
 
-    # Per-candidate window expectations, matched within the expected origin pool.
+    # Per-candidate window expectations, matched within the expected origin pool —
+    # one-to-one across expectations (Issue 477): a candidate consumed by one
+    # expectation cannot also satisfy another.
+    consumed: set[int] = set()
     for exp_c in expected.get("candidates", []):
-        pool = llm_in_merged if exp_c.get("origin") == "llm" else merged
-        assert pool, f"[{name}] no candidates in the {exp_c.get('origin', 'any')} pool"
+        base = llm_in_merged if exp_c.get("origin") == "llm" else merged
+        pool = [c for c in base if id(c) not in consumed]
+        assert pool, f"[{name}] no unconsumed candidates in the {exp_c.get('origin', 'any')} pool"
         anchor = exp_c.get("setup_start_s_min", exp_c.get("setup_start_s_max", 0.0))
         matched = min(pool, key=lambda c: abs(c["setup_start_s"] - anchor))
+        consumed.add(id(matched))
         if "setup_start_s_min" in exp_c:
             assert matched["setup_start_s"] >= exp_c["setup_start_s_min"], (
                 f"[{name}] setup_start_s={matched['setup_start_s']} < {exp_c['setup_start_s_min']}"
@@ -452,10 +457,13 @@ def _assert_snap_scenario(scenario: dict) -> None:
                 "subordinating conjunction or discourse marker cannot open a clip"
             )
 
-    for exp_c in expected.get("candidates", []):
-        anchor = exp_c.get("setup_start_s_min", exp_c.get("setup_start_s_max", 0.0))
-        assert candidates, f"[{name}] no candidates to match against"
-        matched = min(candidates, key=lambda c: abs(c["setup_start_s"] - anchor))
+    for exp_c, matched in _match_unique(
+        candidates,
+        expected.get("candidates", []),
+        anchor_of=lambda c: c["setup_start_s"],
+        anchor_val=lambda e: e.get("setup_start_s_min", e.get("setup_start_s_max", 0.0)),
+        name=name,
+    ):
         for key, op, msg in (
             ("setup_start_s_min", lambda v, e: v >= e, "<"),
             ("setup_start_s_max", lambda v, e: v <= e, ">"),
@@ -505,10 +513,13 @@ def _assert_containment_scenario(scenario: dict) -> None:
                     f"[{b['setup_start_s']}, {b['end_s']}] share {shared:.1f}s of speech "
                     f"(limit {limit}s) — two clips telling the same story"
                 )
-    for exp_c in expected.get("candidates", []):
-        anchor = exp_c.get("setup_start_s_min", exp_c.get("setup_start_s_max", 0.0))
-        assert survivors, f"[{name}] no survivors to match against"
-        matched = min(survivors, key=lambda c: abs(c["setup_start_s"] - anchor))
+    for exp_c, matched in _match_unique(
+        survivors,
+        expected.get("candidates", []),
+        anchor_of=lambda c: c["setup_start_s"],
+        anchor_val=lambda e: e.get("setup_start_s_min", e.get("setup_start_s_max", 0.0)),
+        name=name,
+    ):
         if "setup_start_s_min" in exp_c:
             assert matched["setup_start_s"] >= exp_c["setup_start_s_min"]
         if "setup_start_s_max" in exp_c:
@@ -520,9 +531,89 @@ def _assert_containment_scenario(scenario: dict) -> None:
             )
 
 
+# ── Expectation-key strictness (Issue 477) ───────────────────────────────────
+# The runner REJECTS any `expected` key it does not read. Before this, an
+# unknown key was silently ignored — injection_in_transcript.yaml shipped with
+# two expectation keys read by NO code and passed vacuously for weeks while
+# counting toward the landing-page scenario claim. A typo'd key must fail at
+# authoring time, not rot as a green no-op. When adding a new expectation to a
+# kind's assert function, add the key here in the same commit.
+_ALLOWED_EXPECTED_KEYS: dict[str, frozenset[str]] = {
+    "geometry": frozenset(
+        {"min_candidates", "max_candidates", "max_candidates_in_window", "candidates"}
+    ),
+    "merge": frozenset({"llm_candidates", "min_total", "max_total", "candidates"}),
+    "snap": frozenset(
+        {"min_candidates", "starts_on_sentence_start", "opens_on_content_word", "candidates"}
+    ),
+    "containment": frozenset({"survivors", "max_pairwise_overlap_s", "candidates"}),
+    "recap": frozenset(
+        {"max_total_duration_s", "min_segments", "no_overlap", "chronological",
+         "all_principles_named"}
+    ),
+}
+_ALLOWED_CANDIDATE_KEYS: dict[str, frozenset[str]] = {
+    "geometry": frozenset({"peak_s_min", "peak_s_max", "setup_start_s_min", "setup_start_s_max"}),
+    "merge": frozenset(
+        {"origin", "setup_start_s_min", "setup_start_s_max", "end_s_min", "end_s_max",
+         "len_s_max"}
+    ),
+    "snap": frozenset({"setup_start_s_min", "setup_start_s_max", "end_s_min", "end_s_max"}),
+    "containment": frozenset({"origin", "setup_start_s_min", "setup_start_s_max"}),
+}
+_KNOWN_KINDS = frozenset({"geometry", "merge", "snap", "containment", "recap"})
+
+
+def _validate_expected_keys(scenario: dict) -> None:
+    """Fail loudly on any expectation the runner would not read (Issue 477)."""
+    name = scenario.get("scenario", "<unnamed>")
+    kind = scenario.get("kind") or "geometry"
+    assert kind in _KNOWN_KINDS, (
+        f"[{name}] unknown scenario kind {kind!r} — known kinds: {sorted(_KNOWN_KINDS)}. "
+        "An unknown kind would silently run the geometry path against the wrong shape."
+    )
+    expected = scenario.get("expected", {})
+    unknown = set(expected) - _ALLOWED_EXPECTED_KEYS[kind]
+    assert not unknown, (
+        f"[{name}] expectation key(s) {sorted(unknown)} are read by NO assertion for "
+        f"kind {kind!r} — the scenario would pass vacuously. Allowed: "
+        f"{sorted(_ALLOWED_EXPECTED_KEYS[kind])}. If you are adding a new expectation, "
+        "extend the matching _assert_*_scenario AND _ALLOWED_EXPECTED_KEYS together."
+    )
+    win = expected.get("max_candidates_in_window")
+    if isinstance(win, dict):
+        unknown_win = set(win) - {"window_start_s", "window_end_s", "max"}
+        assert not unknown_win, (
+            f"[{name}] max_candidates_in_window key(s) {sorted(unknown_win)} are unread"
+        )
+    allowed_c = _ALLOWED_CANDIDATE_KEYS.get(kind, frozenset())
+    for i, exp_c in enumerate(expected.get("candidates", [])):
+        unknown_c = set(exp_c) - allowed_c
+        assert not unknown_c, (
+            f"[{name}] candidates[{i}] key(s) {sorted(unknown_c)} are read by no "
+            f"assertion for kind {kind!r}. Allowed: {sorted(allowed_c)}"
+        )
+
+
+def _match_unique(pool: list, exp_list: list, anchor_of, anchor_val, name: str):
+    """One-to-one expectation→candidate matching (Issue 477): each expectation
+    consumes its nearest-by-anchor candidate, so two expectations can never both
+    be satisfied by ONE candidate while an extra rogue candidate goes untested."""
+    remaining = list(pool)
+    for i, exp_c in enumerate(exp_list):
+        assert remaining, (
+            f"[{name}] expectation {i} has no candidate left to match — "
+            f"{len(exp_list)} expectations but only {len(pool)} candidate(s)"
+        )
+        matched = min(remaining, key=lambda c: abs(anchor_of(c) - anchor_val(exp_c)))
+        remaining.remove(matched)
+        yield exp_c, matched
+
+
 def _assert_scenario(scenario: dict) -> None:
     """Run all geometry assertions for one loaded scenario. Raises AssertionError on
     any violation. Shared by the per-scenario test and the aggregate pass-rate gate."""
+    _validate_expected_keys(scenario)
     if scenario.get("kind") == "recap":
         _assert_recap_scenario(scenario)
         return
@@ -545,13 +636,22 @@ def _assert_scenario(scenario: dict) -> None:
         f"[{scenario['scenario']}] expected >= {min_c} candidates, got {len(candidates)}"
     )
 
-    # Global invariant: setup before peak
-    if expected.get("all_setup_before_peak", False):
-        for c in candidates:
-            assert c["setup_start_s"] < c["peak_s"], (
-                f"[{scenario['scenario']}] setup_start_s={c['setup_start_s']} "
-                f">= peak_s={c['peak_s']}"
-            )
+    # Upper bound (Issue 477): a spurious-clip flood was previously invisible —
+    # nothing rejected EXTRA candidates. Flood-shaped scenarios set this tight.
+    if "max_candidates" in expected:
+        assert len(candidates) <= expected["max_candidates"], (
+            f"[{scenario['scenario']}] expected <= {expected['max_candidates']} candidates, "
+            f"got {len(candidates)}: peaks {[c['peak_s'] for c in candidates]} — "
+            "the engine is emitting spurious clips"
+        )
+
+    # Global invariant: setup before peak — UNCONDITIONAL (Issue 477; was opt-in,
+    # and 10 of 15 geometry scenarios never opted in).
+    for c in candidates:
+        assert c["setup_start_s"] < c["peak_s"], (
+            f"[{scenario['scenario']}] setup_start_s={c['setup_start_s']} "
+            f">= peak_s={c['peak_s']}"
+        )
 
     # Window overlap / deduplication check
     win = expected.get("max_candidates_in_window")
@@ -568,17 +668,15 @@ def _assert_scenario(scenario: dict) -> None:
             f"[{w_start},{w_end}], expected <= {win['max']}"
         )
 
-    # Per-candidate assertions
-    for i, exp_c in enumerate(expected.get("candidates", [])):
-        assert i < len(candidates), f"[{scenario['scenario']}] missing candidate {i}"
-        # Match candidate by peak proximity
-        matched = min(
-            candidates,
-            key=lambda c: abs(
-                c["peak_s"] - (exp_c.get("peak_s_min", 0) + exp_c.get("peak_s_max", 200)) / 2
-            ),
-        )
-
+    # Per-candidate assertions — one-to-one by peak proximity (Issue 477: the old
+    # shared-pool nearest match let two expectations both land on one candidate).
+    for exp_c, matched in _match_unique(
+        candidates,
+        expected.get("candidates", []),
+        anchor_of=lambda c: c["peak_s"],
+        anchor_val=lambda e: (e.get("peak_s_min", 0) + e.get("peak_s_max", 200)) / 2,
+        name=scenario["scenario"],
+    ):
         if "peak_s_min" in exp_c:
             assert matched["peak_s"] >= exp_c["peak_s_min"], (
                 f"[{scenario['scenario']}] peak_s={matched['peak_s']} < expected min {exp_c['peak_s_min']}"
