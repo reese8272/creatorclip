@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime
 
 import numpy as np
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import Select, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.selectable import Subquery
 
@@ -55,10 +55,12 @@ _KEEP_MODEL_VERSIONS = 5
 def latest_verdict_subquery(creator_id: uuid.UUID) -> Subquery:
     """One row per clip: the id of the creator's most recent VERDICT on it.
 
-    Shared by ``build_and_save`` and ``preference.efficacy.load_labeled_clips``
-    so the offline NDCG eval measures exactly the dataset production trains on.
-    If the two ever diverge, the per-retrain warn-ratchet fires on a phantom
-    shift that corresponds to nothing anyone changed.
+    Consumed via ``training_rows_select`` below — the full shared training-set
+    query used by both ``build_and_save`` and
+    ``preference.efficacy.load_labeled_clips`` (Issue 475), so the offline NDCG
+    eval measures exactly the dataset production trains on. If the two ever
+    diverge, the per-retrain warn-ratchet fires on a phantom shift that
+    corresponds to nothing anyone changed.
 
     ``id DESC`` breaks ``created_at`` ties, so the choice is deterministic
     rather than whatever the planner happens to return.
@@ -86,44 +88,45 @@ def latest_verdict_subquery(creator_id: uuid.UUID) -> Subquery:
     return ranked
 
 
-async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> PreferenceScorer | None:
-    """
-    Load feedback, build training data, fit model, persist weights_blob to DB.
-    Returns None if there are fewer than 2 training samples (one per class minimum).
-    """
-    # ONE label per clip — the creator's most recent verdict (Issue 444).
-    #
-    # `clip_feedback` is an append-only log with no unique constraint, so a clip
-    # rated up and later rated down contributed TWO contradictory samples: a
-    # positive and a negative with identical features, differing only in weight.
-    # That is not a signal the model can learn from, it is noise the creator
-    # explicitly retracted. A single annotator revising their own judgement is a
-    # label CORRECTION, not inter-annotator disagreement, so newest-wins is the
-    # right rule — majority-vote across a creator's own changes of mind would
-    # let a retracted opinion outvote the current one.
-    #
-    # `id` breaks created_at ties so the choice is deterministic rather than
-    # whatever the planner returns.
-    #
-    # The partition runs over VERDICT_ACTIONS (which INCLUDES `skip`) and the
-    # trainable filter is applied afterwards. That ordering is what makes a
-    # retraction real: PUT /clips/{id}/triage back to `pending` records a
-    # `skip`, which wins the partition and then drops out at the filter, so the
-    # clip contributes no label at all. Partitioning over TRAINABLE_ACTIONS
-    # instead would let the superseded upvote survive forever — and would leave
-    # today's latent bug (a `skip` after an upvote never retracting it) in place.
-    latest_per_clip = latest_verdict_subquery(creator_id)
+def training_rows_select(creator_id: uuid.UUID) -> Select[tuple[ClipFeedback, Clip, ClipOutcome]]:
+    """The EXACT training-set select: dedup + rn==1 + TRAINABLE filter + order + LIMIT.
 
-    # Newest-first + LIMIT so a power creator with years of feedback doesn't
-    # pull the entire set into memory and into LightGBM's ndarray copy on every
-    # retrain. The 30d-half-life recency decay (preference/decay.py) makes rows
-    # past the cap worth ~0 in the sample weight anyway. (Issue 102)
-    #
-    # The cap now applies AFTER the per-clip dedup, which is the whole point:
-    # applied before, a creator who flip-flopped on a handful of clips could
-    # fill the entire budget with repeats of those few clips and starve the
-    # model of every other label they ever gave.
-    result = await session.execute(
+    Shared by ``build_and_save`` and ``preference.efficacy.load_labeled_clips``
+    (Issue 475) so the offline harness scores precisely the dataset production
+    trains on. Sharing only ``latest_verdict_subquery`` was not enough: the
+    harness then saw skip-latest clips the TRAINABLE filter discards, and an
+    attached outcome could grade a retracted label back into the eval set.
+
+    ONE label per clip — the creator's most recent verdict (Issue 444).
+    `clip_feedback` is an append-only log with no unique constraint, so a clip
+    rated up and later rated down contributed TWO contradictory samples: a
+    positive and a negative with identical features, differing only in weight.
+    That is not a signal the model can learn from, it is noise the creator
+    explicitly retracted. A single annotator revising their own judgement is a
+    label CORRECTION, not inter-annotator disagreement, so newest-wins is the
+    right rule — majority-vote across a creator's own changes of mind would
+    let a retracted opinion outvote the current one. `id` breaks created_at
+    ties so the choice is deterministic rather than whatever the planner
+    returns.
+
+    The partition runs over VERDICT_ACTIONS (which INCLUDES `skip`) and the
+    trainable filter is applied afterwards. That ordering is what makes a
+    retraction real: PUT /clips/{id}/triage back to `pending` records a
+    `skip`, which wins the partition and then drops out at the filter, so the
+    clip contributes no label at all. Partitioning over TRAINABLE_ACTIONS
+    instead would let the superseded upvote survive forever.
+
+    Newest-first + LIMIT so a power creator with years of feedback doesn't
+    pull the entire set into memory and into LightGBM's ndarray copy on every
+    retrain. The 30d-half-life recency decay (preference/decay.py) makes rows
+    past the cap worth ~0 in the sample weight anyway. (Issue 102)
+    The cap applies AFTER the per-clip dedup, which is the whole point:
+    applied before, a creator who flip-flopped on a handful of clips could
+    fill the entire budget with repeats of those few clips and starve the
+    model of every other label they ever gave.
+    """
+    latest_per_clip = latest_verdict_subquery(creator_id)
+    return (
         select(ClipFeedback, Clip, ClipOutcome)
         .join(latest_per_clip, latest_per_clip.c.feedback_id == ClipFeedback.id)
         .join(Clip, Clip.id == ClipFeedback.clip_id)
@@ -132,6 +135,14 @@ async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> Prefer
         .order_by(ClipFeedback.created_at.desc())
         .limit(settings.PREFERENCE_MAX_TRAINING_LABELS)
     )
+
+
+async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> PreferenceScorer | None:
+    """
+    Load feedback, build training data, fit model, persist weights_blob to DB.
+    Returns None if there are fewer than 2 training samples (one per class minimum).
+    """
+    result = await session.execute(training_rows_select(creator_id))
     rows = result.all()
 
     X_list, y_list, w_list = [], [], []

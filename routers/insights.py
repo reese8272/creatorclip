@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
 from billing.spend_guard import require_budget
+from clip_engine.edits import clip_origin_s
 from config import settings
 from db import get_session
 from dna.embeddings import embed_clip_excerpts
@@ -513,6 +514,7 @@ async def get_proof_of_lift(
             Clip.id,
             Clip.score,
             Clip.dna_match,
+            Clip.setup_start_s,
             Clip.start_s,
             Clip.end_s,
             Clip.peak_s,
@@ -530,16 +532,20 @@ async def get_proof_of_lift(
     )
     rows = (await session.execute(stmt)).all()
 
+    # Geometry from the shared render origin (`setup_start_s ?? start_s`) —
+    # Issue 475(b): every other surface measures clip-relative time from
+    # `clip_origin_s`; computing from raw `start_s` mis-measured duration and
+    # setup lead for every clip with a distinct setup point.
     clips = [
         LiftClip(
             clip_id=str(r.id),
             performed_well=r.performed_well,
             score=r.score,
             dna_match=r.dna_match,
-            duration_s=(r.end_s - r.start_s)
+            duration_s=(r.end_s - clip_origin_s(r.setup_start_s, r.start_s))
             if r.end_s is not None and r.start_s is not None
             else None,
-            setup_lead_s=(r.peak_s - r.start_s)
+            setup_lead_s=(r.peak_s - clip_origin_s(r.setup_start_s, r.start_s))
             if r.peak_s is not None and r.start_s is not None
             else None,
             principle=(r.signals_jsonb or {}).get("principle") or None,
@@ -618,12 +624,18 @@ async def get_originality_advisory(
 
     fingerprint_fields: dict[uuid.UUID, dict] = {}
     for clip, video_duration_s in rows:
+        # Shared render origin (Issue 475(b) scope addition): the fingerprint
+        # compared mis-measured durations/leads for clips with a setup point.
         duration_s = (
-            clip.end_s - clip.start_s
+            clip.end_s - clip_origin_s(clip.setup_start_s, clip.start_s)
             if clip.end_s is not None and clip.start_s is not None
             else None
         )
-        setup_lead_s = clip.peak_s - clip.start_s if clip.peak_s is not None else None
+        setup_lead_s = (
+            clip.peak_s - clip_origin_s(clip.setup_start_s, clip.start_s)
+            if clip.peak_s is not None
+            else None
+        )
         fingerprint_fields[clip.id] = {
             "clip_id": str(clip.id),
             "duration_s": duration_s,
