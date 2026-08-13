@@ -38,13 +38,22 @@ Keep `staging` fast-forward-able from `main`: after any direct hotfix to `main`,
 
 ---
 
-## Branch protection (apply when GitHub Pro is enabled)
+## Branch protection — ENFORCED since 2026-08-13
 
-> ⚠️ **Not yet enforced.** Branch protection / rulesets require **GitHub Pro** on a
-> private repo (the API returns 403 "Upgrade to GitHub Pro or make this repository
-> public" on the free tier — confirmed Issue 145). Until then the model below is
-> **convention**, with the real gate being the `CI` workflow that runs on every PR.
-> Apply the ruleset the moment Pro is enabled.
+> ✅ **Live on `main` and `staging`.** The blocker recorded here (Issue 145: the API
+> returned 403 "Upgrade to GitHub Pro or make this repository public" on the free
+> tier) no longer applies — the repo is **public**, where branch protection is free.
+> The ruleset below was applied verbatim on 2026-08-13; readback confirms 8 required
+> checks, `strict`, linear history, and no force-push/deletion on both branches.
+>
+> ⚠️ **Verify before trusting `eval/clip-quality`.** That context was posted to
+> `context.sha` — the ephemeral `refs/pull/N/merge` commit — while protection
+> evaluates the PR **head**. It had therefore never satisfied a rule, and requiring
+> it before the fix would have hung every PR on "Expected — Waiting for status to be
+> reported". Fixed in PR #101 (`ci.yml` now posts to
+> `context.payload.pull_request?.head?.sha ?? context.sha`) and pinned by
+> `tests/test_ci_config.py::test_eval_commit_status_targets_the_pr_head_sha`.
+> **Do not re-enable that requirement against any ci.yml predating #101.**
 
 **Required status checks** (exact job names from `.github/workflows/ci.yml`):
 - `Lint (ruff)`
@@ -56,7 +65,7 @@ Keep `staging` fast-forward-able from `main`: after any direct hotfix to `main`,
 - `Playwright (smoke + a11y)` — Issue 266: a11y regression gate (axe violations on serious/critical)
 - `eval/clip-quality` (commit status, not job) — Issue 265: required on clip_engine/ and tests/eval/ changes; posted via GitHub commit-status API because a skipped required job reports 'success' (GitHub quirk — a commit status always reflects real outcome)
 
-**Apply via `gh` (run once Pro is active), for each of `main` and `staging`:**
+**Applied via `gh` (2026-08-13), for each of `main` and `staging` — re-run to restore:**
 
 ```bash
 for BR in main staging; do
@@ -95,6 +104,12 @@ Notes:
 - `required_linear_history: true` + `allow_force_pushes: false` — clean, non-rewritable history.
 - GitHub's modern equivalent is **Rulesets** (Settings → Rules → Rulesets); the same
   contexts/linear-history/force-push settings apply.
+- `enforce_admins: false` is deliberate and is what keeps the `staging` sync above
+  working. Main's squash-merge commits carry **no check runs of their own** (CI runs on
+  the PR head, and `ci.yml` has no `push` trigger), so a fast-forward
+  `git push origin origin/main:staging` cannot satisfy the required contexts on its own
+  — it lands because the maintainer is an admin. Flipping `enforce_admins` to `true`
+  would break that sync; route staging through a PR from `main` first if you ever do.
 
 ---
 
