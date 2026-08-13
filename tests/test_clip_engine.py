@@ -220,6 +220,20 @@ def test_extract_candidates_min_clip_length_respected():
         assert c["end_s"] - c["setup_start_s"] >= MIN_CLIP_S
 
 
+def test_extract_candidates_first_sample_spike_degenerate_clamp():
+    """Issue 459: a retention spike confined to the very first signal sample
+    still yields a candidate; the endpoint peak is nudged one sample inward
+    (times[1] = 0.5s) so setup(0.0) < peak_s holds."""
+    tl = {
+        "duration_s": 120.0,
+        "events": [{"type": "retention_spike", "start_s": 0.0, "end_s": 0.4, "value": 1.5}],
+    }
+    candidates = extract_candidates(tl)
+    assert len(candidates) == 1
+    assert candidates[0]["peak_s"] == pytest.approx(0.5)
+    assert candidates[0]["setup_start_s"] == pytest.approx(0.0)
+
+
 # ── CORE INVARIANT: setup always before peak ──────────────────────────────────
 
 

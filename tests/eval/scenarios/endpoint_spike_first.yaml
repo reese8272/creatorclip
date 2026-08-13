@@ -1,0 +1,22 @@
+scenario: endpoint_spike_first
+description: >
+  Issue 459: a retention spike in the video's very first sample — the instant
+  cold-open retention pop (ground-truth signal, weight 3.0). scipy's
+  find_peaks never reports array endpoints as peaks, so without endpoint
+  padding this spike was invisible and the video produced zero candidates.
+  The peak is nudged one sample inward (0.5s) so setup(0.0) < peak holds.
+  Principle: "Hook in the first 3 seconds" (the cold open IS the moment).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 120.0
+    events:
+      - {type: retention_spike, start_s: 0.0, end_s: 1.0, value: 1.5}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 0.0
+      peak_s_max: 2.0
+      setup_start_s_max: 0.5

@@ -15,7 +15,7 @@ import logging
 import numpy as np
 from scipy.signal import find_peaks
 
-from clip_engine.window import RESOLUTION_S, build_signal_array
+from clip_engine.window import build_signal_array
 
 logger = logging.getLogger(__name__)
 
@@ -198,17 +198,29 @@ def _detect_peaks(timeline: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, d
     empty arrays and {} when the timeline yields no signal.
     """
     times, signal = build_signal_array(timeline)
-    if len(signal) == 0:
+    if len(signal) <= 1:
         return times, signal, np.array([], dtype=int), {}
 
-    resolution_s = float(times[1] - times[0]) if len(times) > 1 else RESOLUTION_S
+    resolution_s = float(times[1] - times[0])
     min_distance_samples = max(1, int(MIN_CLIP_S / resolution_s))
+    # Issue 459: find_peaks can never report the first or last array sample as
+    # a peak, so a retention spike in the video's first/last 0.5s bucket was
+    # invisible. Pad one sample per side with the signal floor — never -inf,
+    # which corrupts prominence ordering — then shift indices back.
+    pad_value = min(0.0, float(signal.min()))
+    padded = np.concatenate(([pad_value], signal, [pad_value]))
     peak_indices, properties = find_peaks(
-        signal,
+        padded,
         distance=min_distance_samples,
         prominence=_PEAK_PROMINENCE,
         height=_PEAK_MIN_HEIGHT,
     )
+    peak_indices = peak_indices - 1
+    # Degenerate clamp: an endpoint peak is nudged one sample inward
+    # (idx 0 -> times[1]; idx n-1 -> times[n-2]) so setup(0.0) < peak_s and
+    # peak_s < end_s both hold downstream. The distance floor (>= 60 samples)
+    # guarantees the nudge cannot collide with a neighbouring peak.
+    peak_indices = np.clip(peak_indices, 1, len(signal) - 2)
     return times, signal, peak_indices, properties
 
 
