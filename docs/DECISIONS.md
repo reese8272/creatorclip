@@ -5,7 +5,80 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-12 (latest) — Issue 453: restore Stripe's sync transport rather than rewrite two money paths as async
+## 2026-08-13 (latest) — Launch sequencing for a non-friend audience: four calls
+
+**Trigger.** The owner asked what remains before inviting real users who are *not* personal friends,
+and whether auto-clipping is "95% done". Answering it required auditing the clip engine and the
+launch ledger together, which surfaced both a structural misclassification of the target and three
+factual errors in the handoff docs.
+
+---
+
+**(1) A non-friend audience is Stage B, not a widened Stage A.**
+
+The obvious reading is that "a few more users" is just Stage A with more invites, capped at Google's
+100-test-user limit. That is wrong, and the cap is not the reason. **In Testing mode Google expires
+each tester's OAuth connection after 7 days** (`docs/ACCESS.md:51-54`), so every user must re-click
+"Connect YouTube" weekly *and* be manually whitelisted first. A friend tolerates that; a stranger
+churns. Issue #29 (OAuth verification, **1–4 week external review**) is therefore a hard blocker for
+this audience and the only remaining item with an incompressible clock — so it moves to day 0.
+
+*Consequence:* **#282 (status page) is un-deferred.** Its 2026-07-31 deferral was explicitly scoped
+to "owner + ~3 friends who will simply text him", and its own re-open criteria are *"(a) users are
+people who won't contact you directly, (b) you start charging someone who isn't a friend, or (c)
+Stage B"*. A non-friend audience trips all three. The deferral was correct for its scope and is
+simply out of scope now — this is not a reversal of the reasoning.
+
+**(2) Fresh upload FIRST, then one consolidated fix wave — not fix-then-verify.**
+
+*Evidence.* Every time a human has examined real rendered output, it found defects the backlog had
+not predicted: the first post-wave upload filed Issues **427–430**, the second filed **448, 449,
+450**. More pointedly, Issue 440 was *graded green on its numeric criteria* while the clip showed the
+wrong person — `docs/issues.md:2414` records it as *"This audit graded 440 green on the numbers
+alone and missed it."* Fixing the three known-open defects before the upload would therefore be
+optimizing against a defect list we have concrete evidence is incomplete. Running the upload first
+also clears ~8 pending live-verification ACs in one pass, since nearly everything left in L26–L29 is
+of the form "upload one real video and check N things at once."
+
+*Ruled out:* fix-the-known-three-first (slower, and the upload would likely surface more anyway) and
+ship-as-is (the meaning-inverting cut is the class of defect that costs a creator's trust permanently
+— unacceptable for someone who has no personal relationship to extend goodwill).
+
+**(3) Issue 445 (three-pile triage UI) is built before non-friends arrive.**
+
+It is genuinely unbuilt — 6 unchecked ACs, four unresolved design questions — despite a handoff doc
+claiming the L27 triage UI had shipped. Strangers hit the review queue on their **first** upload, and
+today reviewed state does not survive a reload and the Dashboard badge counts rendered clips rather
+than pending triage (`pages/Dashboard.tsx:108`). A first-run experience that loses the user's work on
+refresh is not shippable to someone with no reason to be patient.
+
+**(4) The master checklist extends `docs/GO_LIVE.md` rather than becoming a new document.**
+
+Issue 303 deliberately collapsed three disagreeing gate lists into GO_LIVE, and `CLAUDE.md`,
+`docs/PROJECT_STATE.md` and `docs/COMPLIANCE.md` now only point there. A separate
+`LAUNCH_CHECKLIST.md` would immediately become the fourth list and drift the same way — a cost this
+project has already paid once. The new "Stage A→B execution plan" section cites runbooks by anchor
+instead of restating steps, preserving one copy of each procedure.
+
+**Ledger corrections made in the same pass.** #395 (upload, a flagged BETA BLOCKER) had **never been
+a row in GO_LIVE at all** despite breaking the first thing a new user does — added, with all three
+of its outstanding drills promoted to first-class items because two of them were hidden inside a
+*checked* box and a status line. #296 was stale-OPEN and is in fact GREEN — `ci.yml:365-408` runs the
+online downgrade round-trip with a `pg_dump --schema-only` byte-diff plus an irreversibility
+detector, satisfying both its ACs. And the meaning-inverting cold open
+(`docs/OFF_COURSE_BUGS.md:146`) — the highest-impact known clip defect — had been open, unfiled and
+unowned since 2026-08-10; it is now **Issue 484**, carrying its recorded fix direction *and* the
+warning against the plausible wrong fix (do not extend the weak-opener word list; no closed class
+catches a fake sentence boundary).
+
+**Honest readiness readout.** Clip *selection* engine ≈95% (all five L29 SEV1s merged, every AC in
+456–482 checked, eval floor 21→31). Clip *rendered output* ≈75% — not missing code but missing
+**measurement**: no test rasterizes a frame, proves the crop landed on the speaking person, or
+measures LUFS of a real artifact. No L29 SEV1 fix has yet been proven on a real upload.
+
+---
+
+## 2026-08-12 — Issue 453: restore Stripe's sync transport rather than rewrite two money paths as async
 
 **Decision — fix the 10-week billing outage with `stripe.HTTPXClient(allow_sync_methods=True)`,
 and explicitly decline the "more idiomatic" async rewrite.**

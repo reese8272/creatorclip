@@ -146,11 +146,20 @@ re-verify (#24), and pricing beyond minute packs. **None of these gate the beta.
 most are **acceptance-criteria checkboxes inside already-shipped issues**, and the majority need a
 *live upload* rather than code.
 
-- **L29 (456–482)** — built and merged. 5 stray unchecked ACs are Issue-442 leftovers (background
-  style removal) that the code already satisfies; tidy on next pass.
+- **L29 (456–482)** — built and merged; **every** AC in 456–482 is checked. ⚠️ **Corrected
+  2026-08-13:** the 5 stray unchecked ACs in this range are **Issue 483's**, not Issue-442
+  leftovers, and Issue 483 is a deliberately gated successor — its own header reads *"DO NOT BUILD
+  until a beta creator actually uploads screen-share-heavy sources or requests it."* Nothing to
+  tidy; they are unchecked on purpose.
 - **L28 (448–449)** — the billing live-proof ACs (same blocker as above) and one overlay-band
   re-render check.
-- **L27 (444–447)** — triage UI shipped; remaining ACs are live-verification on a real upload.
+- **L27 (444–447)** — ⚠️ **Corrected 2026-08-13: Issue 445 (three-pile triage UI) is genuinely
+  UNBUILT**, not shipped. All 6 of its ACs are unchecked (`docs/issues.md:2672-2683`) and its body
+  still carries four unresolved design questions (`:2663-2670`) — so this is real UI work with its
+  own CHECK phase, not a live-verification checkbox. **444** did ship (prod DB 0057) and its
+  remaining ACs *are* live-verification. Owner call 2026-08-13: **build 445 before inviting
+  non-friends** — they hit the review queue on their first upload, and today reviewed state does not
+  survive a reload.
 - **L26 (414–426)** — camera-region + overlay ACs pending a frame-extraction spot-check; **363**
   (caption text editing) and **376(b)** (no-auth demo) are **deliberately parked/descoped**,
   reversible. **381** (chat-density) is genuinely open, size L, needs external verification.

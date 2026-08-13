@@ -69,7 +69,10 @@ Console-only gate. The OAuth **code** path is already shipped; the consent scree
 
 **Steps (Google Cloud Console → APIs & Services):**
 1. OAuth consent screen: User type **External**, Publishing status **Testing**.
-2. App name **CreatorClip**, support email set, authorized domain **autoclip.studio**.
+2. App name **AutoClip** — *not* "CreatorClip" (corrected 2026-08-13; this line was stale). Every
+   user-facing surface, the ToS and the privacy policy all say AutoClip, and **Google's Stage-B
+   review checks that consistency** (`docs/GO_LIVE.md:50`). Support email set, authorized domain
+   **autoclip.studio**.
 3. Register exactly these scopes (must match `youtube/oauth.py:46-51` byte-for-byte):
    `userinfo.email`, `userinfo.profile`, `youtube.readonly`, `yt-analytics.readonly`.
 4. Add each beta tester's Gmail under **Test users** (Testing allows up to 100).

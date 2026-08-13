@@ -4026,4 +4026,65 @@ captions/caption_position must respect the padded safe area.
 - [ ] Note: reuse of the JSONB key name `background` is acceptable only nested under the
       fit-mode config, not top-level (old rows carry dead top-level keys)
 
-- Next free issue number: **484**.
+---
+
+### Issue 484: clips must not open on a clause that inverts the speaker's meaning
+
+- [ ] **Status:** open · **Size:** M · filed 2026-08-13 (promoted from `docs/OFF_COURSE_BUGS.md`
+      2026-08-10, where it had sat open, unfiled and unowned) · **Lane:** L29 follow-up ·
+      **BETA BLOCKER for a non-friend audience**
+
+**Severity: SEV2 — a clip that states the inverse of the creator's actual opinion is the worst
+output this system can produce.** It is worse than an awkward open: an awkward open is a quality
+problem, this is a *misattribution* problem. Rank 9 is unrendered today, but the creator can render
+it from the UI at any time, so the exposure is live.
+
+**The defect.** `build_sentence_index` treats a Deepgram **utterance** boundary as a **grammatical
+sentence** boundary. Deepgram ended an utterance between `"don't"` and `"feel"`, so the index opened
+a sentence span at `"feel"`, and `snap_start` therefore considered it a clean standalone open —
+`is_weak_opener("feel")` is correctly `False`, because "feel" is not a weak opener. The clip opens:
+
+> *"feel like Percy Butler is a starting free anything"*
+
+The word immediately before it is **"don't"**. The rendered claim is the **opposite** of what the
+speaker said. Rank 7 (`"the Terry thing, no."`, preceded by `"but"`) is the same shape and was
+knowingly scoped out of Issue 441 as "a fragment, not a closed grammatical class".
+
+**Why the obvious fix is the wrong fix — do not do this.** *Do not extend the weak-opener word
+list.* No closed class of words catches this: "feel" is a perfectly good sentence opener in general,
+and the defect is not a property of the opening word at all — it is a property of the **boundary**
+being fake. A longer list would add false positives without touching the real cause.
+
+**Tractable signals** (from the 2026-08-10 root cause; settle the choice in this issue's own CHECK
+phase, and prefer whichever is provable from the fixture):
+- **(a)** the previous word carrying **no terminal punctuation** *and* a **sub-threshold pause** —
+  this pair is what actually distinguishes a genuine sentence break from an utterance break, and it
+  is available in the Deepgram word objects we already persist;
+- **(b)** a **negation or auxiliary** immediately preceding the candidate start (`don't`, `won't`,
+  `never`, `can't`, `isn't`, and the auxiliary class generally), which is the specific construction
+  that inverts meaning rather than merely truncating it.
+
+Signal (a) is the more general fix and (b) the narrower high-precision one; they compose.
+
+**Also in scope — the Issue 441 residual** (`docs/issues.md:2487`). Issue 449 shipped a partial fix;
+these survived it and belong with this work because they share the same boundary root cause:
+- hedge opens outside the shipped list — rank 6 `"Like,"`, rank 12 `"maybe"`
+- the fragment class — rank 7 `"the Terry thing, no."`
+
+**Acceptance**
+- [ ] An eval fixture built from **this exact case** — the `"don't" / "feel like Percy Butler…"`
+      boundary — is added to `tests/eval/scenarios/` and fails before the fix, passes after
+- [ ] A clip does not open at a sentence-index boundary that is an utterance boundary rather than a
+      grammatical one, per the signal chosen in CHECK
+- [ ] The weak-opener word list is **not** extended (regression guard: the fix must hold with the
+      list unchanged)
+- [ ] The Issue 441 residual hedge opens (`"Like,"`, `"maybe"`) and the fragment class no longer
+      open a clip
+- [ ] `SCENARIO_FLOOR` ratcheted to reflect the added fixture(s), in both pinned locations
+      (`tests/test_clip_engine.py`, `tests/test_eval_transparency.py`)
+- [ ] Setup-start geometry is unaffected — the existing geometry and snap scenarios stay green
+- [ ] Scores still cite a named principle from `docs/CLIPPING_PRINCIPLES.md`
+- [ ] `docs/OFF_COURSE_BUGS.md` 2026-08-10 entry flipped from 📋 Open to ✅ Fixed with the PR
+- [ ] Verified on real output in the next fresh-upload session, not only on the fixture
+
+- Next free issue number: **485**.
