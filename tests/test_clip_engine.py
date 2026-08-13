@@ -100,6 +100,20 @@ def test_find_setup_start_falls_back_to_energy_spike():
     assert result == pytest.approx(60.0)
 
 
+def test_find_setup_start_uses_most_recent_energy_spike():
+    """Issue 460: with two in-window spikes and no silence, the fallback takes
+    the MOST RECENT spike start before the peak — mirroring the silence rule
+    and the module contract ("most recent content boundary")."""
+    tl = _timeline(
+        [
+            {"type": "energy_spike", "start_s": 20.0, "end_s": 30.0, "value": 0.8},
+            {"type": "energy_spike", "start_s": 60.0, "end_s": 70.0, "value": 0.8},
+        ]
+    )
+    result = _find_setup_start(tl, peak_s=89.0)
+    assert result == pytest.approx(60.0)
+
+
 def test_find_setup_start_falls_back_to_window_edge():
     result = _find_setup_start(_timeline([]), peak_s=90.0, window_s=WINDOW_S)
     assert result == pytest.approx(max(0.0, 90.0 - WINDOW_S))

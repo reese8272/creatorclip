@@ -143,7 +143,7 @@ def _find_setup_start(timeline: dict, peak_s: float, window_s: float = WINDOW_S)
 
     Priority:
       1. End of the most-recent silence (marks a natural setup start)
-      2. Start of the nearest energy spike before the peak
+      2. Start of the most-recent (nearest) energy spike before the peak
       3. Fallback: peak_s - window_s (clamped to 0)
     """
     earliest = max(0.0, peak_s - window_s)
@@ -167,7 +167,10 @@ def _find_setup_start(timeline: dict, peak_s: float, window_s: float = WINDOW_S)
         and e.get("start_s", 0.0) < peak_s
     ]
     if energy:
-        return float(min(e["start_s"] for e in energy))
+        # Issue 460: MOST RECENT spike start, mirroring the silence rule above —
+        # min() took the earliest spike in the lookback, dragging setups to the
+        # window edge on silence-free segments (contradicting the docstring).
+        return float(max(e["start_s"] for e in energy))
 
     return earliest
 
