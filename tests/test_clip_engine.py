@@ -260,8 +260,12 @@ SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "eval", "scenarios")
 # 14 → 15 when the stream-recap budget scenario landed — Issue 190;
 # 15 → 18 when the three kind:merge hybrid-candidate scenarios landed — Issue 416;
 # 18 → 21 when the mid-sentence-open, LLM-length-clamp, and contained-duplicate
-# scenarios landed — Issues 428/429)
-SCENARIO_FLOOR = 23
+# scenarios landed — Issues 428/429;
+# 23 → 30 when the seven W2 Batch-A fixtures landed — Issues 456-460 + 449:
+# setup_before_loud_reaction, silence_only, endpoint_spike_first,
+# endpoint_spike_last, run_on_backward_snap, no_utterance_single_segment,
+# pause_weak_opener)
+SCENARIO_FLOOR = 30
 
 # Scenario files that are explicitly allowed to carry a pytest skip/xfail marker
 # (e.g. a known-broken scenario under active investigation). Add the YAML filename

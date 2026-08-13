@@ -2864,14 +2864,16 @@ as grammatical ones. No closed word-class catches this, which is why 441 knowing
 (the "the Terry thing, no." case is the same shape and appears here as rank 7). Logged in
 `docs/OFF_COURSE_BUGS.md`; promote only with a real approach, not a longer word list.
 
+**Status: DONE 2026-08-13 (same branch/commits as 456).** Pause branch now targets the first sentence at/after the start (what the clip audibly opens on): strong openers stay untouched (never snapped forward), weak openers take the existing 441 walk-back. The real 1306.43 case demonstrated failing first (returned untouched, opens on "Yeah.") then lands at 1301.87 (cost 4.56 s of the 10 s budget). All 441 pinned cases re-verified green.
+
 **Acceptance**
-- [ ] A start landing in the pause before a weak-opening sentence walks back, bounded by the same
+- [x] A start landing in the pause before a weak-opening sentence walks back, bounded by the same
       step count and `max_snap_s` budget as the in-sentence path
-- [ ] The regression test is written against the real `1306.43` case and demonstrated **failing
+- [x] The regression test is written against the real `1306.43` case and demonstrated **failing
       first**
-- [ ] `test_snap_start_clean_boundary_unchanged` and the coordinator/pronoun exclusions stay green
+- [x] `test_snap_start_clean_boundary_unchanged` and the coordinator/pronoun exclusions stay green
       — the pinned snap cases from 441 are not re-litigated
-- [ ] Eval scenarios stay at 100%; `SCENARIO_FLOOR` raised only if a fixture is added
+- [x] Eval scenarios stay at 100%; `SCENARIO_FLOOR` raised only if a fixture is added
 
 ### Issue 450: a two-shot with only one detected face track holds the crop on the silent person
 
@@ -3269,12 +3271,14 @@ invariant (drop or re-anchor a candidate whose peak exits the window post-snap),
 absolute rule or fall back to the raw start when the backward target is further than the peak
 allows. The no-utterance degenerate case needs its own handling (see also Issue 481).
 
+**Status: DONE 2026-08-13 (W2 Batch A, branch `fix/issue-456-449-sentence-snap-bounds`, commits 1c9bf72 red / 49cd314 fix).** Backward never-mid-sentence rule bounded by `backward_limit_s = peak−85 s` + `_RUN_ON_BACKWARD_CAP_S = 30 s` with raw-start fallback; post-snap invariant `setup+0.1 ≤ peak ≤ end−0.1` enforced repair-first (restore pre-snap raw end) then drop-with-WARNING; degenerate single-span index (≥80 % coverage) disables snapping with one WARNING per video; snap-kind eval runner now asserts peak-inside unconditionally. Red-first: pre-fix shipped `[204.7, 294.7]` vs peak 300; degenerate collapsed both candidates to `[0.2, 90.2]`. Amends DECISIONS 2026-08-05 r.(2) — entry added.
+
 **Acceptance**
-- [ ] Post-snap invariant: `setup_start_s < peak_s < end_s` (with the 0.1 margin) holds for every
+- [x] Post-snap invariant: `setup_start_s < peak_s < end_s` (with the 0.1 margin) holds for every
       persisted candidate, enforced in code, not only in tests
-- [ ] Eval fixture: run-on-utterance scenario modeled on the repro geometry, red before / green after
-- [ ] Eval fixture: no-utterance (single-segment) transcript does not collapse to one [0, 90] clip
-- [ ] `SCENARIO_FLOOR` raised only with the fixtures added
+- [x] Eval fixture: run-on-utterance scenario modeled on the repro geometry, red before / green after
+- [x] Eval fixture: no-utterance (single-segment) transcript does not collapse to one [0, 90] clip
+- [x] `SCENARIO_FLOOR` raised only with the fixtures added
 
 ### Issue 457: laughter/energy double-count biases peak detection toward the aftermath
 
@@ -3289,11 +3293,13 @@ becomes the most peak-shaped thing in the timeline; the 75 s backward look is th
 class) or cap the composite per-sample; re-run the eval geometry suite + a fixture where the setup
 precedes a loud reaction and the peak must not land on the reaction alone.
 
+**Status: DONE 2026-08-13 (W2 Batch A, branch `fix/issue-457-460-window-signals`, commit 734cb13).** One event class per sample at emission (laughter, the stricter detector, excludes its frames from the energy mask) + `np.maximum(laugh, energy)` at consumption as defense-in-depth for persisted timelines; retention stays additive, silence subtractive. Red-first fixture `setup_before_loud_reaction`: summed stacking put the peak at 67.0 on the reaction; max-capped keeps the punchline complex with the setup at the joke's lead-in. The three pre-existing laughter fixtures kept their pinned expectations unchanged.
+
 **Acceptance**
-- [ ] One sample contributes to at most one event class (or a documented per-sample cap)
-- [ ] Fixture: laughter-after-joke timeline — peak lands within the joke+reaction complex and the
+- [x] One sample contributes to at most one event class (or a documented per-sample cap)
+- [x] Fixture: laughter-after-joke timeline — peak lands within the joke+reaction complex and the
       setup window still opens at the joke's setup (red/green documented)
-- [ ] `docs/CLIPPING_PRINCIPLES.md` unchanged or updated to match the actual weighting story
+- [x] `docs/CLIPPING_PRINCIPLES.md` unchanged or updated to match the actual weighting story
 
 ### Issue 458: a silence-only timeline fabricates clip candidates
 
@@ -3308,9 +3314,11 @@ silences yields 2 candidates with peaks at 155 s and 255 s from literally nothin
 height > 0, or skip-with-reason when the composite has no positive mass) — and make the skip
 reason honest (`derive_skip_reason` currently cannot express "no positive signal").
 
+**Status: DONE 2026-08-13 (same lane, commit 921fa3f).** `_PEAK_MIN_HEIGHT = 0.25` passed as `height=` alongside `prominence=0.5` (scipy ANDs absolute with relative); validated post-457 — weakest genuine fixture peak is 1.35. New truthful skip reason `no_positive_signal` checked before the retention branch (the old fallback claimed "analytics not yet available" — false). Red-first fixture `silence_only`: two silences fabricated a candidate at peak 155.0.
+
 **Acceptance**
-- [ ] Silence-only (and all-zero) timelines produce zero candidates and a truthful skip reason
-- [ ] Eval fixture added; `SCENARIO_FLOOR` raised with it
+- [x] Silence-only (and all-zero) timelines produce zero candidates and a truthful skip reason
+- [x] Eval fixture added; `SCENARIO_FLOOR` raised with it
 
 ### Issue 459: `find_peaks` cannot see a peak in the first or last signal sample
 
@@ -3324,9 +3332,11 @@ no candidate — cold-opens with instant retention pops are exactly the content 
 **Fix direction (CHECK phase):** pad the composite array (standard practice) or explicitly test
 endpoints; verify interaction with the 75 s backward window at t≈0.
 
+**Status: DONE 2026-08-13 (same lane, commit 70c1b72).** Composite padded one sample per side with `min(0, signal.min())` (never −inf — corrupts prominence ordering); endpoint peaks nudged one sample inward so `setup < peak < end` hold at t=0 and t=duration. Red-first fixtures `endpoint_spike_first`/`endpoint_spike_last`: both yielded zero candidates pre-fix.
+
 **Acceptance**
-- [ ] Fixture: retention spike in the first sample and in the last sample each yield a candidate
-- [ ] No regression in the existing 24 scenarios
+- [x] Fixture: retention spike in the first sample and in the last sample each yield a candidate
+- [x] No regression in the existing 24 scenarios
 
 ### Issue 460: setup fallback picks the EARLIEST energy spike in the window, docstring says "nearest"
 
@@ -3342,9 +3352,11 @@ behaviorally the earliest-spike choice drags setups toward the window edge on en
 mirrors the silence rule), fix code or docstring accordingly, and pin with a unit test whose
 timeline has two spikes in-window.
 
+**Status: DONE 2026-08-13 (same lane, commit 42e9e3e).** `min()` → `max()` — the setup fallback takes the most recent in-window energy-spike start, mirroring the silence rule; settled 2-docstrings-vs-1-line (module contract + function docstring both said nearest/most-recent). Red-first: two-spike unit test obtained 20.0, expected 60.0. No existing fixture exercised the multi-spike energy fallback, so zero expectation churn.
+
 **Acceptance**
-- [ ] Code and docstring agree; unit test with two in-window spikes pins the chosen semantics
-- [ ] Eval geometry suite green; any changed scenario expectations justified in the issue
+- [x] Code and docstring agree; unit test with two in-window spikes pins the chosen semantics
+- [x] Eval geometry suite green; any changed scenario expectations justified in the issue
 
 ### Batch B — Scoring & prompts (461–465)
 
