@@ -284,6 +284,7 @@ def extract_candidates(
     words: list[dict] | None = None,
     min_pause_ms: int = 400,
     max_snap_s: float = 3.0,
+    container_duration_s: float | None = None,
 ) -> list[dict]:
     """
     Return up to max_candidates clip windows, each with:
@@ -295,6 +296,11 @@ def extract_candidates(
     Events are weighted by type; scipy.signal.find_peaks locates peaks;
     candidates are sorted by signal prominence (strongest first), then
     returned sorted chronologically.
+
+    ``container_duration_s`` (Issue 469): the ffprobe container duration the
+    render enforces. When shorter than the audio-derived timeline duration
+    (VFR sources, stream VODs) it caps ``end_s`` so no candidate is born
+    pointing past the renderable media.
     """
     times, signal, peak_indices, properties = _detect_peaks(timeline)
     if len(signal) == 0 or len(peak_indices) == 0:
@@ -308,6 +314,8 @@ def extract_candidates(
     prominences_ordered = prominences[order][:max_candidates]
 
     duration_s = float(timeline.get("duration_s", times[-1]))
+    if container_duration_s is not None and container_duration_s > 0:
+        duration_s = min(duration_s, container_duration_s)
     # Pre-NMS: build candidates in prominence order so we always keep the stronger peak
     # when two windows overlap.
     pre_nms: list[dict] = []

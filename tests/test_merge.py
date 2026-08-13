@@ -484,7 +484,9 @@ async def test_dropped_duplicate_slot_refills_from_pool(mocker) -> None:
 def test_extract_candidates_is_byte_untouched() -> None:
     """The eval harness calls extract_candidates directly — Issue 416 must not
     modify it. Guard: the function still lives in candidates.py with the exact
-    pre-416 signature (a structural tripwire, complemented by the git diff)."""
+    pre-416 signature (a structural tripwire, complemented by the git diff).
+    Issue 469 appended a trailing defaulted ``container_duration_s`` — every
+    positional call site (the eval harness included) is untouched by it."""
     import inspect
 
     from clip_engine.candidates import extract_candidates
@@ -497,4 +499,6 @@ def test_extract_candidates_is_byte_untouched() -> None:
         "words",
         "min_pause_ms",
         "max_snap_s",
+        "container_duration_s",
     ]
+    assert sig.parameters["container_duration_s"].default is None
