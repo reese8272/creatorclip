@@ -174,9 +174,14 @@ def test_seek_sampling_survives_individual_frame_failures():
         patch("clip_engine.camera_region.subprocess.run", side_effect=_flaky),
         patch("pathlib.Path.exists", return_value=True),
     ):
-        ok = _sample_by_seeking(_SRC, 0.0, 1617.2, 8, 60.0, "/tmp")
-    assert ok is True
+        captured, scanned_until_s = _sample_by_seeking(_SRC, 0.0, 1617.2, 8, 60.0, "/tmp")
     assert len(seen) == 8, "a failed frame must not abort the remaining samples"
+    # Issue 466 contract: the captured (timestamp, path) list IS the ordering
+    # authority, and a completed loop reports the full span as scanned.
+    assert len(captured) == 4
+    stamps = [t for t, _ in captured]
+    assert stamps == sorted(stamps)
+    assert scanned_until_s == pytest.approx(1617.2)
 
 
 def test_seek_sampled_stack_is_read_back_in_temporal_order_past_999_samples():

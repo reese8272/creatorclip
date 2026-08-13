@@ -242,24 +242,34 @@ def _combined_stack() -> list:
     return _load("onset_*.png") + _load("clean_*.png") + _load("offset_*.png")
 
 
+def _timed(frames: list, interval: float = 1.0) -> tuple[list, float]:
+    """Wrap plain frames the way `_sample_gray_frames_timed` returns them:
+    evenly spaced sample-centre timestamps plus the fully-scanned duration."""
+    stamps = [(i + 0.5) * interval for i in range(len(frames))]
+    return list(zip(stamps, frames)), len(frames) * interval
+
+
 def test_detect_builds_the_stored_document_from_real_frames(monkeypatch) -> None:
     """Only the ffmpeg sampler is stubbed; every frame is production footage.
 
     36 frames over a 36 s duration means one sample per second, so the runs at
-    indices 6-11 and 24-30 become spans padded by _SPAN_PAD_S.
+    indices 6-11 and 24-30 (sample centres 6.5-11.5 and 24.5-30.5) become
+    spans padded by _SPAN_PAD_S.
     """
     import clip_engine.overlay_bands as ob
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", lambda *a, **k: _combined_stack())
-    doc = ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080)
+    monkeypatch.setattr(ob, "_sample_gray_frames_timed", lambda *a, **k: _timed(_combined_stack()))
+    doc = ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080, sample_interval_s=1.0)
 
     assert doc is not None
     assert doc["version"] == OVERLAY_SPANS_VERSION
     assert doc["frame"] == {"width": 1920, "height": 1080}
     assert doc["samples"] == 36
+    assert doc["scanned_until_s"] == 36.0
+    assert doc["sample_interval_s"] == 1.0
     assert len(doc["spans"]) == 2, "one span per banner instance"
-    assert doc["spans"][0] == {"start_s": 5.5, "end_s": 12.5}
-    assert doc["spans"][1] == {"start_s": 23.5, "end_s": 31.5}
+    assert doc["spans"][0] == {"start_s": 6.0, "end_s": 12.0}
+    assert doc["spans"][1] == {"start_s": 24.0, "end_s": 31.0}
 
     # Band rect, scaled from 480x270 analysis rows to source pixels and padded.
     # The union must reach the TALLER banner's top (analysis row 199 -> ~796px).
@@ -275,7 +285,9 @@ def test_detect_returns_none_on_clean_footage(monkeypatch) -> None:
     """No banner, no document — and therefore no mask at render."""
     import clip_engine.overlay_bands as ob
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", lambda *a, **k: _load("clean_*.png"))
+    monkeypatch.setattr(
+        ob, "_sample_gray_frames_timed", lambda *a, **k: _timed(_load("clean_*.png"))
+    )
     assert ob.detect_overlay_spans(Path("unused.mp4"), 12.0, 1920, 1080) is None
 
 
@@ -283,10 +295,12 @@ def test_detect_returns_none_when_sampling_fails_or_is_too_short(monkeypatch) ->
     """Ingest must never fail on this; None simply means no masking."""
     import clip_engine.overlay_bands as ob
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", lambda *a, **k: None)
+    monkeypatch.setattr(ob, "_sample_gray_frames_timed", lambda *a, **k: None)
     assert ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080) is None
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", lambda *a, **k: _load("onset_*.png")[:2])
+    monkeypatch.setattr(
+        ob, "_sample_gray_frames_timed", lambda *a, **k: _timed(_load("onset_*.png")[:2])
+    )
     assert ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080) is None
 
     # Degenerate inputs are rejected before any sampling is attempted.
@@ -363,5 +377,5 @@ def test_detect_swallows_detector_errors(monkeypatch) -> None:
     def _boom(*a, **k):
         raise RuntimeError("ffmpeg exploded")
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", _boom)
+    monkeypatch.setattr(ob, "_sample_gray_frames_timed", _boom)
     assert ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080) is None

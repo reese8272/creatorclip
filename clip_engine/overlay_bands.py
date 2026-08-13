@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from clip_engine.camera_region import _sample_gray_frames
+from clip_engine.camera_region import _sample_gray_frames_timed
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,11 @@ logger = logging.getLogger(__name__)
 # reason: the backfill's failure markers are keyed by it, so a detector fix
 # invalidates the markers its own bug wrote (the trap that cost a full cycle on
 # Issue 443).
-OVERLAY_SPANS_VERSION = 1
+# v2 (Issue 466): span times come from real per-sample timestamps instead of
+# `duration / len(stack)`, and the document records `scanned_until_s`. Every
+# v1 document was computed over a scrambled, time-dilated timeline on sources
+# longer than ~500 s, so v1 is invalidated on read.
+OVERLAY_SPANS_VERSION = 2
 
 # Only the lower part of the frame is considered. Superchats, lower thirds and
 # ticker bars live there; a bright ceiling light or window does not.
@@ -78,7 +82,15 @@ _SPAN_PAD_S = 0.5
 _BAND_PAD_FRAC = 0.01
 
 # Detection is a best-effort enhancement; ingest must never wait on it forever.
-_TIMEOUT_S = 240.0
+# Truncation is EXPLICIT (Issue 466): when the budget runs out the stored
+# document records `scanned_until_s`, so masking only ever applies within the
+# scanned range instead of silently dilating over the whole runtime. Default
+# matches `OVERLAY_BAND_TIMEOUT_S`, which the worker call sites pass.
+_TIMEOUT_S = 600.0
+
+# A gap between neighbouring samples larger than this many REQUESTED intervals
+# splits a run — dropped frames must not bridge two separate banners into one.
+_MAX_GAP_INTERVALS = 3.0
 
 # Blur strength. Large enough that a donation name and dollar amount are not
 # legible after the 1080-wide upscale, small enough to read as a deliberate
@@ -149,6 +161,24 @@ def _runs(positive: list[bool], min_run: int) -> list[tuple[int, int]]:
     return out
 
 
+def _timed_runs(
+    positive: list[bool], times: list[float], min_run: int, max_gap_s: float
+) -> list[tuple[int, int]]:
+    """``_runs`` split wherever neighbouring samples are more than
+    ``max_gap_s`` apart. The seek sampler skips failed frames and stops at its
+    budget, so consecutive INDICES are not consecutive TIMES — two banners
+    separated by a stretch of dropped samples must not merge into one run."""
+    out: list[tuple[int, int]] = []
+    seg_start = 0
+    for i in range(1, len(times) + 1):
+        if i == len(times) or times[i] - times[i - 1] > max_gap_s:
+            out.extend(
+                (seg_start + a, seg_start + b) for a, b in _runs(positive[seg_start:i], min_run)
+            )
+            seg_start = i
+    return out
+
+
 def detect_overlay_spans(
     source_path: Path,
     duration_s: float,
@@ -175,15 +205,22 @@ def detect_overlay_spans(
         if sample_frames < _MIN_RUN_SAMPLES:
             return None
 
-        stack = _sample_gray_frames(source_path, 0.0, duration_s, sample_frames, timeout_s)
-        if stack is None or len(stack) < _MIN_RUN_SAMPLES:
-            logger.info("overlay_bands: too few samples (%s) — no masking", stack and len(stack))
+        timed = _sample_gray_frames_timed(source_path, 0.0, duration_s, sample_frames, timeout_s)
+        if timed is None or len(timed[0]) < _MIN_RUN_SAMPLES:
+            logger.info(
+                "overlay_bands: too few samples (%s) — no masking", timed and len(timed[0])
+            )
             return None
+        samples, scanned_until_s = timed
+        times = [t for t, _ in samples]
+        stack = [frame for _, frame in samples]
 
         counts, analysis_h = _bright_row_counts(stack)
         min_rows = max(1, int(round(_MIN_BRIGHT_ROWS_FRAC * analysis_h)))
         positive = [c >= min_rows for c in counts]
-        runs = _runs(positive, _MIN_RUN_SAMPLES)
+        runs = _timed_runs(
+            positive, times, _MIN_RUN_SAMPLES, _MAX_GAP_INTERVALS * sample_interval_s
+        )
         if not runs:
             logger.info(
                 "overlay_bands: no run of %d+ positive samples (max %d rows vs threshold %d) "
@@ -208,27 +245,28 @@ def detect_overlay_spans(
         y = max(0, int(top_row * sy) - pad)
         h = min(frame_h - y, max(1, int((bottom_row - top_row + 1) * sy) + 2 * pad))
 
-        # The sampler spreads `sample_frames` evenly across the runtime, so a
-        # sample's time is its index times the REAL interval, which is the
-        # duration divided by the sample count — not the requested interval.
-        step = duration_s / len(stack)
+        # Span edges come from the run's REAL sample timestamps (Issue 466) —
+        # never from index * interval, which dilates past the first dropped
+        # frame or budget cut. The pad covers the half-interval uncertainty on
+        # each side plus a banner's fade-in/out.
         spans = []
         for a, b in runs:
             spans.append(
                 {
-                    "start_s": round(max(0.0, a * step - _SPAN_PAD_S), 3),
-                    "end_s": round(min(duration_s, (b + 1) * step + _SPAN_PAD_S), 3),
+                    "start_s": round(max(0.0, times[a] - _SPAN_PAD_S), 3),
+                    "end_s": round(min(duration_s, times[b] + _SPAN_PAD_S), 3),
                 }
             )
 
         total = sum(s["end_s"] - s["start_s"] for s in spans)
         logger.info(
-            "overlay_bands: %d span(s), %.1fs of %.1fs (%.1f%%), band y=%d h=%d of %dpx "
-            "(threshold %d rows, peak %d)",
+            "overlay_bands: %d span(s), %.1fs of %.1fs (%.1f%%), scanned to %.1fs, "
+            "band y=%d h=%d of %dpx (threshold %d rows, peak %d)",
             len(spans),
             total,
             duration_s,
             100.0 * total / duration_s,
+            scanned_until_s,
             y,
             h,
             frame_h,
@@ -242,7 +280,8 @@ def detect_overlay_spans(
             "frame": {"width": frame_w, "height": frame_h},
             "spans": spans,
             "samples": len(stack),
-            "sample_interval_s": round(step, 4),
+            "sample_interval_s": round(sample_interval_s, 4),
+            "scanned_until_s": round(scanned_until_s, 3),
         }
     except Exception as exc:  # noqa: BLE001 — diagnostic pass, never fails ingest
         logger.warning("overlay_bands: detection failed (%s) — no masking", exc)

@@ -27,6 +27,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -541,31 +542,43 @@ def _sample_by_seeking(
     sample_frames: int,
     timeout_s: float,
     tmp_dir: str,
-) -> bool:
+) -> tuple[list[tuple[float, Path]], float]:
     """One input-seek per frame — cost is independent of the span's length.
 
-    ``-ss`` BEFORE ``-i`` is input seeking: ffmpeg jumps to the nearest keyframe
-    instead of decoding forward to it. Frames therefore land on keyframes rather
-    than exact timestamps, which is irrelevant here — the detector wants diverse
-    samples across the runtime, not precise ones.
+    ``-ss`` BEFORE ``-i`` is input seeking: ffmpeg jumps to the nearest seek
+    point and then, because the output is re-encoded (not stream-copied),
+    decodes and discards frames up to the exact requested position — so each
+    sample is frame-accurate on modern ffmpeg
+    (https://ffmpeg.org/ffmpeg.html#Main-options).
+
+    Returns the captured ``(timestamp_s, path)`` pairs IN CAPTURE ORDER plus
+    ``scanned_until_s``. The returned list is the ordering authority — Issue
+    466 came from re-discovering these files with a lexicographic glob, which
+    scrambles the timeline past 999 samples. Names stay zero-padded purely as
+    hygiene.
 
     A single unreadable sample must not lose the whole pass, so failures are
-    skipped; the caller's ``< 3 frames`` guard still rejects a stack too sparse
-    to measure temporal variance against.
+    skipped; the caller's guards still reject a stack too sparse to measure.
+    The budget makes truncation explicit: on exhaustion the un-scanned tail is
+    reported via ``scanned_until_s`` rather than silently absent.
     """
     deadline = time.monotonic() + timeout_s
-    captured = 0
+    captured: list[tuple[float, Path]] = []
+    scanned_until_s = start_s
     for i in range(sample_frames):
         if time.monotonic() >= deadline:
             logger.warning(
-                "camera_region: sampling budget (%.0fs) exhausted after %d/%d frames",
+                "camera_region: sampling budget (%.0fs) exhausted after %d/%d frames "
+                "(scanned to %.1fs)",
                 timeout_s,
-                captured,
+                len(captured),
                 sample_frames,
+                scanned_until_s,
             )
             break
         t = start_s + duration * (i + 0.5) / sample_frames
-        out = Path(tmp_dir) / f"f{i:03d}.png"
+        scanned_until_s = t
+        out = Path(tmp_dir) / f"f{i:06d}.png"
         cmd = [
             "ffmpeg",
             "-y",
@@ -588,8 +601,63 @@ def _sample_by_seeking(
         except (subprocess.SubprocessError, OSError):
             continue
         if result.returncode == 0 and out.exists():
-            captured += 1
-    return captured > 0
+            captured.append((t, out))
+    else:
+        scanned_until_s = start_s + duration
+    return captured, scanned_until_s
+
+
+def _sample_gray_frames_timed(
+    source_path: Path,
+    start_s: float,
+    end_s: float,
+    sample_frames: int,
+    timeout_s: float,
+) -> tuple[list[tuple[float, Any]], float] | None:
+    """Timestamped sampling: ``([(t_s, frame), ...], scanned_until_s)`` or
+    ``None`` on extraction failure.
+
+    The overlay-band pass (Issue 448) needs REAL per-sample timestamps: the
+    seek sampler skips failed frames and stops at its budget, so inferring a
+    sample's time from its index dilates every span past the first gap — that
+    was Issue 466. Camera-region consensus keeps consuming the untimed wrapper
+    below, byte-identical.
+    """
+    import cv2
+
+    duration = max(0.1, end_s - start_s)
+    with tempfile.TemporaryDirectory(prefix="camregion_") as tmp_dir:
+        if duration > _LINEAR_DECODE_MAX_SPAN_S:
+            pairs, scanned_until_s = _sample_by_seeking(
+                source_path, start_s, duration, sample_frames, timeout_s, tmp_dir
+            )
+        else:
+            if not _sample_by_linear_decode(
+                source_path, start_s, duration, sample_frames, timeout_s, tmp_dir
+            ):
+                return None
+            # Complete by construction (one pass, no skips): each file's own
+            # frame number is its timestamp key. ffmpeg's image2 muxer counts
+            # from 1; the numeric parse is defense-in-depth against the
+            # lexicographic trap ever returning (glob order is unspecified —
+            # https://docs.python.org/3/library/glob.html).
+            pairs = []
+            for p in Path(tmp_dir).glob("f*.png"):
+                try:
+                    idx = int(p.stem[1:]) - 1
+                except ValueError:
+                    continue
+                pairs.append((start_s + duration * (idx + 0.5) / sample_frames, p))
+            pairs.sort(key=lambda tp: tp[0])
+            scanned_until_s = end_s
+        frames: list[tuple[float, Any]] = []
+        for t, p in pairs:
+            img = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                frames.append((t, img))
+        if not frames:
+            return None
+        return frames, scanned_until_s
 
 
 def _sample_gray_frames(
@@ -600,24 +668,9 @@ def _sample_gray_frames(
     timeout_s: float,
 ) -> list | None:
     """Extract ``sample_frames`` evenly-spaced grayscale frames (downscaled to
-    ``_ANALYSIS_WIDTH``) from the clip window with ONE ffmpeg call. Returns a
-    list of 2-D uint8 arrays, or ``None`` on any extraction failure."""
-    import cv2
-
-    duration = max(0.1, end_s - start_s)
-    with tempfile.TemporaryDirectory(prefix="camregion_") as tmp_dir:
-        if duration > _LINEAR_DECODE_MAX_SPAN_S:
-            if not _sample_by_seeking(
-                source_path, start_s, duration, sample_frames, timeout_s, tmp_dir
-            ):
-                return None
-        elif not _sample_by_linear_decode(
-            source_path, start_s, duration, sample_frames, timeout_s, tmp_dir
-        ):
-            return None
-        frames = []
-        for p in sorted(Path(tmp_dir).glob("f*.png")):
-            img = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
-            if img is not None:
-                frames.append(img)
-        return frames or None
+    ``_ANALYSIS_WIDTH``) from the clip window. Returns a list of 2-D uint8
+    arrays, or ``None`` on any extraction failure."""
+    timed = _sample_gray_frames_timed(source_path, start_s, end_s, sample_frames, timeout_s)
+    if timed is None:
+        return None
+    return [frame for _t, frame in timed[0]]
