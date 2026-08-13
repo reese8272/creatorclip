@@ -610,9 +610,7 @@ def test_vfr_container_shorter_than_audio_clamps_candidates():
 
     # Without the container the audio timeline alone would let end_s run to
     # 110 s — the geometry the render used to hard-reject (the 469 defect).
-    unthreaded = snap_candidates_to_sentences(
-        [dict(candidates[0])], segments, duration_s=120.0
-    )
+    unthreaded = snap_candidates_to_sentences([dict(candidates[0])], segments, duration_s=120.0)
     assert unthreaded[0]["end_s"] == 110.0
 
 
