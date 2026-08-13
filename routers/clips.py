@@ -141,13 +141,14 @@ class ClipOut(BaseModel):
 
 
 class PersonalizationStatus(BaseModel):
-    """Honest personalization-status surface (Issue 216).
+    """Honest personalization-status surface (Issues 216/474).
 
-    Communicates to the creator whether the preference model is active for their
-    account, how many training labels they have, and the current threshold. Below
-    ``PERSONALIZATION_THRESHOLD_LABELS`` the reranker falls back to DNA + signals
-    and ``active`` is ``False``; at/above the threshold ``active`` is ``True`` and
-    ``weight`` is the current ramp value.
+    Communicates to the creator whether the preference model is actually
+    reweighting their ranking, how many post-dedup training labels they have
+    (one per clip — the count the fit saw), and the current threshold.
+    ``active`` is ``weight > 0``: at or below ``PERSONALIZATION_THRESHOLD_LABELS``
+    the ramp ``(n−T)/T`` is 0 and the reranker serves pure DNA + signals, so
+    ``active`` stays ``False`` until one label PAST the threshold.
 
     Placed on the list envelope (not per-ClipOut) to avoid O(N) scorer reads per
     request. The float ``weight`` is retained for API consumers; the UI surfaces
@@ -763,8 +764,19 @@ def _build_personalization_status(scorer: "PreferenceScorer | None") -> Personal
     """Compute PersonalizationStatus from a loaded scorer (or None).
 
     Called once per list_clips request — a single scorer read, not N reads.
-    None → active=False, labels=0; scorer present → read label_count and compute
-    preference_weight to determine whether the threshold has been crossed.
+    None → active=False, labels=0.
+
+    ``active`` means ``weight > 0`` (Issue 474): ``preference_weight``'s ramp is
+    ``(n−T)/T``, which is 0.0 at exactly T labels — the blend still serves pure
+    DNA there, and the old ``label_count >= threshold`` check claimed
+    "Personalized" one label early. The honesty constraint (CLAUDE.md:
+    "Personalization threshold is communicated honestly") makes the weight the
+    single source of truth; it is surfaced so API consumers see the same ramp.
+
+    ``labels`` is ``scorer.label_count`` — the POST-dedup count of rows the fit
+    actually saw (one per clip, newest verdict), so the surfaced count is the
+    trained count, never the raw feedback-row count a flip-flopping creator
+    would inflate.
     """
     from preference.model import preference_weight
 
@@ -774,7 +786,7 @@ def _build_personalization_status(scorer: "PreferenceScorer | None") -> Personal
     label_count = scorer.label_count
     weight = preference_weight(label_count)
     return PersonalizationStatus(
-        active=label_count >= threshold,
+        active=weight > 0.0,
         labels=label_count,
         threshold=threshold,
         weight=weight,

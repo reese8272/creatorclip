@@ -118,11 +118,13 @@ def test_personalization_no_model_returns_inactive_zero_labels(client):
     assert p["weight"] == 0.0
 
 
-# ── Test (b): at/above threshold → active=True ───────────────────────────────
+# ── Test (b): active means the blend weight is actually non-zero (Issue 474) ─
 
 
-def test_personalization_at_threshold_returns_active(client):
-    """GET /videos/{id}/clips with labels==threshold → personalization.active=True."""
+def test_personalization_at_exactly_threshold_is_not_active(client):
+    """Issue 474 — at exactly T labels the ramp (n−T)/T is 0.0: the blend still
+    serves pure DNA, so claiming "Personalized" would be dishonest. The UI must
+    not claim active until the weight is > 0."""
     creator = _creator()
     video = _video(creator.id)
     _set_overrides(creator, video, [])
@@ -138,9 +140,31 @@ def test_personalization_at_threshold_returns_active(client):
     assert resp.status_code == 200
     body = resp.json()
     p = body["personalization"]
-    assert p["active"] is True
+    assert p["weight"] == 0.0, "the ramp is (n-T)/T — zero at exactly T"
+    assert p["active"] is False, "active must mean the preference model has weight"
     assert p["labels"] == threshold
     assert p["threshold"] == threshold
+
+
+def test_personalization_one_past_threshold_is_active(client):
+    """T+1 labels → the ramp is positive → active=True with the surfaced weight."""
+    creator = _creator()
+    video = _video(creator.id)
+    _set_overrides(creator, video, [])
+    threshold = settings.PERSONALIZATION_THRESHOLD_LABELS
+    scorer = _mock_scorer(threshold + 1)
+
+    try:
+        with patch("preference.train.load_latest", new=AsyncMock(return_value=scorer)):
+            resp = client.get(f"/videos/{video.id}/clips", cookies={"session": "x"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    p = body["personalization"]
+    assert p["active"] is True
+    assert p["weight"] > 0.0
 
 
 def test_personalization_above_threshold_returns_active_with_ramp(client):
@@ -234,13 +258,14 @@ def test_build_personalization_status_below_threshold():
 
 
 def test_build_personalization_status_at_threshold():
-    """Scorer with label_count == threshold → active=True."""
+    """Scorer with label_count == threshold → weight 0.0 → NOT active (Issue 474)."""
     from routers.clips import _build_personalization_status
 
     threshold = settings.PERSONALIZATION_THRESHOLD_LABELS
     scorer = _mock_scorer(threshold)
     status = _build_personalization_status(scorer)
-    assert status.active is True
+    assert status.weight == 0.0
+    assert status.active is False
     assert status.threshold == threshold
 
 
