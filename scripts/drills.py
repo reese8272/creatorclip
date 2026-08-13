@@ -49,6 +49,9 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("drills")
 
 _BASE = "http://localhost:8000"
+# The seeded staging creator (tests/perf/seed_staging.py). Every drill acts as
+# this identity, and several must reset ITS throttle state, so it is one name.
+_STAGING_CREATOR_ID = "00000000-1111-2222-3333-444444444444"
 
 
 def _mint_token() -> tuple[str, str]:
@@ -57,7 +60,7 @@ def _mint_token() -> tuple[str, str]:
 
     from config import settings
 
-    creator_id = "00000000-1111-2222-3333-444444444444"
+    creator_id = _STAGING_CREATOR_ID
     payload = {
         "sub": creator_id,
         "exp": datetime.now(UTC) + timedelta(minutes=30),
@@ -154,11 +157,16 @@ async def drill_flags_flip() -> None:
                 session=s,
             )
         flags._reset_cache()
+    # `!= 503` is NOT good enough: 429 is also "not 503", so a spend cool-down or
+    # an exhausted quota would masquerade as a successful re-enable. Run
+    # 31725525373 did exactly that — it logged "re-enabled -> 429. PASS" while the
+    # creator was still in the cool-down leaked by an earlier spend-trip. Demand a
+    # real success, so a throttled response fails loudly instead.
     code = await _await_post_status(
         llm_probe,
         token,
-        accept=lambda c: c != 503,
-        what="still 503 after re-enable",
+        accept=lambda c: 200 <= c < 400,
+        what="no successful response after re-enable (429 = still throttled, 503 = still flagged)",
         timeout_s=converge_s,
     )
     log.info("flags-flip: re-enabled -> %s. PASS", code)
@@ -175,7 +183,7 @@ async def drill_spend_trip() -> None:
     try:
         # Drive the real counter over the cap with one oversized probe spend.
         await spend_guard.record_spend(
-            creator_id=uuid.UUID("00000000-1111-2222-3333-444444444444"),
+            creator_id=uuid.UUID(_STAGING_CREATOR_ID),
             usd=cap_usd + 1.0,
         )
         # Give the trip path its moment, then verify the flag flipped.
@@ -187,12 +195,19 @@ async def drill_spend_trip() -> None:
         assert not await flags.flag_enabled("llm_generation"), "flag did not trip"
         log.info("spend-trip: cap breach flipped llm_generation OFF")
         # Second breach must be a no-op (latch).
-        await spend_guard.record_spend(
-            creator_id=uuid.UUID("00000000-1111-2222-3333-444444444444"), usd=1.0
-        )
+        await spend_guard.record_spend(creator_id=uuid.UUID(_STAGING_CREATOR_ID), usd=1.0)
         log.info("spend-trip: second breach latched (no error)")
     finally:
         # Manual reset per RUNBOOKS: clear latch + counters, re-enable flag.
+        #
+        # The cool-down key is the one that used to leak. record_spend sets
+        # `spend:cooldown:creator:<id>` with a 3600 s TTL on a creator breach, and
+        # `require_budget` 429s EVERY budget-guarded route while it lives. Leaving
+        # it behind poisoned the next hour of drilling: it is why drill_rate_limit
+        # saw 429 on probe #1 with no rate-limit bucket in Redis at all, and why a
+        # LATER run's flags-flip got 429 instead of 202. The old rate-limit
+        # assertion was vacuous enough to call that contamination a PASS.
+        from billing.spend_guard import cooldown_key
         from youtube._redis import get_redis_client
 
         r = get_redis_client()
@@ -202,7 +217,8 @@ async def drill_spend_trip() -> None:
             "creatorclip:spend:trip:llm_generation",
             f"creatorclip:spend:{today}",
             f"creatorclip:spend:{month}",
-            f"creatorclip:spend:{today}:creator:00000000-1111-2222-3333-444444444444",
+            f"creatorclip:spend:{today}:creator:{_STAGING_CREATOR_ID}",
+            cooldown_key(_STAGING_CREATOR_ID),
         )
         async with AsyncSessionLocal() as s:
             await flags.set_flag(
@@ -238,6 +254,7 @@ async def _clear_rate_limit_buckets(creator_id: str) -> int:
     Logs every key it finds, so a future surprise is diagnosable from the run log
     instead of another round trip.
     """
+    from billing.spend_guard import cooldown_key
     from youtube._redis import get_redis_client
 
     r = get_redis_client()
@@ -246,6 +263,13 @@ async def _clear_rate_limit_buckets(creator_id: str) -> int:
         log.info("rate-limit:   bucket %s%s", k, "  <- this creator" if creator_id in k else "")
     if keys:
         await r.delete(*keys)
+    # Belt and braces: a spend cool-down 429s budget-guarded routes (render among
+    # them) with no rate-limit bucket involved at all, which is indistinguishable
+    # from a quota trip at the HTTP layer. drill_spend_trip now clears this in its
+    # finally; clearing it here too means an aborted earlier run cannot silently
+    # invalidate this drill's boundary.
+    if await r.delete(cooldown_key(creator_id)):
+        log.info("rate-limit:   cleared a leftover spend cool-down for this creator")
     return len(keys)
 
 
