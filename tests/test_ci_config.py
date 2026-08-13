@@ -552,6 +552,33 @@ def test_render_env_marker_excluded_from_default_lane() -> None:
     )
 
 
+def test_eval_commit_status_targets_the_pr_head_sha() -> None:
+    """The `eval/clip-quality` commit status must be posted to the PR HEAD sha.
+
+    On a `pull_request` event `context.sha` is the ephemeral refs/pull/N/merge
+    commit, but branch protection evaluates required contexts on the HEAD commit.
+    Posting to `context.sha` therefore lands the status on a commit nothing
+    inspects, and any ruleset requiring `eval/clip-quality` hangs every PR on
+    "Expected — Waiting for status to be reported". Measured on PR #100: head
+    cf9fcca carried 0 statuses while merge 483ad33 carried the success.
+
+    Issue 265 chose a commit status precisely so protection COULD require it, so
+    this is the assertion that keeps that promise true.
+    """
+    ci = _load_workflow("ci.yml")
+    posts = ci.count("context: 'eval/clip-quality'")
+    assert posts == 3, (
+        f"expected 3 eval/clip-quality post sites (success/failure/skipped), found {posts} "
+        "— if a branch was added or removed, update this pin with it"
+    )
+    head_sha_expr = "context.payload.pull_request?.head?.sha ?? context.sha"
+    assert ci.count(f"sha: {head_sha_expr},") == 3, (
+        "every eval/clip-quality post site must target the PR head sha via "
+        f"`{head_sha_expr}` — a bare `context.sha` posts to the merge commit, "
+        "which branch protection never looks at"
+    )
+
+
 def test_local_ci_does_not_override_the_default_marker_lane() -> None:
     """scripts/ci_local.sh must invoke pytest BARE, never with a `-m` override.
 
