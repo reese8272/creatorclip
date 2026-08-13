@@ -4,10 +4,10 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-12/13 (latest) — Beta close-out W0–W2: L29 filed; 479/454/477 + Batch A DONE
+## 2026-08-12/13 (latest) — Beta close-out W0–W3: L29 filed; 479/454/477 + Batches A+B DONE
 
 The full beta close-out plan (7 waves, L29 + open tail + drills + billing proof, with a concrete
-back-testing spine) was approved and started. W0–W2 so far:
+back-testing spine) was approved and started. W0–W3 so far:
 
 - **Audit deliverables merged** (PR #85): `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md`,
   Lane L29 (Issues 456–482) in `docs/issues.md`, plus the W0 preservation snapshot
@@ -40,6 +40,16 @@ back-testing spine) was approved and started. W0–W2 so far:
   Seven new eval fixtures; `SCENARIO_FLOOR` 23→30; landing-page claim 24→31; zero pre-existing
   fixture expectations changed. Two DECISIONS entries incl. the amendment of the 2026-08-05
   "absolute never-mid-sentence" ruling.
+
+- **W3 Batch B — Issues 461, 462, 463, 464, 465 DONE** (integration/w3-batch-b): four parallel
+  worktree lanes, failing-test-first. Scoring hardened (per-item validate-and-degrade + structured
+  output adopted per owner [DEC], superseding the 2026-06-29 deferral — pins Issue 476's golden
+  format); [BEFORE] transcript context tail-keeps ([AFTER] audited clean); prompt placement aligned
+  with Issue 224 (identity + video-context summary out of system blocks, byte-identity cache pins);
+  Native length WIRED per owner [DEC] Option A (Shorts-only estimator, max-clamp-only ceiling,
+  cold start byte-identical); `clips.blended_score` (migration 0059) frees `score` as the immutable
+  fit composite — proof-of-lift and efficacy were silently ingesting blends and self-repaired.
+  One new eval fixture; SCENARIO_FLOOR 30→31; landing claim 31→32.
 
 ## 2026-08-12 — Issue 453 SEV1 found and fixed; 451 + 452 closed
 

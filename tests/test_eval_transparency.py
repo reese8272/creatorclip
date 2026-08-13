@@ -104,8 +104,8 @@ def test_scenario_floor_is_pinned_in_two_places() -> None:
     together when adding scenarios; lowering is never allowed (the ratchet)."""
     from tests.test_clip_engine import SCENARIO_FLOOR
 
-    assert SCENARIO_FLOOR == 30, (
-        f"SCENARIO_FLOOR is {SCENARIO_FLOOR}, but this pin says 30. If you ADDED "
+    assert SCENARIO_FLOOR == 31, (
+        f"SCENARIO_FLOOR is {SCENARIO_FLOOR}, but this pin says 31. If you ADDED "
         "scenarios, raise both values in the same commit. If this fails because "
         "the floor went DOWN, that is exactly the regression this test exists to stop."
     )

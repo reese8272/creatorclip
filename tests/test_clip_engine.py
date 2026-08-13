@@ -264,8 +264,9 @@ SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "eval", "scenarios")
 # 23 → 30 when the seven W2 Batch-A fixtures landed — Issues 456-460 + 449:
 # setup_before_loud_reaction, silence_only, endpoint_spike_first,
 # endpoint_spike_last, run_on_backward_snap, no_utterance_single_segment,
-# pause_weak_opener)
-SCENARIO_FLOOR = 30
+# pause_weak_opener;
+# 30 → 31 when native_length_clamp landed — Issue 464)
+SCENARIO_FLOOR = 31
 
 # Scenario files that are explicitly allowed to carry a pytest skip/xfail marker
 # (e.g. a known-broken scenario under active investigation). Add the YAML filename
