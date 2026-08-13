@@ -95,7 +95,7 @@ Auto-render enqueues `render_video_clips` for the top `CLIPS_PER_VIDEO_DEFAULT`;
 | Tasks | `render_clip` (permanent-vs-transient classification, Issue 336), `render_video_clips` (batch, one source download) — `worker/tasks.py:494-591`, `_render_clip_async` ~:1752 |
 | Engine | `clip_engine/render.py` (ffmpeg), `clip_engine/captions.py` (drawtext presets), `clip_engine/reframe.py` (9:16 + zoom-on-peak) |
 
-Style comes from the request merged with brand-kit defaults (`subtitle`, `background`,
+Style comes from the request merged with brand-kit defaults (`subtitle`,
 `captions_enabled`, `zoom_on_peak`, `denoise`, `aspect`). Failure classes: permanent
 (`ValueError`/`FileNotFoundError`, incl. `SourceExpiredError` with an actionable SSE message
 — ready-pass W1) never retry; transient retries ≤3; SoftTimeLimit is terminal. Stuck-render
