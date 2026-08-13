@@ -1057,3 +1057,42 @@ def test_checkout_stripe_error_502_scrubs_key_from_logs(monkeypatch, caplog):
     assert "SECRET-MESSAGE-MUST-NOT-LOG" not in caplog.text, (
         "StripeError messages can echo request details — never log them"
     )
+
+
+def test_checkout_non_stripe_failure_502_detail_shape(monkeypatch, caplog):
+    """Non-Stripe failures (e.g. the session.url None guard's RuntimeError) take
+    the generic branch: 502 with the same {code, message} shape, error_class
+    logged, and our own exception text (safe — no Stripe key material) kept for
+    debuggability."""
+    from auth import get_current_creator
+    from config import settings as _settings
+    from main import app
+
+    monkeypatch.setattr(_settings, "STRIPE_SECRET_KEY", "sk_test_fake_key_for_test")
+    fake_creator = MagicMock(id=uuid.uuid4(), stripe_customer_id=None)
+
+    def _raise_runtime(*args, **kwargs):
+        raise RuntimeError("Stripe returned no checkout URL for session cs_test_999")
+
+    monkeypatch.setattr("routers.billing.create_checkout_session", _raise_runtime)
+    app.dependency_overrides[get_current_creator] = override_current_creator(fake_creator)
+    try:
+        c = TestClient(app, raise_server_exceptions=False)
+        with caplog.at_level("ERROR", logger="routers.billing"):
+            response = c.post(
+                "/billing/checkout",
+                json={
+                    "pack_id": "creator",
+                    "success_url": "http://example.com/ok",
+                    "cancel_url": "http://example.com/no",
+                    "intent_id": "11111111-1111-4111-8111-111111111111",
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+
+    assert response.status_code == 502, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "checkout_failed"
+    assert "RuntimeError" in caplog.text
+    assert "cs_test_999" in caplog.text
