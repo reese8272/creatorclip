@@ -3169,19 +3169,30 @@ user can switch packs with no intervening navigation); a fresh UUID per click gu
 disabled button (regresses Issue 106 — a disabled button is a UI affordance, not a concurrency
 guarantee).
 
+**Status: CODE-COMPLETE 2026-08-12** — attempt-scoped `useRef` map + synchronous in-flight latch
+in `Pricing.tsx`; 409/502 `{code, message}` branches with scrubbed classification-field logging in
+`routers/billing.py`. Backend 51/51 billing tests, frontend 662/662, tsc/eslint clean. The two
+live boxes are proven structurally by tests; their live half rides the W0.6 real-purchase drill.
+
 **Acceptance**
-- [ ] A different pack clicked in the same tab starts checkout instead of erroring
-- [ ] A repeat purchase of the same pack gets a new, payable Session — not a consumed one
-- [ ] A double-click still issues exactly ONE `POST /billing/checkout` (Issue 106's guarantee),
-      pinned by a test
-- [ ] `routers/billing.py` maps `stripe.IdempotencyError` to 409 `checkout_conflict` and returns
-      the project's `{code, message}` detail shape on every branch; the client stops flattening
-      every failure into one sentence and tells the user nothing was charged
-- [ ] The Stripe failure log carries `error_class`/`stripe_type`/`stripe_code`/`stripe_request_id`
-      and **never** the idempotency key or `intent_id` (Stripe's own message quotes the key back)
-- [ ] The three lying comments are corrected
-- [ ] `frontend/src/pages/Pricing.test.tsx` exercises `buyPack` at all — today it does not, which
-      is why both 453 and 454 shipped
+- [x] A different pack clicked in the same tab starts checkout instead of erroring — each settled
+      attempt gets a fresh `intent_id` (pinned: cross-pack + same-pack test asserts 3 distinct
+      UUIDs); live confirmation rides the W0.6 purchase drill
+- [x] A repeat purchase of the same pack gets a new, payable Session — same test; the attempt key
+      is deleted on settle, so no key ever meets Stripe twice across attempts
+- [x] A double-click still issues exactly ONE `POST /billing/checkout` (Issue 106's guarantee),
+      pinned by a test — synchronous `inFlightRef` latch (state alone can't beat two clicks in one
+      tick), plus the shared per-attempt key as defense-in-depth
+- [x] `routers/billing.py` maps `stripe.IdempotencyError` to 409 `checkout_conflict` and returns
+      the project's `{code, message}` detail shape on every branch; the client shows a distinct
+      conflict message and says nothing was charged on both failure paths
+- [x] The Stripe failure log carries `error_class`/`stripe_type`/`stripe_code`/`stripe_request_id`
+      and **never** the idempotency key or `intent_id` — pinned by two caplog tests (one plants
+      the key in the exception message and asserts it never reaches the log)
+- [x] The three lying comments are corrected (`Pricing.tsx` intent comment, `stripe_client.py`
+      docstring, `routers/billing.py` `CheckoutRequest` comment)
+- [x] `frontend/src/pages/Pricing.test.tsx` exercises `buyPack` — five tests: happy path,
+      double-click, fresh-key-per-attempt, 409 conflict, generic failure + re-enable
 
 ### Issue 452: clip title and caption truncate in the focused review view
 
@@ -3759,11 +3770,25 @@ coverage,module_coverage,diff_cover --require-coverage`) or stop deleting the XM
 cleanup to the producing gate's start). Add `--require` semantics to module_coverage/diff_cover in
 CI so "skipped" fails there. Fix ci_local.sh's precondition; install the hook.
 
+**Status: DONE 2026-08-12 (PR #86, merged; drill PR #87 closed unmerged).** Fix took BOTH
+directions: cleanup moved to the producing gate's start (order-independent) AND the CI job
+single-invocationed with a new generic `--require coverage,module_coverage,diff_cover` flag.
+`tests/test_ci_config.py` pins the shape. Rider: root `.nvmrc` (22.17.1) + PATH honor in
+`ci_local.sh`, because the freshly-installed hook's first run reproduced the node-26 jsdom
+phantom and would otherwise fail every push.
+
 **Acceptance**
-- [ ] CI log shows module floors + diff-cover actually evaluating (numbers, not "skipped")
-- [ ] A deliberate floor-violation branch fails the job (drill on a scratch PR)
-- [ ] "skipped" is a failure in CI context for these two gates
-- [ ] `ci_local.sh` runs the unit lane with Redis only; hook installation documented/verified
+- [x] CI log shows module floors + diff-cover actually evaluating — PR #86's coverage job:
+      `coverage ok 84.18 · module_coverage ok {clip_engine 93.03/91.0, preference 90.24/88.0,
+      crypto/limiter/auth 100/99} · diff_cover ok`
+- [x] A deliberate floor-violation branch fails the job — drill PR #87 (clip_engine floor 99.9):
+      `module_coverage fail ['clip_engine: 93.0% < floor 99.9%'] → GATES FAILED → exit 1`,
+      log excerpt recorded on #86
+- [x] "skipped" is a failure in CI context for these two gates — `--require` flag; red-path
+      proven locally (missing XML → exit 1 with explicit FAILs)
+- [x] `ci_local.sh` runs the unit lane with Redis only (2977 green locally, no Postgres); hook
+      installed via `scripts/setup_hooks.sh` (`core.hooksPath → .githooks`) and verified live —
+      it blocked a real push before the node pin
 
 ### Issue 480: preference-model evaluation gap — the DNA fixture proves a sort, the rerank has no eval
 

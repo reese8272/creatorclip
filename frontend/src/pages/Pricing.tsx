@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
@@ -30,23 +30,25 @@ const PACKS: Pack[] = [
 
 const formatPrice = (cents: number) => `$${(cents / 100).toFixed(2)}`
 
-// Per-page-load idempotency UUID for Stripe Checkout (Issue 106): a double-click
-// dedupes within Stripe's 24h window; a fresh page load is a fresh intent.
-function checkoutIntentId(): string {
-  const key = 'creatorclip_checkout_intent_id'
-  let id = sessionStorage.getItem(key)
-  if (!id) {
-    id = crypto.randomUUID()
-    sessionStorage.setItem(key, id)
-  }
-  return id
-}
-
 export function Pricing() {
   const { user, balance } = useAuth()
   const authed = user != null
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
+  // Purchase-ATTEMPT-scoped idempotency UUIDs for Stripe Checkout (Issue 454,
+  // preserving Issue 106): an entry is created on the first click of an attempt
+  // and cleared when the request settles, so any concurrent click in the same
+  // attempt shares one Stripe Idempotency-Key while the NEXT attempt always gets
+  // a fresh one. Held in a ref, never storage — a key that outlives its attempt
+  // replays against Stripe with different params (pack switch → 400) or returns
+  // an already-consumed Session (repeat purchase). Stripe's own guidance:
+  // generate a fresh key for a modified request.
+  const intentIds = useRef(new Map<string, string>())
+  // Synchronous in-flight latch: state alone can't stop a double-click's second
+  // POST (both clicks can land before the re-render), so the ref is the
+  // concurrency guard and the state only drives disabled/aria-busy UI.
+  const inFlightRef = useRef<string | null>(null)
+  const [inFlightPack, setInFlightPack] = useState<string | null>(null)
   // Initialise the toast from the post-checkout redirect param (read once at
   // mount) rather than setting state inside an effect.
   const [toast, setToast] = useState<string | null>(() =>
@@ -69,6 +71,14 @@ export function Pricing() {
       navigate('/login')
       return
     }
+    if (inFlightRef.current !== null) return
+    inFlightRef.current = packId
+    setInFlightPack(packId)
+    let intentId = intentIds.current.get(packId)
+    if (!intentId) {
+      intentId = crypto.randomUUID()
+      intentIds.current.set(packId, intentId)
+    }
     const origin = window.location.origin
     try {
       const { checkout_url } = await api<{ checkout_url: string }>('/billing/checkout', {
@@ -78,13 +88,21 @@ export function Pricing() {
           pack_id: packId,
           success_url: `${origin}/app/pricing?success=1`,
           cancel_url: `${origin}/app/pricing?cancelled=1`,
-          intent_id: checkoutIntentId(),
+          intent_id: intentId,
         },
       })
       window.location.assign(checkout_url)
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) navigate('/login')
-      else setToast('Could not start checkout. Try again shortly.')
+      else if (e instanceof ApiError && e.status === 409)
+        setToast('That checkout attempt conflicted with an earlier one. Nothing was charged — try again.')
+      else setToast('Could not start checkout — nothing was charged. Try again shortly.')
+    } finally {
+      // The attempt settled either way: clear its key so the next attempt is
+      // fresh, and release the latch so the buttons re-enable.
+      intentIds.current.delete(packId)
+      inFlightRef.current = null
+      setInFlightPack(null)
     }
   }
 
@@ -138,13 +156,15 @@ export function Pricing() {
             </div>
             <button
               onClick={() => buyPack(p.id)}
+              disabled={inFlightPack !== null}
+              aria-busy={inFlightPack === p.id}
               className={
                 authed
-                  ? 'mt-4 w-full rounded-sm bg-accent py-3 text-sm font-medium text-on-accent inset-shadow-highlight transition-colors duration-fast hover:bg-accent-hover'
+                  ? 'mt-4 w-full rounded-sm bg-accent py-3 text-sm font-medium text-on-accent inset-shadow-highlight transition-colors duration-fast hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-50'
                   : 'mt-4 w-full rounded-sm border border-strong py-3 text-sm font-medium text-fg transition-colors duration-fast hover:border-accent hover:text-accent-text'
               }
             >
-              {authed ? 'Buy now' : 'Sign in to buy'}
+              {authed ? (inFlightPack === p.id ? 'Starting checkout…' : 'Buy now') : 'Sign in to buy'}
             </button>
           </div>
         ))}
