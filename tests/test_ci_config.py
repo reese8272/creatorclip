@@ -266,6 +266,35 @@ def test_staging_drills_pin_deployed_prod_image() -> None:
     )
 
 
+def test_staging_drills_invoke_the_module_not_the_bare_path() -> None:
+    """staging-drills.yml must run ``python -m scripts.drills``, never
+    ``python scripts/drills.py``.
+
+    The bare path puts scripts/ on sys.path[0], so the drill's ``import flags``
+    resolves to scripts/flags.py — the ops CLI, which exposes ``_set_flag`` —
+    instead of the root flags module's ``set_flag``. That exact shadowing turned
+    the 2026-07-03 drills run red with ``AttributeError: module 'flags' has no
+    attribute 'set_flag'``; it was fixed in ca3305c but nothing pinned it, so a
+    future edit could silently reintroduce it. Parsed as YAML so the workflow's
+    own explanatory comment (which names the anti-pattern) can't satisfy it.
+    """
+    drills = yaml.safe_load(_load_workflow("staging-drills.yml"))
+    runs = " ".join(
+        step["run"]
+        for job in drills["jobs"].values()
+        for step in job["steps"]
+        if isinstance(step.get("run"), str)
+    )
+    assert "python -m scripts.drills" in runs, (
+        "staging-drills.yml must invoke the drills as a module (-m scripts.drills) "
+        "so the project root stays ahead of scripts/ on sys.path"
+    )
+    assert "scripts/drills.py" not in runs, (
+        "bare-path invocation shadows the root flags module with scripts/flags.py "
+        "— use `python -m scripts.drills` (see ca3305c)"
+    )
+
+
 def test_staging_prod_compose_parity() -> None:
     """Staging must exercise the same infra images as prod (Issue 298) — a
     version skew (e.g. postgres major) would make the gate's green meaningless.

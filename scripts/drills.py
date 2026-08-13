@@ -35,6 +35,14 @@ import sys
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+# Belt-and-braces for the shadowing described above (mirrors scripts/flags.py):
+# put the project root AHEAD of scripts/ so `import flags` reaches the root
+# reader module even under a bare `python scripts/drills.py`. The workflow still
+# invokes -m; this only means a hand-run from the wrong entry point degrades to
+# working instead of dying on `module 'flags' has no attribute 'set_flag'`.
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("drills")
