@@ -817,10 +817,12 @@ class Clip(Base):
     # queue; `kept`/`dropped` = triaged, and freely moved back and forth.
     #
     # Deliberately separate from `clip_feedback`: that log is append-only and
-    # every row is a training sample, so routing pile-moves through it left an
-    # upvote and a later downvote of the same clip BOTH in the training set.
-    # Setting triage writes no label and triggers no retrain; recording a verdict
-    # with tags/notes still goes through POST /clips/{id}/feedback.
+    # training reads only the LATEST verdict per clip (Issue 444's partition).
+    # As shipped: PUT /clips/{id}/triage records the derived verdict row in the
+    # same transaction and enqueues the debounced retrain; moving a clip back to
+    # `pending` is the retraction path. POST /clips/{id}/feedback carries the
+    # richer verdict (tags/notes); `skip` there is an acknowledged no-op, never
+    # a verdict (Issue 472).
     #
     # `server_default` is load-bearing, not decoration: during a rolling restart
     # the PREVIOUS image's persist_ranked_clips INSERT does not name this column,

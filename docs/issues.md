@@ -3917,9 +3917,11 @@ fallback so silent degradation becomes visible.
 - No test parses `docs/CLIPPING_PRINCIPLES.md` against the four code copies of the registry — add
   the cross-check test (registry is intentionally duplicated; the DOC is the uncovered copy)
 
+**Status: DONE 2026-08-13 (W6 roll-up, branch `fix/issue-482-doc-code-sweep`).** All five legs: 60–90 s wording → the real fixed 75 s backward look (CLAUDE.md, SOT ×2, CLIPPING_PRINCIPLES, PIPELINE); PIPELINE chain gains `analyze_video_context` and its 8 drifted `worker/tasks.py:NNN` refs are de-numbered to symbols (line refs drifted 65–855 lines — numbers are the defect, not the values); CLAUDE.md `SCENARIO_FLOOR` 21 → 31 with a pointer to the in-code ratchet history; `models.py` triage comment rewritten to shipped 444/472 behavior (PUT /triage records the derived verdict + enqueues retrain; skip is an ack); `tests/test_principles_registry.py` parses the doc table and pins all four code copies + the 461 schema enum against it.
+
 **Acceptance**
-- [ ] Each doc corrected in one pass; registry cross-check test added
-- [ ] `docs/SOT.md` window.py description matches reality
+- [x] Each doc corrected in one pass; registry cross-check test added
+- [x] `docs/SOT.md` window.py description matches reality
 
 ---
 

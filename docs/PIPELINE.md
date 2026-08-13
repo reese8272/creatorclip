@@ -22,8 +22,9 @@ upload/link ─▶ ingest ─▶ transcribe ─▶ signals ─▶ generate clips
                                                     └─▶ schedule ─▶ publish ─▶ outcomes ─▶ retrain
 ```
 
-Task chain: `start_pipeline` (Celery chain `worker/tasks.py:~223`) = `ingest_video` →
-`transcribe_video` → `build_signals` → `generate_clips` → (auto) `render_video_clips`.
+Task chain: `start_pipeline` (Celery chain in `worker/tasks.py`) = `ingest_video` →
+`transcribe_video` → `analyze_video_context` (Issue 415 — whole-video context, never fails the
+chain) → `build_signals` → `generate_clips` → (auto) `render_video_clips`.
 Every stage emits SSE progress to `task:{video_id}:events` (see **Streaming**, below).
 
 ---
@@ -33,7 +34,7 @@ Every stage emits SSE progress to `task:{video_id}:events` (see **Streaming**, b
 | | |
 |---|---|
 | Endpoints | `POST /videos/upload`, `POST /videos/link` — `routers/videos.py:333-521` |
-| Task | `ingest_video` / `_ingest_async` — `worker/tasks.py:334-381` |
+| Task | `ingest_video` / `_ingest_async` — `worker/tasks.py` |
 | Storage | R2 (prod) / local disk (dev) via `worker/storage.py`; key `source/{creator_id}/{token}{suffix}` |
 
 Multipart stream → temp file → ffprobe duration probe → storage upload → `Video` row
@@ -44,7 +45,7 @@ retried through `POST /videos/{id}/queue` (also accepts `failed` → resets + re
 **Media lifecycle (load-bearing):** `videos.source_uri` keeps the ORIGINAL video;
 `videos.audio_uri` (migration 0039) holds the extracted WAV. Never overwrite `source_uri` —
 the 2026-06-30 SEV1 (0/18 clips ever rendered) came from ingest replacing it with audio.
-`purge_stale_source_media` (Beat, `worker/tasks.py:~819`) deletes both at
+`purge_stale_source_media` (Beat, `worker/tasks.py`) deletes both at
 `SOURCE_MEDIA_RETENTION_HOURS` (72h, `config.py:243`) after `ingest_done_at`, per
 COMPLIANCE.md. After the purge, render-from-source endpoints 409 with
 `{"code": "source_expired"}` (see **Error taxonomy**).
@@ -53,7 +54,7 @@ COMPLIANCE.md. After the purge, render-from-source endpoints 409 with
 
 | | |
 |---|---|
-| Task | `transcribe_video` / `_transcribe_async` — `worker/tasks.py:384-426` |
+| Task | `transcribe_video` / `_transcribe_async` — `worker/tasks.py` |
 | Backends | `ingestion/transcribe.py` — Deepgram nova-3 default (`TRANSCRIPTION_BACKEND`); WhisperX / AssemblyAI selectable |
 
 ffmpeg WAV extract → `audio_uri` → Deepgram word-level transcript →
@@ -63,7 +64,7 @@ ffmpeg WAV extract → `audio_uri` → Deepgram word-level transcript →
 
 | | |
 |---|---|
-| Task | `build_signals` / `_signals_async` — `worker/tasks.py:429-468` |
+| Task | `build_signals` / `_signals_async` — `worker/tasks.py` |
 | Module | `ingestion/signals.py` → `Signals.timeline_jsonb` (binned energy/silence/tempo features) |
 
 On success sets `ingest_status=done` and enqueues `generate_clips`. That enqueue is guarded
@@ -75,10 +76,10 @@ On success sets `ingest_status=done` and enqueues `generate_clips`. That enqueue
 | | |
 |---|---|
 | Endpoint | `POST /videos/{id}/clips/generate` — `routers/clips.py:222-293` (kill switch `llm_generation`, spend guard, idempotency) |
-| Task | `generate_clips` — `worker/tasks.py:471-491` |
+| Task | `generate_clips` — `worker/tasks.py` |
 | Engine | `clip_engine/candidates.py` (windows + skip reasons) → `clip_engine/scoring.py` (LLM vs creator DNA; prompt-cached brief) → `clip_engine/ranking.py` (preference-model rerank + persist) |
 
-The engine clips the **setup, not the aftermath** (backward look from peak, 60–90s window)
+The engine clips the **setup, not the aftermath** (a fixed 75 s backward look from the peak — `WINDOW_S = 75.0`)
 and every score cites a named principle from `docs/CLIPPING_PRINCIPLES.md`. Ranking blends
 DNA fit with the recency-decayed preference model once the creator crosses the label
 threshold (`personalization_status`, Issue 216); below it, honest "still learning" framing.
@@ -92,7 +93,7 @@ Auto-render enqueues `render_video_clips` for the top `CLIPS_PER_VIDEO_DEFAULT`;
 | | |
 |---|---|
 | Endpoint | `POST /clips/{id}/render` — `routers/clips.py:432-572`: source-expired 409 pre-check (Issue 362), style persist + re-render reset (Issue 353), kill switch `render_intake`, 202 + stream |
-| Tasks | `render_clip` (permanent-vs-transient classification, Issue 336), `render_video_clips` (batch, one source download) — `worker/tasks.py:494-591`, `_render_clip_async` ~:1752 |
+| Tasks | `render_clip` (permanent-vs-transient classification, Issue 336), `render_video_clips` (batch, one source download) — `worker/tasks.py`, `_render_clip_async` ~:1752 |
 | Engine | `clip_engine/render.py` (ffmpeg), `clip_engine/captions.py` (drawtext presets), `clip_engine/reframe.py` (9:16 + zoom-on-peak) |
 
 Style comes from the request merged with brand-kit defaults (`subtitle`,
@@ -125,7 +126,7 @@ working after the 72h purge; results land in `cleaned_render_uri` until the crea
 |---|---|
 | Endpoints | `routers/publications.py` — `POST /clips/{id}/publications` (schedule, tz-aware future datetime, suggested audience windows), `/confirm`, `/cancel`, list |
 | SPA | `components/review/PublishPanel.tsx` + schedule dialog (ready-pass W1) |
-| Sweep | `sweep_scheduled_publications` (Beat, 5m) → `publish_to_youtube` — `worker/tasks.py:605-799` |
+| Sweep | `sweep_scheduled_publications` (Beat, 5m) → `publish_to_youtube` — `worker/tasks.py` |
 | Upload | `youtube/publish.py::upload_video` (resumable; quota via `consume_insert`, non-refundable) |
 | Outcomes | `ClipOutcome` rows → `poll_clip_outcomes` (48h/7d) → `performed_well` vs comparable-Shorts median (Issue 201) → 3× preference weight |
 
@@ -135,7 +136,7 @@ YouTube limit), description = `applied_description or "#Shorts"`. Idempotent on 
 
 ## 8. Personalization loop
 
-`ClipFeedback` → `retrain_preference` (`worker/tasks.py:~1036`; advisory-lock guarded,
+`ClipFeedback` → `retrain_preference` (`worker/tasks.py`; advisory-lock guarded,
 self-debounced) → recency-decayed LightGBM/logistic reranker (`preference/`) → next
 generation reranks; outcome signals weight recent wins. Cold-start honesty via the
 threshold band.
