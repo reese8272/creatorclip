@@ -21,11 +21,6 @@ const ASPECT_OPTIONS: SelectOption[] = [
   { value: '1:1', label: '1:1 — square' },
   { value: '16:9', label: '16:9 — horizontal' },
 ]
-const BACKGROUND_OPTIONS: SelectOption[] = [
-  { value: '', label: 'Default (black)' },
-  { value: 'blur', label: 'Blur' },
-  { value: 'black', label: 'Black' },
-]
 // Issue 427 — caption band default for every render.
 const POSITION_OPTIONS: SelectOption[] = [
   { value: '', label: 'Auto — lower band, avoids the face (default)' },
@@ -36,7 +31,6 @@ const POSITION_OPTIONS: SelectOption[] = [
 
 const defaultKit: BrandKit = {
   subtitle: null,
-  background: null,
   captions_enabled: false,
   zoom_on_peak: false,
   denoise: false,
@@ -165,17 +159,6 @@ export function BrandKitSection() {
                 setKit({ ...kit, caption_position: (v || null) as BrandKit['caption_position'] })
               }
               options={POSITION_OPTIONS}
-              className="w-[58%]"
-            />
-          </div>
-
-          <div className="flex items-center justify-between gap-3 text-sm text-fg">
-            <label htmlFor="kit-background">Background fill</label>
-            <Select
-              id="kit-background"
-              value={kit.background ?? ''}
-              onValueChange={(v) => setKit({ ...kit, background: v || null })}
-              options={BACKGROUND_OPTIONS}
               className="w-[58%]"
             />
           </div>

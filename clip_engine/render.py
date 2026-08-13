@@ -487,12 +487,6 @@ def render_clip_file(
       - ``caption_position``: "top" | "middle" | "bottom" | None (Issue 427) —
         the creator's caption band. None → per-style default (karaoke at the
         ~70% bottom band with face avoidance; minimal/gradient lower-third).
-      - ``background``: ACCEPTED AND PERSISTED BUT NOT APPLIED (Issue 442). The
-        filter chain is crop→scale, i.e. full-bleed at every supported aspect,
-        so there is no letterbox to fill and no background to composite behind.
-        The ``_BACKGROUND_STYLES`` table that once held a blur graph was dead
-        code — never referenced — and has been deleted rather than left as a
-        promise. Resolve by building the feature or removing the key end to end.
       - ``captions_enabled``: bool (currently informational — the subtitle key
         is the load-bearing switch)
       - ``zoom_on_peak``: bool (Issue 184) — when set and ``peak_s`` is inside the
@@ -502,6 +496,11 @@ def render_clip_file(
         pass before loudnorm. Off by default.
       - ``aspect``: str (Issue 182) — export preset, one of ``OUTPUT_PRESETS``
         ("9:16" | "1:1" | "16:9"). Defaults to "9:16" (byte-identical to pre-182).
+
+    Unknown/legacy keys in ``style_preset`` (e.g. the Issue-442-removed
+    ``background``, still present on old rows) are ignored — the filter chain
+    is crop→scale, full-bleed at every supported aspect, so there is no
+    letterbox to fill and nothing to composite behind.
 
     ``peak_s`` is the clip's absolute peak time (source-relative seconds, from
     ``Clip.peak_s``); the punch-in is centered at ``peak_s - start_s``. Ignored

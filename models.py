@@ -677,7 +677,6 @@ class CreatorStyle(Base):
 
     Keys currently used by the render pipeline:
         subtitle         : str | None   — caption style id
-        background       : str | None   — background fill ("blur"|"black")
         captions_enabled : bool
         zoom_on_peak     : bool
         denoise          : bool
@@ -809,9 +808,11 @@ class Clip(Base):
         default=ClipTriage.pending,
         server_default=ClipTriage.pending.value,
     )
-    # Render style chosen by the creator in the review UI (Issue 119).
-    # JSONB: {subtitle: "white_large"|"yellow_impact"|"captions_sm"|null,
-    #         background: "blur"|"black"|"brand"|null, captions_enabled: bool}
+    # Render style chosen by the creator in the review UI (Issue 119). JSONB
+    # mirror of RenderStyleIn (routers/clips.py): subtitle, captions_enabled,
+    # zoom_on_peak, denoise, aspect, caption_position. Keys from removed styles
+    # (e.g. the Issue-442 "background", whose docs once promised a phantom
+    # "brand" value) may persist on old rows and are ignored by the renderer.
     style_preset: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # Creator-approved publish metadata (migration 0047). NULL = no applied
     # value: publish_to_youtube falls back to video.title / "#Shorts". Set and

@@ -17,7 +17,6 @@ function mockFetch() {
     if (url.includes('/brand-kit'))
       return json({
         subtitle: 'bold_pop',
-        background: null,
         captions_enabled: true,
         zoom_on_peak: false,
         denoise: false,

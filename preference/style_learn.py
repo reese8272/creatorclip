@@ -25,9 +25,12 @@ from typing import Any
 # Ordered list of kit fields we inspect.  Order matters: the first field whose
 # count exceeds the threshold wins (avoids showing all diverging fields at once,
 # which would overwhelm the UI).
+# "background" was removed end-to-end in Issue 442 and must NOT reappear here:
+# historical clip.style_preset rows still carry the key, and the suggestion/
+# accept endpoint writes any suggested field into the kit verbatim — listing it
+# would resurrect the dead key.
 _KIT_FIELDS: tuple[str, ...] = (
     "subtitle",
-    "background",
     "captions_enabled",
     "zoom_on_peak",
     "denoise",

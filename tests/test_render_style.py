@@ -62,7 +62,6 @@ def test_render_endpoint_accepts_style_body(client):
                 f"/clips/{clip.id}/render",
                 json={
                     "subtitle": "white_large",
-                    "background": "blur",
                     "captions_enabled": False,
                     "zoom_on_peak": True,
                 },
@@ -154,7 +153,7 @@ def test_render_endpoint_resets_done_clip_for_rerender(client):
         try:
             resp = client.post(
                 f"/clips/{clip.id}/render",
-                json={"background": "blur"},
+                json={"aspect": "1:1"},
                 cookies={"session": "x"},
             )
         finally:
@@ -165,7 +164,7 @@ def test_render_endpoint_resets_done_clip_for_rerender(client):
     # as the merged style, then the task is enqueued.
     assert clip.render_status == RenderStatus.pending
     assert clip.render_uri is None
-    assert clip.style_preset == {"subtitle": "bold_pop", "background": "blur"}
+    assert clip.style_preset == {"subtitle": "bold_pop", "aspect": "1:1"}
     mock_task.delay.assert_called_once_with(str(clip.id))
 
 
