@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from clip_engine.candidates import extract_candidates
 from clip_engine.scoring import score_candidates
-from clip_engine.sentence_snap import snap_candidates_to_sentences
+from clip_engine.sentence_snap import effective_max_len_s, snap_candidates_to_sentences
 from models import Clip, ClipFormat, ClipTriage, RenderStatus
 
 logger = logging.getLogger(__name__)
@@ -252,8 +252,16 @@ async def score_and_rank(
     style_notes: str | None = None,
     video_context: dict | None = None,
     exclude_windows: list[dict] | None = None,
+    optimal_clip_len_s: float | None = None,
 ) -> list[dict]:
     """Extract candidates → merge LLM moments → score (ONE LLM call) → rank → trim.
+
+    ``optimal_clip_len_s`` (Issue 464 — Principle 10, Option A): the active
+    DNA's Shorts-derived native length. ``effective_max_len_s`` turns it into
+    the per-creator length ceiling threaded to the sentence-snap clamp and the
+    LLM-window clamp. A max-clamp only — windows are never stretched toward
+    it. None (cold start / no metered Shorts) keeps the platform constants,
+    byte-identical to pre-464 behavior.
 
     ``exclude_windows`` (Issue 431 — append-mode regeneration): windows of
     ALREADY-PERSISTED clips (``{"setup_start_s", "end_s"}`` dicts). After the
@@ -293,9 +301,13 @@ async def score_and_rank(
     segments = list(transcript_segments or [])
     duration_s = float(timeline.get("duration_s", 0.0))
     signal_pool_max = max(settings.CLIP_SIGNAL_POOL_MAX, max_candidates)
+    max_len_s = effective_max_len_s(optimal_clip_len_s)
     candidates = await asyncio.to_thread(
         lambda: snap_candidates_to_sentences(
-            extract_candidates(timeline, signal_pool_max), segments, duration_s
+            extract_candidates(timeline, signal_pool_max),
+            segments,
+            duration_s,
+            max_len_s=max_len_s,
         )
     )
 
@@ -304,7 +316,9 @@ async def score_and_rank(
         from clip_engine.merge import llm_moments_to_candidates, merge_candidates
 
         llm_candidates = await asyncio.to_thread(
-            lambda: llm_moments_to_candidates(moments, timeline, segments=segments or None)
+            lambda: llm_moments_to_candidates(
+                moments, timeline, segments=segments or None, max_len_s=max_len_s
+            )
         )
         if llm_candidates:
             candidates = merge_candidates(candidates, llm_candidates)

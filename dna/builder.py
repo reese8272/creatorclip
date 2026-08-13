@@ -74,8 +74,18 @@ def _best_source_region(retention_rows: list, duration_s: float | None) -> str |
 
 
 def _optimal_clip_len_s(videos: list[dict]) -> float | None:
-    """Median avg_view_duration_s of a video set as optimal clip length estimate."""
-    durations = [v["avg_view_duration_s"] for v in videos if v.get("avg_view_duration_s")]
+    """Median avg_view_duration_s over the SHORTS in ``videos`` (Issue 464, Option A).
+
+    Shorts-only: long-form watch durations run minutes and measure a different
+    consumption mode, so mixing them in (the pre-464 behavior) produced an
+    estimate no deliverable Short could honor. None when the creator has no
+    metered Shorts — clip geometry then keeps the platform constants.
+    """
+    durations = [
+        v["avg_view_duration_s"]
+        for v in videos
+        if v.get("kind") == VideoKind.short.value and v.get("avg_view_duration_s")
+    ]
     if not durations:
         return None
     durations.sort()

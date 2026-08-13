@@ -398,7 +398,14 @@ def _assert_merge_scenario(scenario: dict) -> None:
 
     moments = validate_context({"moments": inp.get("moments", [])}, duration_s)["moments"]
     signal_cands = extract_candidates(timeline, max_candidates=8)
-    llm_cands = llm_moments_to_candidates(moments, timeline)
+    # Issue 464: input.optimal_clip_len_s (the per-creator native length) flows
+    # to the LLM-window clamp exactly as score_and_rank threads it; absent →
+    # the platform-constant path, byte-identical for every pre-464 scenario.
+    from clip_engine.sentence_snap import effective_max_len_s
+
+    llm_cands = llm_moments_to_candidates(
+        moments, timeline, max_len_s=effective_max_len_s(inp.get("optimal_clip_len_s"))
+    )
     merged = merge_candidates(signal_cands, llm_cands)
 
     llm_in_merged = [c for c in merged if c.get("origin") == "llm"]
