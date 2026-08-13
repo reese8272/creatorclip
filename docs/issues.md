@@ -3597,10 +3597,12 @@ and any re-render/caption pass still use the original window.
 derive and store effective duration + segment map at confirm time) and route every reader through
 it. Interacts with Issue 465 (score semantics) and 468 (race guard) — sequence them.
 
+**Status: DONE 2026-08-13 (W4 final lane, branch `fix/issue-470-effective-geometry`, built on the integrated wave as sequenced — needed 465's score semantics, 468's CAS, 446/471's erasure).** Effective geometry is PERSISTED, not derived (migration 0061, two nullable JSONB columns): `pending_geometry_jsonb` written by the worker in lockstep with `cleaned_render_uri` (the clean path's cut list never exists outside the task, and Issue 391's edit-document clear at confirm kills the edit path's copy — read-time derivation was impossible twice over), and `effective_geometry_jsonb` written at confirm INSIDE the 468 CAS, composed across repeated trims. Duration/transcript/trim-validators read the delivered record; re-render of a confirmed-clean clip stays available (it is the only style-change path) but clears the record and reports `discarded_edits: true`, with `has_baked_edits` on ClipOut so the UI can warn first — honest discard over silent resurrection. 14 unit + 2 integration-lane tests; red proofs: duration readers asserted 40.0 == 20.0 pre-fix.
+
 **Acceptance**
-- [ ] After a trim+confirm, `/transcript`, duration, and captions all reflect the delivered video
+- [x] After a trim+confirm, `/transcript`, duration, and captions all reflect the delivered video
       (integration-lane test)
-- [ ] Re-render of a confirmed-clean clip does not resurrect the pre-trim window
+- [x] Re-render of a confirmed-clean clip does not resurrect the pre-trim window
 
 ### Issue 471: right-to-erasure misses exports, extracted audio, and recap artifacts
 
