@@ -131,7 +131,9 @@ def test_transcribe_async_emits_transcript_degraded_step():
         }
     )
     degraded = [c for c in calls if c.kwargs.get("label") == "transcript_degraded"]
-    assert degraded, f"no transcript_degraded step emitted; labels: {[c.kwargs.get('label') for c in calls]}"
+    assert degraded, (
+        f"no transcript_degraded step emitted; labels: {[c.kwargs.get('label') for c in calls]}"
+    )
     assert degraded[0].kwargs.get("reason") == "no_utterances"
 
 

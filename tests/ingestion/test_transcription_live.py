@@ -25,9 +25,7 @@ import pytest
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "transcription"
 
-_LIVE = os.environ.get("RUN_TRANSCRIPTION_LIVE") == "1" and bool(
-    os.environ.get("DEEPGRAM_API_KEY")
-)
+_LIVE = os.environ.get("RUN_TRANSCRIPTION_LIVE") == "1" and bool(os.environ.get("DEEPGRAM_API_KEY"))
 
 _skip_unless_live = pytest.mark.skipif(
     not _LIVE,

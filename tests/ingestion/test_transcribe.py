@@ -443,9 +443,7 @@ def test_normalize_deepgram_no_utterances_warns_and_sets_degraded(caplog):
     assert out["degraded"] == "no_utterances"
     assert len(out["segments"]) == 1  # the collapse itself is unchanged behavior
     assert any(
-        "no utterances" in r.message.lower()
-        for r in caplog.records
-        if r.levelno == logging.WARNING
+        "no utterances" in r.message.lower() for r in caplog.records if r.levelno == logging.WARNING
     ), "the fallback must log a WARNING naming the no-utterances degradation"
 
 

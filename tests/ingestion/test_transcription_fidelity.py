@@ -83,9 +83,7 @@ def test_assemblyai_normalizer_divides_ms_ints_exactly():
     transcript = SimpleNamespace(
         text=raw["text"],
         words=[
-            SimpleNamespace(
-                text=w["text"], start=w["start"], end=w["end"], speaker=w["speaker"]
-            )
+            SimpleNamespace(text=w["text"], start=w["start"], end=w["end"], speaker=w["speaker"])
             for w in raw["words"]
         ],
     )
