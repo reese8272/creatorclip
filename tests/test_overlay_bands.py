@@ -246,7 +246,7 @@ def _timed(frames: list, interval: float = 1.0) -> tuple[list, float]:
     """Wrap plain frames the way `_sample_gray_frames_timed` returns them:
     evenly spaced sample-centre timestamps plus the fully-scanned duration."""
     stamps = [(i + 0.5) * interval for i in range(len(frames))]
-    return list(zip(stamps, frames)), len(frames) * interval
+    return list(zip(stamps, frames, strict=True)), len(frames) * interval
 
 
 def test_detect_builds_the_stored_document_from_real_frames(monkeypatch) -> None:
@@ -394,9 +394,25 @@ def test_real_sampler_finds_band_spans_on_a_600s_source(tmp_path: Path) -> None:
         ":enable='between(t,200,230)+between(t,400,477)'"
     )
     gen = subprocess.run(
-        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=5:duration=600",
-         "-vf", draw, "-c:v", "libx264", "-preset", "ultrafast", "-g", "10",
-         "-pix_fmt", "yuv420p", str(src)],
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x180:rate=5:duration=600",
+            "-vf",
+            draw,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-g",
+            "10",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
+        ],
         capture_output=True,
         text=True,
         timeout=300,

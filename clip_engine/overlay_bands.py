@@ -207,9 +207,7 @@ def detect_overlay_spans(
 
         timed = _sample_gray_frames_timed(source_path, 0.0, duration_s, sample_frames, timeout_s)
         if timed is None or len(timed[0]) < _MIN_RUN_SAMPLES:
-            logger.info(
-                "overlay_bands: too few samples (%s) — no masking", timed and len(timed[0])
-            )
+            logger.info("overlay_bands: too few samples (%s) — no masking", timed and len(timed[0]))
             return None
         samples, scanned_until_s = timed
         times = [t for t, _ in samples]
