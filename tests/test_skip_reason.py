@@ -228,9 +228,15 @@ def _fake_session(video: MagicMock, clips: list, signals: MagicMock | None) -> A
         session.get = AsyncMock(side_effect=_get)
 
         async def _execute(stmt, *a, **kw):
+            from models import ClipPublication
+
             entity = stmt.column_descriptions[0]["type"]
             if entity is Video:  # get_owned ownership select (Issue 109e)
                 return owned_lookup_result(stmt, video)
+            if entity is ClipPublication:  # Issue 447 latest-publication aggregate
+                result = MagicMock()
+                result.scalars.return_value = []
+                return result
             result = MagicMock()
             result.scalars.return_value = iter(clips)
             return result
@@ -330,6 +336,7 @@ def test_list_clips_with_clips_has_no_skip_reason(client):
     clip.suggested_hook = None
     clip.applied_description = None
     clip.style_preset = None  # Issue 373: _clip_response derives `aspect` from it
+    clip.downloaded_at = None  # Issue 447
 
     _set_overrides(creator, video, [clip])
 

@@ -257,6 +257,9 @@ class Settings(BaseSettings):
     # librosa loading a multi-hour WAV entirely into RAM (OOM vector under concurrent
     # workers). Audio beyond the cap is silently truncated; a WARNING is emitted.
     # Default: 4 hours — covers any realistic YouTube video with headroom. (Issue 334)
+    # Sources LONGER than this cap (Issue 469): the signal timeline — and therefore
+    # every clip candidate — comes only from the first 4 hours; the container duration
+    # authority never extends clips past it. Existing behavior, now stated.
     AUDIO_ANALYSIS_MAX_DURATION_S: int = 14400
     # Timeout (seconds) for the ffmpeg showwavespic subprocess in generate_waveform_image.
     # The old hardcoded 60 s was insufficient for very long source files; callers that

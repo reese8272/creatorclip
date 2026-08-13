@@ -68,6 +68,28 @@ _DEFAULT_FORMAT = "9:16"
 # Default 9:16 dimensions, kept for callers/tests that reference them directly.
 _OUTPUT_W, _OUTPUT_H = OUTPUT_PRESETS[_DEFAULT_FORMAT]
 
+# Sub-second tolerance for end_s overshooting the render-time container probe
+# (Issue 469). The candidate pipeline clamps against the ingest-probed
+# container duration; a second probe of the same file can differ by a rounding
+# hair on VFR sources (muxer duration vs stream duration). Below this, clamp
+# and warn; at or above it the persisted geometry is genuinely wrong → the
+# ValueError stays terminal.
+_DURATION_OVERSHOOT_EPS_S = 1.0
+
+
+# ffmpeg stderr signatures of filtergraph configuration/parse errors (Issue 467).
+# These are deterministic — the same argv fails identically on every attempt — so
+# `_run` maps them to ValueError, which `render_clip` (worker/tasks.py) treats as
+# PERMANENT. Everything else stays RuntimeError (transient → retried). Before
+# this, the broken punch-in filter burned 3 retries per render while the UI sat
+# on "Rendering…".
+_FILTER_CONFIG_ERROR_SIGNATURES = (
+    "Error when evaluating the expression",
+    "Error reinitializing filters",
+    "Error initializing filter",
+    "No such filter",
+)
+
 
 def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
     from verbose import now_ms, vlog
@@ -95,6 +117,11 @@ def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
             stderr=result.stderr,
             duration_ms=int(now_ms() - _t0),
         )
+        if any(sig in result.stderr for sig in _FILTER_CONFIG_ERROR_SIGNATURES):
+            raise ValueError(
+                f"ffmpeg {label} failed with a filter-configuration error "
+                f"[{shlex.join(cmd)}]: {result.stderr[-500:]}"
+            )
         raise RuntimeError(f"ffmpeg {label} failed [{shlex.join(cmd)}]: {result.stderr[-500:]}")
     vlog("ffmpeg_done", label=label, duration_ms=int(now_ms() - _t0))
 
@@ -294,7 +321,9 @@ def extract_poster_frame(
                 "poster frame",
                 timeout_s=timeout_s,
             )
-        except (RuntimeError, OSError) as exc:
+        except (RuntimeError, ValueError, OSError) as exc:
+            # ValueError included (Issue 467): _run classifies filter-config
+            # errors as ValueError; this function's contract is NEVER raises.
             logger.warning("poster_frame_attempt_failed seek=%.3f err=%s", attempt_seek, exc)
             continue
         if out_path.exists() and out_path.stat().st_size > 0:
@@ -441,24 +470,37 @@ def _face_inside(
     return rx <= fx + fw / 2 <= rx + rw and ry <= fy + fh / 2 <= ry + rh
 
 
-# Auto-zoom punch-in at peak (Issue 184, opt-in via style_preset["zoom_on_peak"]).
-# Principle 4 (pattern interrupt). A triangular zoom pulse centered on the clip's
-# peak ramps to (1 + _PUNCH_IN_SCALE)× over ±_PUNCH_IN_RAMP_S seconds, then back to
-# 100%. Implemented with crop's per-frame `t` variable + scale — NOT zoompan, which
-# is built for stills and resamples the stream.
+# Auto-zoom punch-in at peak (Issue 184, opt-in via style_preset["zoom_on_peak"];
+# rebuilt in Issue 467). Principle 4 (pattern interrupt). A triangular zoom pulse
+# centered on the clip's peak ramps to (1 + _PUNCH_IN_SCALE)× over ±_PUNCH_IN_RAMP_S
+# seconds, then back to 100%. Implemented as an animated `scale` (its w/h
+# expressions accept `t` under eval=frame) followed by a CONSTANT centered crop
+# back to the output geometry. NOT crop-with-animated-w/h: ffmpeg evaluates
+# crop's w/h (out_w/out_h) ONCE at filter-configuration time, where `t` is NaN —
+# "Error when evaluating the expression … Error reinitializing filters!",
+# rc=234 on every render (verified on ffmpeg 8.1.2; only crop's x/y are
+# per-frame). NOT zoompan either: it is built for still images (`d` holds each
+# INPUT frame for d output frames) and forces a fixed output fps that re-clocks
+# the stream.
 _PUNCH_IN_SCALE = 0.08
 _PUNCH_IN_RAMP_S = 0.6
 
 
 def _punch_in_filter(peak_offset_s: float, out_w: int, out_h: int) -> str:
-    """ffmpeg crop+scale chain for a brief punch-in centered at ``peak_offset_s``
-    (clip-relative seconds). Zoom ``z(t)=1+A·max(0,1−|t−p|/W)``; the centered crop
-    shrinks by ``z`` then scales back to the output resolution. Outside the pulse
-    ``z=1`` → crop is the full frame → a no-op."""
+    """ffmpeg scale+crop chain for a brief punch-in centered at ``peak_offset_s``
+    (clip-relative seconds). Zoom ``z(t)=1+A·max(0,1−|t−p|/W)``: the frame is
+    upscaled by ``z`` (``trunc(*/2)*2`` keeps dimensions even for libx264) and a
+    constant centered crop cuts it back to the output size. Outside the pulse
+    ``z=1`` → scale is the identity and the crop is the full frame. The trailing
+    crop is deliberately UNLABELED so sendcmd commands (which target
+    ``crop@spk``) can never address it."""
     # `\,` escapes the comma inside max() so the filtergraph parser doesn't read
     # it as a filter separator.
     z = f"(1+{_PUNCH_IN_SCALE}*max(0\\,1-abs(t-{peak_offset_s:.3f})/{_PUNCH_IN_RAMP_S}))"
-    return f"crop=w=iw/{z}:h=ih/{z}:x=(iw-iw/{z})/2:y=(ih-ih/{z})/2,scale={out_w}:{out_h}"
+    return (
+        f"scale=w='trunc({out_w}*{z}/2)*2':h='trunc({out_h}*{z}/2)*2':eval=frame,"
+        f"crop={out_w}:{out_h}"
+    )
 
 
 def render_clip_file(
@@ -487,12 +529,6 @@ def render_clip_file(
       - ``caption_position``: "top" | "middle" | "bottom" | None (Issue 427) —
         the creator's caption band. None → per-style default (karaoke at the
         ~70% bottom band with face avoidance; minimal/gradient lower-third).
-      - ``background``: ACCEPTED AND PERSISTED BUT NOT APPLIED (Issue 442). The
-        filter chain is crop→scale, i.e. full-bleed at every supported aspect,
-        so there is no letterbox to fill and no background to composite behind.
-        The ``_BACKGROUND_STYLES`` table that once held a blur graph was dead
-        code — never referenced — and has been deleted rather than left as a
-        promise. Resolve by building the feature or removing the key end to end.
       - ``captions_enabled``: bool (currently informational — the subtitle key
         is the load-bearing switch)
       - ``zoom_on_peak``: bool (Issue 184) — when set and ``peak_s`` is inside the
@@ -502,6 +538,11 @@ def render_clip_file(
         pass before loudnorm. Off by default.
       - ``aspect``: str (Issue 182) — export preset, one of ``OUTPUT_PRESETS``
         ("9:16" | "1:1" | "16:9"). Defaults to "9:16" (byte-identical to pre-182).
+
+    Unknown/legacy keys in ``style_preset`` (e.g. the Issue-442-removed
+    ``background``, still present on old rows) are ignored — the filter chain
+    is crop→scale, full-bleed at every supported aspect, so there is no
+    letterbox to fill and nothing to composite behind.
 
     ``peak_s`` is the clip's absolute peak time (source-relative seconds, from
     ``Clip.peak_s``); the punch-in is centered at ``peak_s - start_s``. Ignored
@@ -518,9 +559,26 @@ def render_clip_file(
         raise ValueError(f"start_s must be non-negative, got {start_s}")
     src_dur = _source_duration_s(source_path)
     if src_dur < float("inf") and end_s > src_dur:
-        raise ValueError(
-            f"end_s {end_s}s exceeds source duration {src_dur:.3f}s for {source_path.name}"
-        )
+        # Issue 469: candidates are clamped against the ingest-probed container
+        # duration, but a render-time re-probe can disagree by a rounding hair
+        # (VFR sources, muxer vs stream duration). Sub-epsilon overshoot →
+        # clamp + warn; anything larger means genuinely wrong geometry → still
+        # terminal (ValueError is permanent in render_clip).
+        overshoot = end_s - src_dur
+        if overshoot < _DURATION_OVERSHOOT_EPS_S:
+            logger.warning(
+                "duration_overshoot_clamped: end_s %.3f s exceeds container %.3f s by "
+                "%.3f s for %s — clamping to the container",
+                end_s,
+                src_dur,
+                overshoot,
+                source_path.name,
+            )
+            end_s = src_dur
+        else:
+            raise ValueError(
+                f"end_s {end_s}s exceeds source duration {src_dur:.3f}s for {source_path.name}"
+            )
     duration = end_s - start_s
     if duration <= 0:
         raise ValueError(f"Invalid clip range: {start_s}s–{end_s}s")

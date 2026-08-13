@@ -403,3 +403,48 @@ def test_coverage_job_runs_all_three_gates_in_one_required_invocation() -> None:
         "so a skipped gate fails the job instead of printing 'All runnable gates "
         "passed' (Issue 479)."
     )
+
+
+def test_render_env_step_is_hard_and_guarded() -> None:
+    """The unit job's render-env step (Issue 478) must stay HARD: a real
+    ffmpeg install with no `::warning` escape hatch, a collect-count floor so
+    the lane can never silently empty out again, and the actual lane run.
+
+    Same pattern as the Issue-479 pin above: the lane sat at 0 selected tests
+    from its introduction (hyphenated marker, unusable as a decorator) and CI
+    printed green the whole time.
+    """
+    ci_doc = yaml.safe_load(_load_workflow("ci.yml"))
+    steps = ci_doc["jobs"]["unit"]["steps"]
+    render_steps = [s for s in steps if "Render-env lane" in (s.get("name") or "")]
+    assert len(render_steps) == 1, "ci.yml's unit job must have exactly one render-env step"
+    run = render_steps[0]["run"]
+
+    assert "apt-get install -y --no-install-recommends ffmpeg" in run, (
+        "the render-env step must hard-install ffmpeg (NOT preinstalled on ubuntu-latest)"
+    )
+    assert "::warning" not in run, (
+        "the render-env step must have NO `::warning` fallback — a missing "
+        "ffmpeg must FAIL this lane, never soft-skip it (Issue 478)"
+    )
+    assert "pytest -m render_env --collect-only -q | grep -c '::'" in run and "-ge 3" in run, (
+        "the render-env step must keep the collect-count floor (>= 3) so an "
+        "emptied lane fails the job instead of passing vacuously"
+    )
+    assert "pytest -m render_env -q" in run, "the render-env step must actually run the lane"
+
+
+def test_render_env_marker_excluded_from_default_lane() -> None:
+    """pytest.ini must keep the underscored `render_env` marker registered and
+    excluded from the default addopts lane. The hyphenated `render-env`
+    spelling can never be applied as a decorator — reverting the rename
+    re-empties the lane (Issue 478)."""
+    pytest_ini = (_REPO_ROOT / "pytest.ini").read_text()
+    assert "render_env:" in pytest_ini, "pytest.ini must register the render_env marker"
+    assert "render-env:" not in pytest_ini, (
+        "the marker must stay underscored — @pytest.mark.render-env is a syntax error"
+    )
+    assert "not render_env" in pytest_ini, (
+        "addopts must exclude render_env from the default lane; the dedicated "
+        "CI step is what runs it"
+    )

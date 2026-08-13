@@ -402,6 +402,113 @@ def test_clean_confirm_idempotent_when_no_cleaned_uri(client):
     assert resp.json()["status"] == "noop"
 
 
+def _confirm_session_factory(clip, cas_result, extra_results):
+    """Session whose execute order is: get_owned → CAS swap UPDATE → the rest."""
+    from unittest.mock import AsyncMock
+
+    from tests._helpers import owned_result
+
+    captured: list = []
+    remaining = list(extra_results)
+
+    async def _execute(stmt, *a, **kw):
+        captured.append(stmt)
+        if len(captured) == 1:
+            return owned_result(clip)
+        if len(captured) == 2:
+            return cas_result
+        return remaining.pop(0) if remaining else MagicMock()
+
+    async def _session():
+        s = AsyncMock()
+        s.execute = AsyncMock(side_effect=_execute)
+        s.commit = AsyncMock()
+        s.rollback = AsyncMock()
+        yield s
+
+    return _session, captured
+
+
+def test_clean_confirm_swap_is_a_conditional_update(client):
+    """Issue 468: the confirm swap must be a compare-and-swap — one UPDATE whose
+    WHERE re-checks ``cleaned_render_uri`` is still the value this request saw,
+    so two concurrent confirms (or confirm-vs-discard) cannot double-swap. The
+    swap also clears ``downloaded_at`` (Issue 447): the current render changed."""
+    import uuid as _uuid
+
+    from auth import get_current_creator
+    from db import get_session
+    from main import app
+    from models import Clip, RenderStatus
+
+    creator = _mock_creator()
+    clip_id = _uuid.uuid4()
+    clip = MagicMock(spec=Clip)
+    clip.id = clip_id
+    clip.creator_id = creator.id
+    clip.render_status = RenderStatus.done
+    clip.render_uri = "clips/x.mp4"
+    clip.cleaned_render_uri = "clips/x_clean.mp4"
+
+    doc_clear = MagicMock()
+    doc_clear.first.return_value = (4,)
+    session_factory, captured = _confirm_session_factory(clip, MagicMock(rowcount=1), [doc_clear])
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = session_factory
+    try:
+        resp = client.post(f"/clips/{clip_id}/clean/confirm")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "swapped"
+    assert body["render_uri"] == "clips/x_clean.mp4"
+    assert body["edit_revision"] == 4
+
+    cas_sql = str(captured[1]).replace("\n", " ")
+    assert "UPDATE clips" in cas_sql
+    assert "cleaned_render_uri" in cas_sql and "WHERE" in cas_sql
+    assert "downloaded_at" in cas_sql  # stamp cleared with the swap (Issue 447)
+
+
+def test_clean_confirm_lost_race_returns_noop_without_swapping(client):
+    """Issue 468: rowcount 0 on the CAS means a concurrent confirm/discard (or a
+    freshly-landed clean) changed ``cleaned_render_uri`` after this request read
+    it. The endpoint must return noop and must NOT clear the edit document —
+    nothing was baked by this request."""
+    import uuid as _uuid
+
+    from auth import get_current_creator
+    from db import get_session
+    from main import app
+    from models import Clip, RenderStatus
+
+    creator = _mock_creator()
+    clip_id = _uuid.uuid4()
+    clip = MagicMock(spec=Clip)
+    clip.id = clip_id
+    clip.creator_id = creator.id
+    clip.render_status = RenderStatus.done
+    clip.render_uri = "clips/x.mp4"
+    clip.cleaned_render_uri = "clips/x_clean.mp4"
+
+    session_factory, captured = _confirm_session_factory(clip, MagicMock(rowcount=0), [])
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = session_factory
+    try:
+        resp = client.post(f"/clips/{clip_id}/clean/confirm")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "noop"
+    # Only get_owned + the CAS ran — no edit-document clear on the race path.
+    assert len(captured) == 2
+
+
 def test_clean_rejects_when_cleaned_render_uri_already_set(client):
     """Issue-135 audit fix: /clean returns 409 when a cleaned/edited
     artifact is already pending. Otherwise the worker's idempotency probe

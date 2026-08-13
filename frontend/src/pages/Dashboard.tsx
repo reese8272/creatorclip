@@ -80,10 +80,13 @@ export function Dashboard() {
   const { user, balance } = useAuth()
   const [uploadOpen, setUploadOpen] = useState(false)
   const [browseOpen, setBrowseOpen] = useState(false)
+  // Issue 446 — archived videos are hidden by default; this toggles the
+  // restore/delete view (GET /videos?archived=true).
+  const [showArchived, setShowArchived] = useState(false)
 
   const videosQuery = useQuery({
-    queryKey: ['videos'],
-    queryFn: () => api<VideoListResponse>('/videos'),
+    queryKey: ['videos', { archived: showArchived }],
+    queryFn: () => api<VideoListResponse>(showArchived ? '/videos?archived=true' : '/videos'),
     refetchInterval: (query) => videosRefetchInterval(query.state.data),
   })
   const dnaQuery = useQuery({
@@ -152,12 +155,21 @@ export function Dashboard() {
         {/* Header row: videos-first (Issue 305) */}
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="font-display text-h1 text-fg">Your videos</h1>
+            <h1 className="font-display text-h1 text-fg">
+              {showArchived ? 'Archived videos' : 'Your videos'}
+            </h1>
             {/* Issue 355: the clip count was stated three times on this screen.
                 The sidebar Review-queue card owns it; the header does not. */}
             <p className="mt-1 text-small text-muted">
               {videos.length} videos · {channelName}
             </p>
+            <button
+              type="button"
+              className="mt-1 text-small text-subtle underline-offset-2 hover:text-accent-text hover:underline"
+              onClick={() => setShowArchived((s) => !s)}
+            >
+              {showArchived ? '← Back to library' : 'View archived'}
+            </button>
           </div>
           {/* ONE primary action (Issue 355 finding 3). Which one it is depends on
               where the creator actually is: until onboarding completes, DnaCta
@@ -193,10 +205,16 @@ export function Dashboard() {
             onRetry={() => void videosQuery.refetch()}
           />
         ) : isEmpty ? (
-          // Issue 355: the trailing "pick a path above to get started" line is
-          // gone — EmptyHero already opens with "Let's get your first clip.",
-          // and after the demotion below there is one path, not several.
-          <EmptyHero onUploadClick={() => setUploadOpen(true)} />
+          showArchived ? (
+            // The archived view's emptiness is a filter result, never a
+            // first-run state — no onboarding hero here (Issue 446).
+            <p className="py-8 text-center text-sm text-subtle">No archived videos.</p>
+          ) : (
+            // Issue 355: the trailing "pick a path above to get started" line is
+            // gone — EmptyHero already opens with "Let's get your first clip.",
+            // and after the demotion below there is one path, not several.
+            <EmptyHero onUploadClick={() => setUploadOpen(true)} />
+          )
         ) : (
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_296px]">
             {/* Main: videos table in a bordered card */}
@@ -205,6 +223,7 @@ export function Dashboard() {
                 videos={videos}
                 clipInfoByVideo={clipInfoByVideo}
                 analysisMode={user?.analysis_mode ?? 'auto'}
+                archivedView={showArchived}
               />
             </div>
 

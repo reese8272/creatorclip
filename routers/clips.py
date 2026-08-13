@@ -31,6 +31,7 @@ from models import (
     ClipEditDocument,
     ClipFormat,
     ClipImpression,
+    ClipPublication,
     ClipTriage,
     Creator,
     CreatorStyle,
@@ -57,6 +58,19 @@ clips_router = APIRouter(prefix="/clips", tags=["clips"])
 logger = logging.getLogger(__name__)
 
 
+class ClipPublicationSummary(BaseModel):
+    """Latest-publication summary for the Keep-pile finish line (Issue 447).
+
+    A summary, not the full ClipPublication row: the pile chip needs the current
+    state ("Published" / "Scheduled for …" / the watch link), never the task id
+    or error internals — those stay on GET /clips/{id}/publications.
+    """
+
+    status: str
+    scheduled_at: datetime | None = None
+    youtube_video_id: str | None = None
+
+
 class ClipOut(BaseModel):
     id: str
     video_id: str
@@ -64,6 +78,15 @@ class ClipOut(BaseModel):
     start_s: float
     end_s: float
     peak_s: float | None
+    # Issue 470 — duration of the DELIVERED video. Equal to
+    # end_s - (setup_start_s ?? start_s) until a trim/clean is confirmed;
+    # after that, the sum of kept segments. UI timelines must use this, never
+    # recompute from the source-window fields above.
+    duration_s: float
+    # Issue 470 — True when the live render has trims/cleans baked in
+    # (effective geometry recorded). The UI warns before a from-source
+    # re-render, which discards them (see POST /render `discarded_edits`).
+    has_baked_edits: bool = False
     score: float | None
     rank: int | None
     principle: str
@@ -106,6 +129,15 @@ class ClipOut(BaseModel):
     # /clips/{id}/triage; distinct from the append-only feedback log, so moving
     # a clip between piles writes no training label.
     triage: str = "pending"
+    # Issue 447 — when a download of the CURRENT render was initiated
+    # (disposition=attachment only); cleared on re-render and on the
+    # /clean/confirm swap. NULL = never downloaded.
+    downloaded_at: datetime | None = None
+    # Issue 447 — newest ClipPublication summary. Populated on the LIST surface
+    # only (one aggregate query per list, never per-clip); other ClipOut
+    # producers return None and the full history stays on
+    # GET /clips/{id}/publications.
+    latest_publication: ClipPublicationSummary | None = None
 
 
 class PersonalizationStatus(BaseModel):
@@ -189,7 +221,16 @@ class ClipCountsOut(BaseModel):
 
 
 class RenderQueuedOut(TaskQueuedOut):
-    """202 Accepted response for POST /clips/{id}/render (Issue 92)."""
+    """202 Accepted response for POST /clips/{id}/render (Issue 92).
+
+    ``discarded_edits`` (Issue 470): True when this re-render reset a
+    confirmed trim/clean — the fresh render regenerates the FULL window from
+    source, so the baked-edit record was cleared with it. The UI surfaces this
+    ("your trims were discarded") instead of the pre-trim window silently
+    coming back.
+    """
+
+    discarded_edits: bool = False
 
 
 class RenderStyleIn(BaseModel):
@@ -205,7 +246,6 @@ class RenderStyleIn(BaseModel):
     # (Issue-119 legacy keys white_large/yellow_impact/captions_sm were drawtext
     # placeholders that drew empty text; removed in Issue 133.)
     subtitle: str | None = None
-    background: str | None = None  # "blur" | "black" | null
     captions_enabled: bool | None = None
     zoom_on_peak: bool | None = None  # opt-in punch-in at peak (Issue 184)
     denoise: bool | None = None  # opt-in noise reduction (Issue 185)
@@ -259,7 +299,9 @@ class ClipMetadataPatch(BaseModel):
         return v
 
 
-def _clip_response(clip: Clip) -> dict:
+def _clip_response(clip: Clip, publication: ClipPublication | None = None) -> dict:
+    from clip_engine.edits import parse_geometry
+
     sj = clip.signals_jsonb or {}
     return {
         "id": str(clip.id),
@@ -268,6 +310,10 @@ def _clip_response(clip: Clip) -> dict:
         "start_s": clip.start_s,
         "end_s": clip.end_s,
         "peak_s": clip.peak_s,
+        # Issue 470 — the DELIVERED duration (post-trim when edits are baked
+        # in), never end_s - origin recomputed client-side from source fields.
+        "duration_s": _clip_duration_s(clip),
+        "has_baked_edits": parse_geometry(clip.effective_geometry_jsonb) is not None,
         "score": clip.score,
         "rank": clip.rank,
         "principle": sj.get("principle", ""),
@@ -286,6 +332,16 @@ def _clip_response(clip: Clip) -> dict:
         "has_poster": clip.poster_uri is not None,
         "has_crop_track": clip.reframe_track_jsonb is not None,
         "triage": clip.triage.value,
+        "downloaded_at": clip.downloaded_at,
+        "latest_publication": (
+            {
+                "status": publication.status.value,
+                "scheduled_at": publication.scheduled_at,
+                "youtube_video_id": publication.youtube_video_id,
+            }
+            if publication is not None
+            else None
+        ),
     }
 
 
@@ -316,7 +372,10 @@ async def get_clip_counts(
             func.count().filter(Clip.triage == ClipTriage.dropped).label("dropped"),
         )
         .join(Video, Clip.video_id == Video.id)
-        .where(Video.creator_id == creator.id)
+        # archived_at IS NULL (Issue 446): an archived video's clips leave the
+        # Dashboard/Profile counts with it — the rows survive for training, but
+        # no surface counts them.
+        .where(Video.creator_id == creator.id, Video.archived_at.is_(None))
         .group_by(Clip.video_id)
     )
     result = await session.execute(stmt)
@@ -411,6 +470,7 @@ async def generate_clips(
         style_notes=style_notes,
         video_context=video_context,
         optimal_clip_len_s=dna_optimal_len_s,
+        container_duration_s=video.duration_s,
     )
     if not ranked:
         return {"clips": []}
@@ -524,6 +584,7 @@ async def generate_more_clips(
         video_context=video_context,
         exclude_windows=exclude_windows,
         optimal_clip_len_s=dna_optimal_len_s,
+        container_duration_s=video.duration_s,
     )
 
     async with db.AsyncSessionLocal() as persist_session:
@@ -758,6 +819,22 @@ async def list_clips(
     truncated = len(clips_raw) > _LIST_LIMIT
     clips = clips_raw[:_LIST_LIMIT]
 
+    # Latest publication per clip (Issue 447) — ONE aggregate query for the
+    # whole list (DISTINCT ON, newest created_at wins), never a per-clip lookup.
+    # Feeds the Keep pile's rendered → downloaded → published finish line.
+    latest_pub_by_clip: dict[uuid.UUID, ClipPublication] = {}
+    if clips:
+        pub_result = await session.execute(
+            select(ClipPublication)
+            .where(
+                ClipPublication.clip_id.in_([c.id for c in clips]),
+                ClipPublication.creator_id == creator.id,
+            )
+            .order_by(ClipPublication.clip_id, ClipPublication.created_at.desc())
+            .distinct(ClipPublication.clip_id)
+        )
+        latest_pub_by_clip = {p.clip_id: p for p in pub_result.scalars()}
+
     # Impression/position log (Issue 202): record what rank each clip was shown at,
     # and when, so later counterfactual/IPS evaluation is possible (it cannot be
     # reconstructed retroactively). Best-effort — a logging failure must never break
@@ -787,7 +864,7 @@ async def list_clips(
             await session.rollback()
             logger.warning("impression logging failed for video %s", video_id)
 
-    items = [_clip_response(c) for c in clips]
+    items = [_clip_response(c, publication=latest_pub_by_clip.get(c.id)) for c in clips]
     state = build_envelope_state(len(items))
     message: str | None = None
     next_action: dict | None = None
@@ -859,11 +936,25 @@ async def render_clip(
 
     Accepts an optional style body (Issue 119). When present, persists the
     chosen style on the clip and passes it to the render task so the worker
-    can apply subtitle / background filters.
+    can apply subtitle / style filters.
     """
     await check_positive_balance(creator.id, session)
 
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+
+    # Issue 468 — same conflict its /clean, /cuts and trim siblings already
+    # guard: a re-render fired while a cleaned/edited artifact is pending races
+    # /clean/confirm's render_uri swap (the worker can finish either side first
+    # and clobber or resurrect artifacts). Surface it so the UI can prompt to
+    # confirm or discard the pending version first.
+    if clip.cleaned_render_uri:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "pending_clean_or_edit",
+                "message": "Confirm or discard the pending cleaned/edited version first.",
+            },
+        )
 
     # Pre-check the source BEFORE enqueuing (OFF_COURSE 2026-07-20 / Issue 362):
     # past the retention purge the worker can only fail permanently, so the user
@@ -932,11 +1023,31 @@ async def render_clip(
     # in the same transaction as the merged style so both persist atomically.
     # Snapshot first (Issue 359c) so a failed enqueue below can restore the
     # watchable render instead of leaving the clip stripped with no task coming.
+    from clip_engine.edits import parse_geometry
+
     reset_applied = clip.render_status == RenderStatus.done
     prior_render_uri = clip.render_uri
+    prior_downloaded_at = clip.downloaded_at
+    prior_effective_geometry = clip.effective_geometry_jsonb
+    discarded_edits = False
     if reset_applied:
         clip.render_status = RenderStatus.pending
         clip.render_uri = None
+        # Issue 447: the stamp describes the render being replaced — clear it in
+        # the same transaction so "downloaded" never refers to bytes the creator
+        # no longer has access to.
+        clip.downloaded_at = None
+        # Issue 470: a re-render regenerates the FULL window from source, so a
+        # confirmed trim/clean cannot survive it. Clearing the record in the
+        # same reset (and saying so in the 202 below) is the honest version of
+        # what used to happen silently: the pre-trim window came back while
+        # duration/transcript readers kept describing the trimmed video.
+        # Re-render deliberately stays AVAILABLE for these clips — it is the
+        # only path to a style/caption change — the UI warns off
+        # `has_baked_edits` before offering it.
+        if parse_geometry(prior_effective_geometry) is not None:
+            clip.effective_geometry_jsonb = None
+            discarded_edits = True
     await session.commit()
 
     from worker.tasks import render_clip as render_task
@@ -954,6 +1065,10 @@ async def render_clip(
         if reset_applied:
             clip.render_status = RenderStatus.done
             clip.render_uri = prior_render_uri
+            clip.downloaded_at = prior_downloaded_at
+            # Issue 470: the old render (with its baked trims) is still live —
+            # restore its geometry record along with render_uri.
+            clip.effective_geometry_jsonb = prior_effective_geometry
             await session.commit()
         logger.error("render enqueue failed for clip %s: %s", clip_id, exc)
         raise HTTPException(
@@ -968,6 +1083,7 @@ async def render_clip(
         "task_id": task.id,
         "status": "queued",
         "stream_url": stream_url,
+        "discarded_edits": discarded_edits,
     }
 
 
@@ -1023,7 +1139,14 @@ def _clip_clean_cuts(
 ) -> tuple[list[CleanPreviewCut], float, float]:
     """Compute the cleaning cut list for ``clip`` from ``transcript``. Returns
     ``(cuts, percent_removed, clip_duration_s)``. Pure function so the preview
-    endpoint and the test surface share one code path."""
+    endpoint and the test surface share one code path.
+
+    Issue 470: words and duration are projected onto the DELIVERED timeline
+    when a trim/clean is already baked in, so a second clean pass detects
+    fillers over the video it will actually cut (same mapping the worker's
+    ``_clean_clip_async`` applies).
+    """
+    from clip_engine.edits import map_words_to_delivered, parse_geometry
     from clip_engine.filler import (
         detect_cut_segments,
         merge_adjacent_cuts,
@@ -1031,7 +1154,7 @@ def _clip_clean_cuts(
     )
 
     clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
-    clip_duration_s = clip.end_s - clip_origin_s
+    clip_duration_s = _clip_duration_s(clip)
     if not transcript or not isinstance(transcript.segments_jsonb, dict):
         return [], 0.0, clip_duration_s
     segments = transcript.segments_jsonb.get("segments") or []
@@ -1049,6 +1172,9 @@ def _clip_clean_cuts(
                     "end": w_end - clip_origin_s,
                 }
             )
+    keep_segments = parse_geometry(clip.effective_geometry_jsonb)
+    if keep_segments is not None:
+        words_clip_relative = map_words_to_delivered(words_clip_relative, keep_segments)
     cuts = detect_cut_segments(
         words_clip_relative,
         clip_start_s=0.0,
@@ -1162,33 +1288,115 @@ async def clean_confirm(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Atomically swap the cleaned render into ``render_uri`` and clear
-    ``cleaned_render_uri``. The original mp4 falls under the existing R2
-    lifecycle prefix (no new cleanup code needed). Idempotent: if the swap
-    has already happened (``cleaned_render_uri`` is null) the endpoint
-    returns 200 with ``status="noop"`` so router-retry is safe (Issue 134).
+    ``cleaned_render_uri``. The replaced original mp4 is left in storage —
+    it does NOT fall under any lifecycle rule today; orphan cleanup is tracked
+    separately (Issue 446 sweep) and deliberately not attempted here.
+    Idempotent: if the swap has already happened (``cleaned_render_uri`` is
+    null) the endpoint returns 200 with ``status="noop"`` so router-retry is
+    safe (Issue 134).
+
+    Issue 468 — the swap is a compare-and-swap: one conditional UPDATE whose
+    WHERE re-checks ``cleaned_render_uri`` is still the value this request
+    read, so a concurrent confirm, discard, or freshly-landed clean makes this
+    request a rowcount-0 noop instead of a double swap. The row lock the CAS
+    takes is held until commit, so the ORM assignments below cannot interleave
+    with another writer.
 
     Issue 391 — the swap BAKES the edit into ``render_uri``, so the edit
     document is cleared in the same transaction. Leaving it populated would make
     the next export cut the same spans a second time, out of an already-shortened
     render. ``/clean/discard`` deliberately does not do this.
+
+    Issue 447 — the swap also clears ``downloaded_at``: the current render
+    changed, so a previous download no longer describes it.
+
+    Issue 470 — the swap also promotes the worker's pending geometry record to
+    ``effective_geometry_jsonb`` (composed with any prior baked trim, so a
+    second trim lands back in original clip-relative time) and clears the
+    pending column, all inside the same CAS UPDATE: the row lock the CAS takes
+    is held until commit, so the geometry can never disagree with the artifact
+    it describes. A pending artifact with no geometry record (worker predates
+    migration 0061) clears the effective record instead — the delivered video
+    changed in a way we cannot describe, and keeping a stale claim would be
+    the exact lie this issue removes.
     """
+    from clip_engine.edits import compose_keep_segments, geometry_doc, parse_geometry
+
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
-    if not clip.cleaned_render_uri:
+    seen_cleaned_uri = clip.cleaned_render_uri
+    prior_render_uri = clip.render_uri
+    if not seen_cleaned_uri:
         return {
             "clip_id": str(clip_id),
-            "render_uri": clip.render_uri,
+            "render_uri": prior_render_uri,
             "cleaned_render_uri": None,
             "status": "noop",
         }
-    clip.render_uri = clip.cleaned_render_uri
+    pending_segments = parse_geometry(clip.pending_geometry_jsonb)
+    new_effective: dict | None = None
+    if pending_segments is not None:
+        prior_segments = parse_geometry(clip.effective_geometry_jsonb)
+        new_effective = geometry_doc(compose_keep_segments(prior_segments, pending_segments))
+    else:
+        logger.warning(
+            "clean confirm: clip %s has no pending geometry record — "
+            "clearing effective geometry (duration readers fall back to the source window)",
+            clip_id,
+        )
+    cas_result = await session.execute(
+        update(Clip)
+        .where(
+            Clip.id == clip_id,
+            Clip.creator_id == creator.id,
+            Clip.cleaned_render_uri == seen_cleaned_uri,
+        )
+        .values(
+            render_uri=seen_cleaned_uri,
+            cleaned_render_uri=None,
+            downloaded_at=None,
+            effective_geometry_jsonb=new_effective,
+            pending_geometry_jsonb=None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if cas_result.rowcount == 0:
+        # Lost the race — another confirm/discard changed the pending artifact
+        # after this request read it. Nothing was swapped by this request, so
+        # the edit document must NOT be cleared either.
+        await session.rollback()
+        return {
+            "clip_id": str(clip_id),
+            "render_uri": prior_render_uri,
+            "cleaned_render_uri": None,
+            "status": "noop",
+        }
+    # Keep the identity map in step with the CAS (synchronize_session=False).
+    clip.render_uri = seen_cleaned_uri
     clip.cleaned_render_uri = None
+    clip.downloaded_at = None
+    clip.effective_geometry_jsonb = new_effective
+    clip.pending_geometry_jsonb = None
     # Same transaction as the swap: a crash between the two must not leave a
     # render whose cuts are applied AND a document that still describes them.
     edit_revision = await _clear_edit_document(session, clip_id)
     await session.commit()
+    # Issue 446/471 (L143): the swap orphans the replaced original — no row
+    # references it anymore, so DB-driven purges can't reach it until the
+    # archive/erase enumeration reconstructs the key. Best-effort delete now
+    # (after commit, mirroring discard's posture); skip in the double-clean
+    # state where the "prior" object IS the one just swapped in.
+    if prior_render_uri and prior_render_uri != seen_cleaned_uri:
+        from worker.storage import adelete_file
+
+        try:
+            await adelete_file(prior_render_uri)
+        except Exception as exc:
+            logger.warning(
+                "Storage purge failed for superseded render %s: %s", prior_render_uri, exc
+            )
     return {
         "clip_id": str(clip_id),
-        "render_uri": clip.render_uri,
+        "render_uri": seen_cleaned_uri,
         "cleaned_render_uri": None,
         "status": "swapped",
         "edit_revision": edit_revision,
@@ -1212,14 +1420,51 @@ async def clean_discard(
     ``pending_clean_or_edit`` (Issue 364). Idempotent: if there is nothing
     pending, returns 200 with ``status="noop"``. The R2 artifact is purged
     best-effort after the DB commit — a storage failure must not roll back
-    or fail the request (mirrors the erasure precedent in ``routers/auth.py``)."""
+    or fail the request (mirrors the erasure precedent in ``routers/auth.py``).
+
+    Issue 468 — two delete guards:
+    - The clear is a compare-and-swap (``WHERE cleaned_render_uri = :seen``); a
+      rowcount-0 loss to a concurrent ``/clean/confirm`` returns noop WITHOUT
+      deleting — confirm may have just swapped that object into ``render_uri``.
+    - A SECOND clean of a confirmed clip re-writes the same
+      ``clips/{id}_clean.mp4`` key the first confirm swapped into
+      ``render_uri``, leaving ``cleaned_render_uri == render_uri``; deleting it
+      would kill the live render, so the purge is skipped for that state.
+    """
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
-    if not clip.cleaned_render_uri:
+    stale_uri = clip.cleaned_render_uri
+    live_render_uri = clip.render_uri
+    if not stale_uri:
         return {"clip_id": str(clip_id), "status": "noop"}
 
-    stale_uri = clip.cleaned_render_uri
+    cas_result = await session.execute(
+        update(Clip)
+        .where(
+            Clip.id == clip_id,
+            Clip.creator_id == creator.id,
+            Clip.cleaned_render_uri == stale_uri,
+        )
+        # Issue 470: the pending geometry record describes the discarded
+        # artifact — it clears in lockstep with cleaned_render_uri.
+        .values(cleaned_render_uri=None, pending_geometry_jsonb=None)
+        .execution_options(synchronize_session=False)
+    )
+    if cas_result.rowcount == 0:
+        await session.rollback()
+        return {"clip_id": str(clip_id), "status": "noop"}
+    # Keep the identity map in step with the CAS (synchronize_session=False).
     clip.cleaned_render_uri = None
+    clip.pending_geometry_jsonb = None
     await session.commit()
+
+    if stale_uri == live_render_uri:
+        logger.warning(
+            "clean discard: pending artifact %s IS the live render for clip %s — "
+            "skipping storage purge",
+            stale_uri,
+            clip_id,
+        )
+        return {"clip_id": str(clip_id), "status": "discarded"}
 
     from worker.storage import adelete_file
 
@@ -1292,32 +1537,44 @@ async def clip_transcript(
 ) -> dict:
     """Return the clip-windowed transcript word array for the editor pane
     (Issue 135). Word timestamps are normalised to clip-relative seconds so
-    the frontend doesn't need to know about the source-video timebase."""
+    the frontend doesn't need to know about the source-video timebase.
+
+    Issue 470: after a confirmed trim/clean, the words are projected onto the
+    DELIVERED timeline — cut words are dropped and kept words shift left by
+    the removed spans — so the pane describes the video the creator will
+    actually scrub, not the pre-trim source window.
+    """
+    from clip_engine.edits import map_words_to_delivered, parse_geometry
+
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     transcript = await session.get(Transcript, clip.video_id)
     clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
-    clip_duration_s = clip.end_s - clip_origin_s
-    words: list[TranscriptWord] = []
+    window_duration_s = clip.end_s - clip_origin_s
+    raw_words: list[dict] = []
     if transcript and isinstance(transcript.segments_jsonb, dict):
-        idx = 0
         for seg in transcript.segments_jsonb.get("segments") or []:
             for w in seg.get("words") or []:
                 w_start = float(w.get("start", 0.0))
                 w_end = float(w.get("end", 0.0))
                 if w_end <= clip_origin_s or w_start >= clip.end_s:
                     continue
-                words.append(
-                    TranscriptWord(
-                        word=str(w.get("word", "")),
-                        start_s=max(0.0, w_start - clip_origin_s),
-                        end_s=min(clip_duration_s, w_end - clip_origin_s),
-                        index=idx,
-                    )
+                raw_words.append(
+                    {
+                        "word": str(w.get("word", "")),
+                        "start": max(0.0, w_start - clip_origin_s),
+                        "end": min(window_duration_s, w_end - clip_origin_s),
+                    }
                 )
-                idx += 1
+    keep_segments = parse_geometry(clip.effective_geometry_jsonb)
+    if keep_segments is not None:
+        raw_words = map_words_to_delivered(raw_words, keep_segments)
+    words = [
+        TranscriptWord(word=w["word"], start_s=w["start"], end_s=w["end"], index=idx)
+        for idx, w in enumerate(raw_words)
+    ]
     return {
         "clip_id": str(clip_id),
-        "clip_duration_s": clip_duration_s,
+        "clip_duration_s": _clip_duration_s(clip),
         "words": [w.model_dump() for w in words],
     }
 
@@ -1583,15 +1840,23 @@ async def update_clip_metadata(
 
 
 def _clip_duration_s(clip: Clip) -> float:
-    """Playable duration of a clip, in clip-relative seconds.
+    """Playable duration of the clip's DELIVERED video, in clip-relative seconds.
 
-    The render origin is ``setup_start_s`` when set — the engine starts the clip
-    at the setup, not the peak's aftermath — so that, not ``start_s``, is what
-    every clip-relative time is measured from. Cut bounds, the edit document and
-    the frontend timeline all share this origin.
+    Issue 470: after a confirmed trim/clean the delivered video is shorter than
+    the source window and ``effective_geometry_jsonb`` is the authority.
+    Otherwise the render origin is ``setup_start_s`` when set — the engine
+    starts the clip at the setup, not the peak's aftermath — so that, not
+    ``start_s``, is what every clip-relative time is measured from. Cut bounds,
+    the edit document and the frontend timeline all share this timebase.
     """
-    origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
-    return clip.end_s - origin_s
+    from clip_engine.edits import playable_duration_s
+
+    return playable_duration_s(
+        setup_start_s=clip.setup_start_s,
+        start_s=clip.start_s,
+        end_s=clip.end_s,
+        effective_geometry=clip.effective_geometry_jsonb,
+    )
 
 
 async def _cut_segments_for_render(
@@ -1901,6 +2166,11 @@ async def download_clip(
     filler-removed re-render when present. Per-creator isolation: another
     creator's clip — or a missing id — returns 404, never the bytes.
 
+    Issue 447 — an ``attachment`` serve of the CURRENT render stamps
+    ``downloaded_at`` before the response is issued. ``inline`` (watching in
+    the app) and ``variant=cleaned`` (previewing a pending artifact) never
+    stamp — neither means "the creator has the current render on disk".
+
     Prod (R2): 302-redirects to a short-lived presigned GET URL so bandwidth is
     offloaded to object storage. Dev (local disk): streams the file directly.
     """
@@ -1914,18 +2184,26 @@ async def download_clip(
     filename = f"clip-{clip_id}{suffix}.mp4"
 
     presigned = presigned_download_url(uri, filename=filename, disposition=disposition)
+    response: RedirectResponse | FileResponse
     if presigned is not None:
-        return RedirectResponse(url=presigned, status_code=302)
-    # Local-disk dev: stream the file straight from disk.
-    path = Path(uri)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Clip file not found")
-    return FileResponse(
-        path,
-        media_type="video/mp4",
-        filename=filename,
-        content_disposition_type=disposition,
-    )
+        response = RedirectResponse(url=presigned, status_code=302)
+    else:
+        # Local-disk dev: stream the file straight from disk.
+        path = Path(uri)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Clip file not found")
+        response = FileResponse(
+            path,
+            media_type="video/mp4",
+            filename=filename,
+            content_disposition_type=disposition,
+        )
+
+    if disposition == "attachment" and variant == "original":
+        clip.downloaded_at = datetime.now(UTC)
+        await session.commit()
+
+    return response
 
 
 # ── Issue 322: Per-clip Short-title + hook-rewrite suggestions ────────────────

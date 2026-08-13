@@ -392,11 +392,10 @@ const PUBLICATIONS: PublicationListOut = {
 // Brand kit (Issue 186) — shaped to BrandKitOut (routers/creators.py). Without
 // this fixture the catch-all `{}` left every field undefined, causing the
 // controlled-to-uncontrolled React warning on Settings (OFF_COURSE_BUGS
-// 2026-06-24). aspect/background stay null so <select> values remain within
-// their option sets.
+// 2026-06-24). aspect stays null so <select> values remain within their
+// option sets.
 const BRAND_KIT: BrandKit = {
   subtitle: 'bold_pop',
-  background: null,
   captions_enabled: true,
   zoom_on_peak: false,
   denoise: false,

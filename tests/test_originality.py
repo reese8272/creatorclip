@@ -38,7 +38,7 @@ def _fp(
     duration_s: float = 45.0,
     setup_lead_s: float | None = 5.0,
     source_region: str | None = "early",
-    style: str | None = "white_large|blur|True",
+    style: str | None = "white_large|True",
     principle: str | None = "clip-the-setup",
 ) -> ClipFingerprint:
     return ClipFingerprint(

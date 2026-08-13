@@ -677,7 +677,6 @@ class CreatorStyle(Base):
 
     Keys currently used by the render pipeline:
         subtitle         : str | None   — caption style id
-        background       : str | None   — background fill ("blur"|"black")
         captions_enabled : bool
         zoom_on_peak     : bool
         denoise          : bool
@@ -778,6 +777,30 @@ class Clip(Base):
     # swaps this into render_uri and clears the field. Independent of
     # render_status, which still tracks the original render's progress.
     cleaned_render_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Effective render geometry (Issue 470, migration 0061). The trim/clean
+    # confirm swap replaces the delivered video, but `start_s`/`end_s`/
+    # `setup_start_s` keep describing the SOURCE window — so every duration,
+    # transcript, and caption reader lied about the delivered artifact. These
+    # two columns record what was actually delivered. Shape (both):
+    #   {"version": 1, "keep_segments_s": [[a, b], ...], "duration_s": <sum>}
+    # (see clip_engine/edits.py geometry helpers).
+    #
+    # `pending_geometry_jsonb` describes the artifact in `cleaned_render_uri`,
+    # with keep segments relative to the timeline of the render it was cut FROM
+    # (the current `render_uri`). Written by the worker in the SAME commit as
+    # `cleaned_render_uri` — the cut list otherwise never exists outside the
+    # task (`_clean_clip_async` computes it in-memory) and the edit document is
+    # cleared at confirm (Issue 391), so this is the only durable record.
+    # Cleared in lockstep with `cleaned_render_uri` (confirm CAS + discard CAS).
+    pending_geometry_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # `effective_geometry_jsonb` describes the LIVE `render_uri`, with keep
+    # segments in ORIGINAL clip-relative seconds (origin = setup_start_s ??
+    # start_s) so transcript words map straight through it. Written at
+    # /clean/confirm inside the Issue-468 CAS transaction (composed with the
+    # prior value for second trims); cleared by the Issue-353 re-render reset,
+    # which regenerates the full window from source. NULL = the delivered
+    # video IS the original window.
+    effective_geometry_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # Poster frame for the RENDERED deliverable (Issue 387) — reframed, captions
     # burned in, correct aspect. Extracted from the clip the creator will
     # actually publish, which is the most useful thing to show them. NULL until
@@ -809,9 +832,11 @@ class Clip(Base):
         default=ClipTriage.pending,
         server_default=ClipTriage.pending.value,
     )
-    # Render style chosen by the creator in the review UI (Issue 119).
-    # JSONB: {subtitle: "white_large"|"yellow_impact"|"captions_sm"|null,
-    #         background: "blur"|"black"|"brand"|null, captions_enabled: bool}
+    # Render style chosen by the creator in the review UI (Issue 119). JSONB
+    # mirror of RenderStyleIn (routers/clips.py): subtitle, captions_enabled,
+    # zoom_on_peak, denoise, aspect, caption_position. Keys from removed styles
+    # (e.g. the Issue-442 "background", whose docs once promised a phantom
+    # "brand" value) may persist on old rows and are ignored by the renderer.
     style_preset: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # Creator-approved publish metadata (migration 0047). NULL = no applied
     # value: publish_to_youtube falls back to video.title / "#Shorts". Set and
@@ -841,6 +866,16 @@ class Clip(Base):
     # has_crop_track (a track is ~15–20 KB). NOT part of ClipEditDocument —
     # worker writes there would bump CAS revisions and kill client autosaves.
     reframe_track_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Download record (Issue 447, migration 0060) — semantics: download initiated
+    # (302 issued with disposition=attachment) for the CURRENT render; cleared on
+    # re-render (the Issue-353 reset in POST /clips/{id}/render) and on
+    # /clean/confirm's artifact swap, both of which replace the render the stamp
+    # described. The same endpoint backs the in-app player with
+    # disposition=inline, which never stamps — watching is not downloading.
+    # NULL = the current render was never downloaded.
+    downloaded_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,

@@ -6,6 +6,8 @@ CORS rule is enforced, and (4) the exit-code aggregation flips on any failure.
 No network calls — live reachability checks are exercised manually via --full.
 """
 
+from unittest.mock import MagicMock, patch
+
 from cryptography.fernet import Fernet
 
 from scripts.doctor import (
@@ -147,3 +149,37 @@ def test_offline_audit_has_no_live_sections():
 def test_offline_audit_on_empty_env_flags_required_missing():
     sections = audit({}, offline=True, full=False)
     assert has_failures(sections) is True  # required vars are absent
+
+
+# ── Live-probe integrity (OFF_COURSE L148) ──────────────────────────────────
+# The Stripe probe reported "auth ok" through the entire 10-week billing
+# outage because it used a raw httpx GET instead of the app's own client —
+# the transport whose construction WAS the outage. These tests pin that the
+# probe now goes through billing.stripe_client's module singleton.
+
+
+def test_live_stripe_probes_through_the_app_client():
+    from scripts.doctor import Status, _live_stripe
+
+    fake = MagicMock()
+    with patch("billing.stripe_client._STRIPE", fake):
+        result = _live_stripe({"STRIPE_SECRET_KEY": "sk_test_x"}, [])
+    assert result.status is Status.OK
+    fake.checkout.sessions.list.assert_called_once_with({"limit": 1})
+    assert "app client" in result.detail
+
+
+def test_live_stripe_fails_when_the_app_client_fails():
+    from scripts.doctor import Status, _live_stripe
+
+    fake = MagicMock()
+    fake.checkout.sessions.list.side_effect = RuntimeError("transport never built")
+    with patch("billing.stripe_client._STRIPE", fake):
+        result = _live_stripe({"STRIPE_SECRET_KEY": "sk_test_x"}, [])
+    assert result.status is Status.FAIL
+
+
+def test_live_stripe_skips_without_key():
+    from scripts.doctor import Status, _live_stripe
+
+    assert _live_stripe({}, []).status is Status.SKIP

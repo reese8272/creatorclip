@@ -282,7 +282,7 @@ def test_originality_advisory_copy_has_no_strike_ladder_or_new_policy_language()
             duration_s=45.0,
             setup_lead_s=5.0,
             source_region="early",
-            style_key="white_large|blur|True",
+            style_key="white_large|True",
             principle="clip-the-setup",
             embedding=cluster_vec,
         )

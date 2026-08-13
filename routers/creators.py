@@ -118,7 +118,6 @@ class BrandKitStyleIn(BaseModel):
     """
 
     subtitle: str | None = None
-    background: str | None = None
     captions_enabled: bool | None = None
     zoom_on_peak: bool | None = None
     denoise: bool | None = None
@@ -129,7 +128,6 @@ class BrandKitStyleIn(BaseModel):
 
 class BrandKitOut(BaseModel):
     subtitle: str | None
-    background: str | None
     captions_enabled: bool
     zoom_on_peak: bool
     denoise: bool
@@ -154,11 +152,14 @@ class BrandKitSuggestionAcceptIn(BaseModel):
 
 
 def _style_row_to_dict(row: CreatorStyle | None) -> dict:
-    """Normalise a CreatorStyle row (or None) into a BrandKitOut-compatible dict."""
+    """Normalise a CreatorStyle row (or None) into a BrandKitOut-compatible dict.
+
+    Stored JSONB keys not named here (e.g. the Issue-442-removed "background")
+    are silently ignored — legacy rows need no migration.
+    """
     style: dict = row.style if row is not None else {}
     return {
         "subtitle": style.get("subtitle"),
-        "background": style.get("background"),
         "captions_enabled": bool(style.get("captions_enabled", False)),
         "zoom_on_peak": bool(style.get("zoom_on_peak", False)),
         "denoise": bool(style.get("denoise", False)),
@@ -248,8 +249,6 @@ async def put_brand_kit(
     updates: dict = {}
     if body.subtitle is not None:
         updates["subtitle"] = body.subtitle
-    if body.background is not None:
-        updates["background"] = body.background
     if body.captions_enabled is not None:
         updates["captions_enabled"] = body.captions_enabled
     if body.zoom_on_peak is not None:

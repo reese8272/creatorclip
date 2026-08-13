@@ -1908,6 +1908,26 @@ async def _tenant_id_or_raise(video_id: str, creator_id: str | None) -> str:
     return creator_id
 
 
+def _apply_probed_duration(video: Video, duration_s: float | None) -> None:
+    """Write the ffprobe container duration (and kind) onto the video row.
+
+    ONE duration authority (Issue 469): the local ffprobe of the actual media
+    is what the render path enforces, so it ALWAYS overwrites on probe success
+    — previously only-if-empty, which let link-registered videos keep YouTube's
+    ISO-8601 integer seconds (routers/videos.py) forever. A stale/rounded seed
+    that under-reports the container turns every end-of-video clip into a
+    permanent render failure. ``kind`` is reclassified alongside because the
+    YouTube-metadata kind is itself ``classify_video_kind`` of the parsed ISO
+    duration — same classifier, worse input. No-op when the probe failed
+    (``duration_s`` falsy) so a re-ingest can never null out a good value.
+    """
+    if duration_s:
+        from youtube.data_api import classify_video_kind
+
+        video.duration_s = duration_s
+        video.kind = classify_video_kind(duration_s)
+
+
 async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
     """Ingest stage of the upload chain.
 
@@ -2115,14 +2135,7 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                 # not discard spans an earlier run resolved.
                 if overlay_spans_json:
                     video.overlay_spans_jsonb = overlay_spans_json
-                if duration_s and not video.duration_s:
-                    # Direct-to-R2 uploads (Issue 395) register with duration_s=None
-                    # and a provisional kind — the local probe is the authority for
-                    # both, so reclassify alongside the duration write.
-                    from youtube.data_api import classify_video_kind
-
-                    video.duration_s = duration_s
-                    video.kind = classify_video_kind(duration_s)
+                _apply_probed_duration(video, duration_s)
                 if duration_s:
                     from billing.ledger import deduct_for_video
 
@@ -2735,6 +2748,11 @@ async def _clean_clip_async(clip_id: str) -> None:
     ``cleaned_render_uri`` is already populated short-circuits without
     re-encoding.
     """
+    from clip_engine.edits import (
+        map_words_to_delivered,
+        parse_geometry,
+        playable_duration_s,
+    )
     from clip_engine.filler import (
         detect_cut_segments,
         invert_to_keep_ranges,
@@ -2766,7 +2784,16 @@ async def _clean_clip_async(clip_id: str) -> None:
             start_s = clip.start_s
             end_s = clip.end_s
             clip_origin_s = setup_start_s if setup_start_s is not None else start_s
-            clip_duration_s = end_s - clip_origin_s
+            # Issue 470: cut the video that actually exists — after a confirmed
+            # trim, render_uri is shorter than the source window and words must
+            # be projected onto its timeline before filler detection.
+            effective_segments = parse_geometry(clip.effective_geometry_jsonb)
+            clip_duration_s = playable_duration_s(
+                setup_start_s=setup_start_s,
+                start_s=start_s,
+                end_s=end_s,
+                effective_geometry=clip.effective_geometry_jsonb,
+            )
 
         async with db.tenant_session(creator_id) as session:
             transcript = await session.get(Transcript, video_id)
@@ -2791,6 +2818,8 @@ async def _clean_clip_async(clip_id: str) -> None:
                         "end": w_end - clip_origin_s,
                     }
                 )
+        if effective_segments is not None:
+            words_clip_relative = map_words_to_delivered(words_clip_relative, effective_segments)
 
         from config import settings as _s
 
@@ -2850,6 +2879,13 @@ async def _clean_clip_async(clip_id: str) -> None:
             clip = await session.get(Clip, uuid.UUID(clip_id))
             if clip:
                 clip.cleaned_render_uri = cleaned_uri
+                # Issue 470: the only durable record of what this artifact kept
+                # — the cut list exists nowhere else. Same commit as the URI so
+                # the two can never disagree; /clean/confirm promotes it to
+                # effective geometry inside its CAS transaction.
+                from clip_engine.edits import geometry_doc
+
+                clip.pending_geometry_jsonb = geometry_doc(keep_ranges)
                 await session.commit()
 
         logger.info("Clip %s cleaned → %s", clip_id, cleaned_uri)
@@ -2874,7 +2910,7 @@ async def _edit_clip_async(clip_id: str, cut_segments: list[list[float]]) -> Non
     Idempotent: a redelivered task whose ``cleaned_render_uri`` is already
     populated short-circuits without re-encoding.
     """
-    from clip_engine.edits import validate_user_cuts
+    from clip_engine.edits import playable_duration_s, validate_user_cuts
     from clip_engine.render import render_cleaned_clip_file
     from worker.progress import aemit
     from worker.storage import alocal_path, aupload_file
@@ -2898,11 +2934,15 @@ async def _edit_clip_async(clip_id: str, cut_segments: list[list[float]]) -> Non
             if not clip.render_uri:
                 raise ValueError(f"Clip {clip_id} has no render_uri — render before editing")
             source_uri = clip.render_uri
-            setup_start_s = clip.setup_start_s
-            start_s = clip.start_s
-            end_s = clip.end_s
-            clip_origin_s = setup_start_s if setup_start_s is not None else start_s
-            clip_duration_s = end_s - clip_origin_s
+            # Issue 470: validate cuts against the DELIVERED duration — after a
+            # confirmed trim, render_uri is shorter than end_s - origin and a
+            # keep range built from the stale window would overrun the file.
+            clip_duration_s = playable_duration_s(
+                setup_start_s=clip.setup_start_s,
+                start_s=clip.start_s,
+                end_s=clip.end_s,
+                effective_geometry=clip.effective_geometry_jsonb,
+            )
 
         # Defensive re-validation. The endpoint already validated; this guards
         # against a redelivery from a buggy older endpoint version.
@@ -2940,6 +2980,12 @@ async def _edit_clip_async(clip_id: str, cut_segments: list[list[float]]) -> Non
             clip = await session.get(Clip, uuid.UUID(clip_id))
             if clip:
                 clip.cleaned_render_uri = edited_uri
+                # Issue 470: durable record of what this artifact kept, in the
+                # same commit as the URI (the Issue-391 edit document is
+                # cleared at confirm, so it cannot serve as the record).
+                from clip_engine.edits import geometry_doc
+
+                clip.pending_geometry_jsonb = geometry_doc(edit.keep_ranges)
                 await session.commit()
 
         logger.info("Clip %s edited → %s", clip_id, edited_uri)
@@ -3474,7 +3520,7 @@ async def _poll_clip_outcomes_async() -> None:
 async def _brand_kit_style(session: Any, creator_id: uuid.UUID) -> dict:
     """Return the creator's saved brand-kit render style, or ``{}`` if none.
 
-    Used to seed auto-rendered clips (auto-render) so captions / aspect / background
+    Used to seed auto-rendered clips (auto-render) so captions / aspect
     match the creator's chosen style without a manual pick. Mirrors the brand-kit
     read in ``routers/clips.py::render_clip``; a copy is returned so the caller can
     assign it onto a clip without aliasing the ORM-tracked ``CreatorStyle.style``.
@@ -3563,6 +3609,12 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                 raise ValueError(f"Signals not available for video {video_id}")
             timeline = signals.timeline_jsonb
 
+            # Issue 469: the ingest-probed container duration is the ONE end
+            # authority — threaded into candidate geometry so end_s is clamped
+            # against the duration render_clip_file enforces, not the (possibly
+            # longer) audio-derived timeline duration.
+            container_duration_s = float(video.duration_s) if video.duration_s else None
+
             transcript = await session.get(Transcript, video_uuid)
             transcript_segments = (
                 transcript.segments_jsonb.get("segments", []) if transcript else []
@@ -3612,6 +3664,7 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                 style_notes=style_notes,
                 video_context=video_context,
                 optimal_clip_len_s=dna_optimal_len_s,
+                container_duration_s=container_duration_s,
             )
 
         async with db.tenant_session(creator_id) as session:
@@ -3780,12 +3833,15 @@ async def _backfill_video_posters_async() -> None:
             # Videos whose source was already purged simply never match: the
             # purge nulls source_uri when it deletes the blob. Nothing to detect
             # — those rows keep poster_uri NULL and the UI shows a placeholder.
+            # archived_at IS NULL (Issue 446): never spend egress regenerating
+            # artifacts for a video the creator archived.
             result = await session.execute(
                 select(Video.id, Video.creator_id, Video.source_uri, Video.duration_s)
                 .where(
                     and_(
                         Video.poster_uri.is_(None),
                         Video.source_uri.is_not(None),
+                        Video.archived_at.is_(None),
                     )
                 )
                 # Newest first: if the drain is interrupted, the rows a creator is
@@ -3885,6 +3941,9 @@ async def _backfill_video_camera_regions_async() -> None:
                             Video.overlay_spans_jsonb.is_(None),
                         ),
                         Video.source_uri.is_not(None),
+                        # archived_at IS NULL (Issue 446) — same as the poster
+                        # sweep: no detection work for archived rows.
+                        Video.archived_at.is_(None),
                     )
                 )
                 .order_by(Video.created_at.desc())
@@ -4023,6 +4082,9 @@ async def _backfill_video_peaks_async() -> None:
                     and_(
                         Video.peaks_uri.is_(None),
                         Video.audio_uri.is_not(None),
+                        # archived_at IS NULL (Issue 446) — same as the poster
+                        # sweep: no backfill work for archived rows.
+                        Video.archived_at.is_(None),
                     )
                 )
                 # Newest first: if the drain is interrupted, the rows a creator is
@@ -4083,6 +4145,12 @@ async def _purge_stale_source_media_async() -> None:
     # Retention clock starts at ingest completion, not upload time (Issue 43).
     # A long-running or stuck ingest of an old upload must not have its source
     # purged mid-pipeline — gate on ingest_done_at instead of created_at.
+    #
+    # DELIBERATELY NOT filtered on archived_at (Issue 446): archive purges
+    # media inline but keeps the pointer for any blob whose delete failed
+    # (Object-Lock refusal). This sweep is the retry path that eventually frees
+    # those — excluding archived rows would turn a transient refusal into a
+    # permanent retention violation.
     cutoff = datetime.now(UTC) - timedelta(hours=settings.SOURCE_MEDIA_RETENTION_HOURS)
 
     # Issue 38 Wave 1: collect URIs in a short read transaction, release the
@@ -4940,7 +5008,13 @@ async def _collect_creator_export(session: Any, creator: Creator) -> dict:
             out.extend(_row_to_dict(r) for r in batch)
         return out
 
-    videos = await _all(select(Video).where(Video.creator_id == cid), Video.id)
+    # archived_at IS NULL (Issue 446): archived videos leave every surface,
+    # including the export. The clips/feedback rows retained past archive DO
+    # still appear below (they are creator data we continue to hold), scoped by
+    # creator_id — Art. 15 honesty for what actually remains.
+    videos = await _all(
+        select(Video).where(Video.creator_id == cid, Video.archived_at.is_(None)), Video.id
+    )
     video_ids = [v["id"] for v in videos]
     clips = await _all(select(Clip).where(Clip.creator_id == cid), Clip.id)
     convos = await _all(

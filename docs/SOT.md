@@ -432,7 +432,7 @@ creator_identity                     -- the STATED profile (Issue 83, append-onl
 
 creator_style                        -- brand-kit render defaults (Issue 186, one row per creator)
   id, creator_id (FK, CASCADE, UNIQUE uq_creator_style_creator_id),
-  style JSONB (subtitle, background, captions_enabled, zoom_on_peak, denoise, aspect),
+  style JSONB (subtitle, captions_enabled, zoom_on_peak, denoise, aspect),
   updated_at
   RLS: tenant_isolation on creator_id
 
@@ -477,6 +477,8 @@ clips
     the previous image's INSERT does not name the column during a rolling restart)
   reframe_track_jsonb (NULLABLE, migration 0055 — Issue 421: the speaker-aware
 - `clips.blended_score FLOAT NULL` (migration 0059, Issue 465) — preference-rerank blend `(1-w)*score + w*pref`; `score` is now guaranteed the immutable DNA/LLM fit composite; NULL = personalization never applied (below threshold, no model, or append path)
+- `clips.downloaded_at TIMESTAMPTZ NULL` (migration 0060, Issue 447) — download initiated (302/file response with disposition=attachment) for the CURRENT render; cleared on re-render and on the clean/confirm swap; NULL = never downloaded
+- `clips.pending_geometry_jsonb JSONB NULL` + `clips.effective_geometry_jsonb JSONB NULL` (migration 0061, Issue 470) — the delivered-video geometry record: pending written by the worker in lockstep with `cleaned_render_uri`; effective written at confirm inside the 468 CAS, composed across repeated trims. Geometry vocabulary in `clip_engine/edits.py`; API: `ClipOut.duration_s` + `has_baked_edits`, render 202 carries `discarded_edits`
     crop track in the unified wire contract; keyframe x = the exact ffmpeg
     sendcmd left-edge values. Recomputed + replaced (or nulled) in the same
     done-marking transaction as render_uri on EVERY render — never stale.
@@ -557,7 +559,7 @@ creator_insights                      -- AI per-performer + channel insights (Is
   feedback_note: Text | None          -- free-text "Other" field
 
 -- clips additions (Issue 119) --
-  style_preset: JSONB | None          -- {subtitle, background, captions_enabled}
+  style_preset: JSONB | None          -- {subtitle, captions_enabled} (legacy "background" keys persist on old rows and are ignored — Issue 442)
 
 chat_conversations                    -- Pro chatbot threads (Issue 152)
   id, creator_id (FK), title, created_at, updated_at

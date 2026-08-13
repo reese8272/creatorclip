@@ -2,6 +2,10 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
+import { PublishPanel } from '@/components/review/PublishPanel'
+import { Badge } from '@/components/ui/badge'
+import { Download } from '@/components/ui/icon'
+import { ICON_SIZE } from '@/components/ui/iconSizes'
 import { cn } from '@/lib/utils'
 import { PILE_LABEL, PILE_ORDER, type Pile } from '@/lib/clipPiles'
 import type { ReviewClip } from '@/types'
@@ -47,6 +51,27 @@ export function PileTabs({
   )
 }
 
+// Issue 447 — the Keep pile's finish line: where a kept clip stands on the
+// rendered → downloaded → published path. Neutral workflow states only — a chip
+// describes what has HAPPENED, never predicted performance or reach.
+function finishLineSteps(clip: ReviewClip): { label: string; done: boolean }[] {
+  const rendered = clip.render_status === 'done' && Boolean(clip.render_uri)
+  const downloaded = Boolean(clip.downloaded_at)
+  const pub = clip.latest_publication
+  // The third chip narrates the newest publication's state; anything not yet
+  // done (incl. failed — details live in the expanded Publish panel) stays todo.
+  let publishLabel = 'Published'
+  let published = false
+  if (pub?.status === 'done') published = true
+  else if (pub?.status === 'scheduled' || pub?.status === 'confirmed') publishLabel = 'Scheduled'
+  else if (pub?.status === 'pending' || pub?.status === 'running') publishLabel = 'Publishing'
+  return [
+    { label: 'Rendered', done: rendered },
+    { label: 'Downloaded', done: downloaded },
+    { label: publishLabel, done: published },
+  ]
+}
+
 // One row of a kept/dropped pile. Title and caption WRAP rather than truncate —
 // a clip you are about to publish is exactly when you need to read them in full,
 // and the previous `truncate` + native `title=` tooltip clipped long values in
@@ -60,39 +85,89 @@ function PileRow({
   onMove: (clip: ReviewClip, to: Pile) => void
   busy: boolean
 }) {
+  const [publishOpen, setPublishOpen] = useState(false)
   const title = clip.applied_title || clip.suggested_title || 'Untitled clip'
   const caption = clip.applied_description || clip.suggested_hook || null
   const dur = clip.end_s - (clip.setup_start_s ?? clip.start_s)
+  const kept = clip.triage === 'kept'
+  // Same authed same-origin pattern as YourCall's download affordance: the
+  // session cookie rides the request; the server 302s to a presigned URL.
+  const downloadUrl = `/clips/${clip.id}/download`
   return (
-    <li className="flex items-start gap-3 rounded-md border border-default bg-surface p-3">
-      <div className="min-w-0 flex-1">
-        <p className="break-words text-sm font-medium text-fg">{title}</p>
-        {caption && <p className="mt-1 break-words text-xs text-muted">{caption}</p>}
-        <p className="mt-1.5 font-mono text-xs text-subtle">
-          {dur.toFixed(1)}s
-          {clip.rank != null && ` · rank ${clip.rank}`}
-          {clip.render_status !== 'done' && ` · ${clip.render_status}`}
-        </p>
+    <li className="flex flex-col rounded-md border border-default bg-surface p-3">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="break-words text-sm font-medium text-fg">{title}</p>
+          {caption && <p className="mt-1 break-words text-xs text-muted">{caption}</p>}
+          <p className="mt-1.5 font-mono text-xs text-subtle">
+            {dur.toFixed(1)}s
+            {clip.rank != null && ` · rank ${clip.rank}`}
+            {clip.render_status !== 'done' && ` · ${clip.render_status}`}
+          </p>
+          {kept && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="finish-line">
+              {finishLineSteps(clip).map((step) => (
+                <Badge
+                  key={step.label}
+                  variant={step.done ? 'success' : 'muted'}
+                  data-state={step.done ? 'done' : 'todo'}
+                >
+                  {step.label}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex shrink-0 flex-col gap-1.5">
+          {kept ? (
+            <button
+              onClick={() => onMove(clip, 'pending')}
+              disabled={busy}
+              className="rounded-sm border border-strong bg-bg px-2.5 py-1 text-xs text-muted hover:bg-elevated hover:text-fg disabled:opacity-50"
+            >
+              Un-keep
+            </button>
+          ) : (
+            <button
+              onClick={() => onMove(clip, 'pending')}
+              disabled={busy}
+              className="rounded-sm border border-strong bg-bg px-2.5 py-1 text-xs text-muted hover:bg-elevated hover:text-fg disabled:opacity-50"
+            >
+              Restore
+            </button>
+          )}
+          {kept && clip.render_uri && (
+            <a
+              href={downloadUrl}
+              download
+              className="inline-flex items-center justify-center gap-1 rounded-sm border border-strong bg-bg px-2.5 py-1 text-xs text-muted hover:bg-elevated hover:text-fg"
+            >
+              <Download className={ICON_SIZE.sm} aria-hidden="true" /> Download
+            </a>
+          )}
+          {kept && (
+            <button
+              onClick={() => setPublishOpen((v) => !v)}
+              className={cn(
+                'rounded-sm border px-2.5 py-1 text-xs',
+                publishOpen
+                  ? 'border-accent bg-accent-soft text-accent-text'
+                  : 'border-strong bg-bg text-muted hover:bg-elevated hover:text-fg',
+              )}
+            >
+              {publishOpen ? 'Hide publish' : 'Publish'}
+            </button>
+          )}
+        </div>
       </div>
-      <div className="flex shrink-0 flex-col gap-1.5">
-        {clip.triage === 'kept' ? (
-          <button
-            onClick={() => onMove(clip, 'pending')}
-            disabled={busy}
-            className="rounded-sm border border-strong bg-bg px-2.5 py-1 text-xs text-muted hover:bg-elevated hover:text-fg disabled:opacity-50"
-          >
-            Un-keep
-          </button>
-        ) : (
-          <button
-            onClick={() => onMove(clip, 'pending')}
-            disabled={busy}
-            className="rounded-sm border border-strong bg-bg px-2.5 py-1 text-xs text-muted hover:bg-elevated hover:text-fg disabled:opacity-50"
-          >
-            Restore
-          </button>
-        )}
-      </div>
+      {/* Schedule-publish from the pile (Issue 447) — the full PublishPanel,
+          reused: schedule dialog, confirm/cancel, status rows and privacy note
+          all behave exactly as they do on the review card. */}
+      {kept && publishOpen && (
+        <div className="mt-3">
+          <PublishPanel clip={clip} />
+        </div>
+      )}
     </li>
   )
 }

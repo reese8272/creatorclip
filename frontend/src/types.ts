@@ -64,6 +64,16 @@ export interface Video {
   // before the backfill reached it; the editor draws a labelled flat track and
   // never invents amplitude.
   has_peaks: boolean
+  // Issue 446 — the 72h source-retention window surfaced per row: ISO datetime
+  // when the stored source will be purged; null when there is no stored source
+  // or ingest hasn't completed. Optional: older fixtures omit it.
+  source_expires_at?: string | null
+  // Issue 446 — the explicit not-re-renderable signal: true once a previously
+  // processed video's source is gone (was only a 409 at render time before).
+  source_expired?: boolean
+  // Issue 446 — soft-delete marker. Non-null only on rows fetched via
+  // GET /videos?archived=true (the default view filters them out server-side).
+  archived_at?: string | null
 }
 
 export interface VideoListResponse {
@@ -367,6 +377,21 @@ export interface ReviewClip {
   suggested_title?: string | null
   suggested_description?: string | null
   suggested_hook?: string | null
+  // Issue 447 — Keep-pile finish line. Stamped server-side when a download
+  // (disposition=attachment) of the CURRENT render is issued; cleared on
+  // re-render and on the clean/confirm swap. Optional: old payloads keep parsing.
+  downloaded_at?: string | null
+  // Issue 447 — newest publication summary; populated on the list surface only.
+  latest_publication?: ClipPublicationSummary | null
+}
+
+// Issue 447 — latest-publication summary carried per clip on the list surface.
+// A summary, not the full PublicationOut: the pile chip needs current state
+// only; the full history stays on GET /clips/{id}/publications.
+export interface ClipPublicationSummary {
+  status: string
+  scheduled_at: string | null
+  youtube_video_id: string | null
 }
 
 // ── Crop track (L26 cross-track contract, Issue 421 wire shape) ──────────────
@@ -582,7 +607,6 @@ export interface ApiKey {
 // Mirrors BrandKitOut on the server side.
 export interface BrandKit {
   subtitle: string | null
-  background: string | null
   captions_enabled: boolean
   zoom_on_peak: boolean
   denoise: boolean

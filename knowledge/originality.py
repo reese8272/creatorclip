@@ -113,9 +113,9 @@ def style_key(style_preset: dict | None) -> str | None:
     """Stable string signature of the creator-chosen render style, or None."""
     if not style_preset:
         return None
-    return "|".join(
-        str(style_preset.get(k)) for k in ("subtitle", "background", "captions_enabled")
-    )
+    # "background" dropped from the signature (Issue 442): the key was removed
+    # end-to-end and on legacy rows it contributed a constant "None" segment.
+    return "|".join(str(style_preset.get(k)) for k in ("subtitle", "captions_enabled"))
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

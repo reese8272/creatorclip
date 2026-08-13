@@ -249,6 +249,8 @@ def _mock_video(creator_id, title="Test video", yt_id="abc123"):
     v.created_at = datetime.datetime.now(datetime.UTC)
     v.origin = VideoOrigin.upload
     v.source_uri = f"source/{creator_id}/{yt_id}.mp4"
+    v.ingest_done_at = None
+    v.archived_at = None
     return v
 
 

@@ -4,10 +4,10 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-12/13 (latest) — Beta close-out W0–W3: L29 filed; 479/454/477 + Batches A+B DONE
+## 2026-08-12/13 (latest) — Beta close-out W0–W4: L29 filed; Batches A+B+C DONE
 
 The full beta close-out plan (7 waves, L29 + open tail + drills + billing proof, with a concrete
-back-testing spine) was approved and started. W0–W3 so far:
+back-testing spine) was approved and started. W0–W4 so far:
 
 - **Audit deliverables merged** (PR #85): `docs/assessment/CLIPPING_INTEGRITY_2026-08-12.md`,
   Lane L29 (Issues 456–482) in `docs/issues.md`, plus the W0 preservation snapshot
@@ -50,6 +50,18 @@ back-testing spine) was approved and started. W0–W3 so far:
   cold start byte-identical); `clips.blended_score` (migration 0059) frees `score` as the immutable
   fit composite — proof-of-lift and efficacy were silently ingesting blends and self-repaired.
   One new eval fixture; SCENARIO_FLOOR 30→31; landing claim 31→32.
+
+- **W4 Batch C — Issues 466, 467, 469, 468, 447, 446, 471, 442, 470 + 478 legs 1–2 DONE**
+  (466 fast-tracked solo as PR #92, merged + deployed; the rest on integration/w4-batch-c):
+  timed sampler with real timestamps (spans v2, the >999 scramble dead); punch-in rebuilt on
+  animated-scale (the Issue-184 feature works for the first time ever) with filter-config
+  errors terminal; ONE ffprobe duration authority; confirm/discard CAS + the double-clean
+  discard defect found and fixed; Keep-pile finish line (downloaded_at, migration 0060);
+  archive/restore/erase with the 10-pattern erasure enumeration (GDPR export bundle gap
+  closed); background style removed (successor Issue 483 filed, demand-gated); effective
+  post-trim geometry persisted (migration 0061) with honest re-render discard; the real-media
+  render_env CI lane exists and fails-if-skipped; doctor.py probes through the app's own
+  Stripe/R2 clients (OFF_COURSE L148 closed). Alembic head 0059→0061.
 
 ## 2026-08-12 — Issue 453 SEV1 found and fixed; 451 + 452 closed
 

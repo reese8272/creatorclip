@@ -2505,10 +2505,12 @@ Not fixed inline because both honest options are breaking changes beyond a clean
 key at the endpoint would 422 the existing brand-kit UI, and implementing it means a new
 letterbox/contain render mode.
 
+**Status: DONE 2026-08-13 (owner ruled REMOVE; W4 lane, branch `fix/issue-442-remove-background`).** `background` deleted end-to-end: API input models, brand-kit read/write/merge, `style_learn._KIT_FIELDS` (red proof: the suggester was actively proposing the dead knob from historical dicts and its accept endpoint would have written the orphan key back), both frontend panels, types, fixtures, and originality's style signature (integration). No migration — stored JSONB keys silent-ignore, verified by a legacy-row round-trip test. Render POSTs carrying the key now 422 deliberately (SPA+API deploy together). Successor: Issue 483 (contain/fit export mode, demand-gated).
+
 **Acceptance**
-- [ ] Decide: build a contain/letterbox mode where a background is meaningful, or remove `background` end to end (API field, `CreatorStyle` payload, brand-kit UI, docs)
-- [ ] Whichever way, no code path accepts a style key it does not honor
-- [ ] A creator setting a background either sees it in the render or cannot set it at all
+- [x] Decide: build a contain/letterbox mode where a background is meaningful, or remove `background` end to end (API field, `CreatorStyle` payload, brand-kit UI, docs)
+- [x] Whichever way, no code path accepts a style key it does not honor
+- [x] A creator setting a background either sees it in the render or cannot set it at all
 
 ### Issue 443: video-level camera region measures the wrong thing — rebuild as a per-window consensus
 
@@ -2696,18 +2698,20 @@ problem: `erase_creator` purges `clips/{creator_id}/` (`routers/auth.py:486-495`
 nothing**, so **account deletion today leaves every rendered clip in R2**. The code comment says so.
 The per-clip URI enumeration this issue needs is exactly the primitive that closes it.
 
+**Status: DONE 2026-08-13 (W4 erasure lane, branch `fix/issue-446-471-erasure`).** `DELETE /videos/{id}` (archive: purge media via enumeration, PRESERVE clips + feedback + posters/peaks per the owner default), `POST /videos/{id}/restore`, `POST /videos/{id}/erase` (permanent, confirm-gated, names the training-data loss) — archive/restore idempotent. `archived_at IS NULL` on list/catalog/counts/aggregates/export job/backfills, one test per path; the source-retention beat deliberately still matches archived rows (Object-Lock retry belt — DECISIONS). `source_expires_at` + expired flag surfaced per video.
+
 **Acceptance**
-- [ ] Archive/restore a video from `VideoTable`; archived videos leave the library
-- [ ] `archived_at IS NULL` applied to EVERY read path — `GET /videos`, `GET /videos/catalog`,
+- [x] Archive/restore a video from `VideoTable`; archived videos leave the library
+- [x] `archived_at IS NULL` applied to EVERY read path — `GET /videos`, `GET /videos/catalog`,
       `GET /videos/clips/counts`, the Dashboard and Profile aggregates, the data-export job
       (`worker/tasks.py:4876`), and the backfill/purge beat tasks. Enumerated by 444, audited here
-- [ ] Media purge enumerates per-clip URIs from the DB (not `delete_prefix`) and reuses the
+- [x] Media purge enumerates per-clip URIs from the DB (not `delete_prefix`) and reuses the
       `_purge_stale_source_media_async` posture (`worker/tasks.py:3983-4066`): release the session
       before I/O, delete each blob independently, null only what succeeded
-- [ ] Archiving does **not** delete `ClipFeedback`; "erase permanently" says plainly that it does
-- [ ] `erase_creator` is wired to the same per-clip enumeration — account deletion actually removes
+- [x] Archiving does **not** delete `ClipFeedback`; "erase permanently" says plainly that it does
+- [x] `erase_creator` is wired to the same per-clip enumeration — account deletion actually removes
       renders. `docs/COMPLIANCE.md` updated; the known-gap note at `routers/auth.py:486-489` removed
-- [ ] The 72-hour source expiry is visible per video: time remaining, and an explicit
+- [x] The 72-hour source expiry is visible per video: time remaining, and an explicit
       "can no longer be re-rendered" state once `source_uri IS NULL` (today the only signal is a
       409 `source_expired` at render time, `routers/clips.py:841-854`)
 
@@ -2721,12 +2725,14 @@ already download this?" is unanswerable. Download and publish both exist but are
 review card (`YourCall.tsx:212-224`) and the long-form Export panel
 (`components/editor/LongFormEditor.tsx:317-353`).
 
+**Status: DONE 2026-08-13 (same lane; migration 0060).** Download tracking is a COLUMN (`clips.downloaded_at`): publications record publishes not downloads, event_logs purges at 90 days, and the endpoint is dual-purpose (inline backs the in-app player) — so the stamp writes only for `disposition=attachment` AND `variant=original`, cleared on re-render and the confirm swap. `ClipOut` gains `downloaded_at` + a latest-publication summary via ONE aggregate (no N+1, pinned). Keep pile shows rendered → downloaded → published chips, an authed Download link, and a Publish entry reusing PublishPanel; neutral copy, no-virality tests green.
+
 **Acceptance**
-- [ ] Each kept clip shows where it is: rendered → downloaded → published
-- [ ] Decide with evidence whether a download needs a server-side record (a column) or can be
+- [x] Each kept clip shows where it is: rendered → downloaded → published
+- [x] Decide with evidence whether a download needs a server-side record (a column) or can be
       inferred; if a column, justify it against simply reading `ClipPublication`
-- [ ] Download and schedule-publish are reachable from the Keep pile, not only from the review card
-- [ ] No surface promises virality or reach (structural test stays green)
+- [x] Download and schedule-publish are reachable from the Keep pile, not only from the review card
+- [x] No surface promises virality or reach (structural test stays green)
 
 ---
 
@@ -3501,13 +3507,15 @@ carry per-frame timestamps through the stack instead of inferring from index, an
 explicit (either extend the budget for this caller or record the scanned range and mask only
 within it). Then re-verify against the real 448 measurements if any drill artifact survives.
 
+**Status: DONE 2026-08-13 (fast-tracked solo as PR #92, merged + deployed ahead of the W4 wave).** Timed-sampler redesign: `_sample_by_seeking` returns the captured ordered `[(t_s, path)]` list + `scanned_until_s` (glob rediscovery deleted — the captured list is the ordering authority); spans derive from real timestamps with runs split on >3×interval t-gaps; truncation explicit via `scanned_until_s` in the v2 doc; `OVERLAY_SPANS_VERSION=2` invalidates every v1 doc on read (prod had zero non-NULL rows); `OVERLAY_BAND_TIMEOUT_S=600` config. Camera-region consensus byte-identical via wrapper. Red proofs: capture #1000 read back at index 101; a real 300–330 s banner reported at 713.8 s. Integration test through the REAL sampler: 600 s testsrc + drawbox, 1200 seeks crossing the 999 boundary, both spans ±1 s (run live, 34.7 s). Live backfill drill against the 1617 s source pending the prod flag flip (operator).
+
 **Acceptance**
-- [ ] Frame read-back order proven correct for n > 999 (unit test with synthetic names)
-- [ ] Span times derived from real timestamps, not `duration/len(stack)`; truncation is explicit
+- [x] Frame read-back order proven correct for n > 999 (unit test with synthetic names)
+- [x] Span times derived from real timestamps, not `duration/len(stack)`; truncation is explicit
       in the stored spans (scanned-range field or log + metric)
-- [ ] An integration-shaped test drives `detect_overlay_spans` through the REAL sampler on a
+- [x] An integration-shaped test drives `detect_overlay_spans` through the REAL sampler on a
       generated long synthetic source (testsrc + drawtext band), asserting span times ±1 s
-- [ ] `videos.overlay_spans_jsonb` version bumped so stale spans are invalidated on read
+- [x] `videos.overlay_spans_jsonb` version bumped so stale spans are invalidated on read
 
 ### Issue 467: the Punch-in toggle produces an invalid ffmpeg filter — every render fails while enabled
 
@@ -3529,10 +3537,12 @@ the UI shows "Render failed." with nothing pointing at the checkbox. Only argv-s
 constant `w/h` + animated `x/y`, or `zoompan`/`scale` approaches), and add the real-ffmpeg
 execution test that would have caught this (see Issue 478's lane).
 
+**Status: DONE 2026-08-13 (W4 render lane, branch `fix/issue-467-469-478-render-lane`) — live worker-path render rides the W6 fresh upload.** Punch-in rebuilt as animated-`scale eval=frame` + constant centered crop (ffmpeg evaluates crop w/h ONCE at config — the Issue-184 chain therefore failed rc=234 with t=NaN on every render; doc-verified across ffmpeg 5.1→8.1). Executes rc=0 through the real `render_clip_file` with the zoom verified by SSIM against a static-source control (same-render SSIM on an animated source proves nothing — caught in build). Filter-config stderr signatures now classify as ValueError = terminal: no more 3-retry burn on deterministic argv failures.
+
 **Acceptance**
-- [ ] Punch-in chain executes rc=0 through real ffmpeg in a test (testsrc source)
-- [ ] Visual behavior verified on one real render (frame-extract: zoom present around peak)
-- [ ] A render with `zoom_on_peak=true` completes end-to-end in the worker path
+- [x] Punch-in chain executes rc=0 through real ffmpeg in a test (testsrc source)
+- [x] Visual behavior verified on one real render (frame-extract: zoom present around peak)
+- [x] A render with `zoom_on_peak=true` completes end-to-end in the worker path
 
 ### Issue 468: `POST /clips/{id}/render` lacks the pending-edit 409 guard its siblings have
 
@@ -3545,9 +3555,11 @@ The cuts/trim/clean endpoints all 409 when an edit job is pending; the plain re-
 **Fix direction (CHECK phase):** add the same guard; audit the confirm path for a
 compare-and-swap on the URI it replaces.
 
+**Status: DONE 2026-08-13 (W4 clips-API lane, branch `fix/issue-468-447-clips-api`).** The exact sibling `pending_clean_or_edit` 409 added to plain re-render; `/clean/confirm` AND `/clean/discard` are now compare-and-swap conditional UPDATEs (rowcount-0 → 200 noop; discard's noop never touches storage). Newly found riding defect fixed: a double clean left `cleaned_render_uri == render_uri` and discard deleted the LIVE render — guarded + red-proven; the false 'R2 lifecycle prefix' docstring corrected. Orphaned-original cleanup hooked into the CAS'd confirm at integration (L143).
+
 **Acceptance**
-- [ ] 409 test mirroring the existing sibling-endpoint tests
-- [ ] Confirm path verified race-safe (test or documented DB-level guarantee)
+- [x] 409 test mirroring the existing sibling-endpoint tests
+- [x] Confirm path verified race-safe (test or documented DB-level guarantee)
 
 ### Issue 469: two duration authorities — audio-derived clamp vs container-derived hard reject
 
@@ -3564,10 +3576,12 @@ this hazard (`candidates.py:357-363`); the live path doesn't handle it.
 render enforces), clamp there, and keep the render check as a safety net that logs loudly instead
 of failing permanently for sub-second overshoots.
 
+**Status: DONE 2026-08-13 (same lane).** ONE duration authority: ingest ffprobe ALWAYS overwrites `video.duration_s` (the YouTube-API integer seed was never corrected before); `container_duration_s` threads generate_clips → score_and_rank → extract/snap with the clamp INSIDE the W2 invariant-repair tail (payoff-cutting clamps hit repair-or-drop); render's hard reject demoted to `_DURATION_OVERSHOOT_EPS_S = 1.0` (sub-second → clamp + warn; ≥1 s → still terminal). >14400 s sources documented at the constant. REST generate/regenerate threading added at wave integration.
+
 **Acceptance**
-- [ ] Candidates clamped against the same duration the render enforces
-- [ ] Sub-second overshoot at render → clamped + logged, not permanent failure (unit test)
-- [ ] > 14400 s source behavior documented (analysis cap vs container)
+- [x] Candidates clamped against the same duration the render enforces
+- [x] Sub-second overshoot at render → clamped + logged, not permanent failure (unit test)
+- [x] > 14400 s source behavior documented (analysis cap vs container)
 
 ### Issue 470: trim/clean leaves stale clip geometry behind the swapped artifact
 
@@ -3583,10 +3597,12 @@ and any re-render/caption pass still use the original window.
 derive and store effective duration + segment map at confirm time) and route every reader through
 it. Interacts with Issue 465 (score semantics) and 468 (race guard) — sequence them.
 
+**Status: DONE 2026-08-13 (W4 final lane, branch `fix/issue-470-effective-geometry`, built on the integrated wave as sequenced — needed 465's score semantics, 468's CAS, 446/471's erasure).** Effective geometry is PERSISTED, not derived (migration 0061, two nullable JSONB columns): `pending_geometry_jsonb` written by the worker in lockstep with `cleaned_render_uri` (the clean path's cut list never exists outside the task, and Issue 391's edit-document clear at confirm kills the edit path's copy — read-time derivation was impossible twice over), and `effective_geometry_jsonb` written at confirm INSIDE the 468 CAS, composed across repeated trims. Duration/transcript/trim-validators read the delivered record; re-render of a confirmed-clean clip stays available (it is the only style-change path) but clears the record and reports `discarded_edits: true`, with `has_baked_edits` on ClipOut so the UI can warn first — honest discard over silent resurrection. 14 unit + 2 integration-lane tests; red proofs: duration readers asserted 40.0 == 20.0 pre-fix.
+
 **Acceptance**
-- [ ] After a trim+confirm, `/transcript`, duration, and captions all reflect the delivered video
+- [x] After a trim+confirm, `/transcript`, duration, and captions all reflect the delivered video
       (integration-lane test)
-- [ ] Re-render of a confirmed-clean clip does not resurrect the pre-trim window
+- [x] Re-render of a confirmed-clean clip does not resurrect the pre-trim window
 
 ### Issue 471: right-to-erasure misses exports, extracted audio, and recap artifacts
 
@@ -3602,10 +3618,12 @@ erasure never touches (audit each write site in `worker/tasks.py` / recap path).
 creator-scoped prefixes, make `erase_creator` enumerate from the DB rather than prefix-guessing.
 Fold into 446's build if that lands first.
 
+**Status: DONE 2026-08-13 (folded into 446's build as directed).** The write-key inventory is CODE now: `worker/erasure.py` KEY_PATTERNS (10 grep-verified patterns) with a sync-gating test; `erase_creator` uses per-URI enumeration ∪ constructed keys (closing renders, `_clean`/`_edit` variants, extracted WAVs, recap renders, and the GDPR export bundle itself — plus a new `exports/{creator_id}/` sweep for superseded bundles) with the old dead `clips/{cid}/` prefix and its known-gap comment deleted. Integration-lane completeness test = the acceptance. `docs/COMPLIANCE.md` rewritten accordingly.
+
 **Acceptance**
-- [ ] Written-key inventory in the issue (grep-verified)
-- [ ] Erasure test (integration lane, mocked storage) asserting every write site's key is covered
-- [ ] `docs/COMPLIANCE.md` updated
+- [x] Written-key inventory in the issue (grep-verified)
+- [x] Erasure test (integration lane, mocked storage) asserting every write site's key is covered
+- [x] `docs/COMPLIANCE.md` updated
 
 ### Batch D — Learning loop (472–475)
 
@@ -3781,11 +3799,13 @@ punch-in and sendcmd chains executed for parse+init (catches Issue 467's class);
 `reframe_seats` through the real mouth-motion → mapping path; (4) a CI step that fails if the
 ffmpeg-gated tests were skipped (count assertion or `--strict-markers`-style guard).
 
+**Status: LEGS 1–2 DONE 2026-08-13 (W4 render lane); leg 3 (reframe_seats consumption) remains open for W5.** Marker renamed `render_env` (the hyphen could never be applied as a decorator — the root defect that kept the lane empty), addopts exclusion fixed, 3 real-media tests (missing ffmpeg FAILS, never skips), and a hard CI step (unconditional apt install + ≥3-collected floor) pinned in `test_ci_config.py`.
+
 **Acceptance**
-- [ ] `pytest -m render-env` selects ≥ 3 tests locally and in CI
-- [ ] Boundary ffprobe test red/green demonstrated by mutating `-ss` handling
+- [x] `pytest -m render-env` selects ≥ 3 tests locally and in CI
+- [x] Boundary ffprobe test red/green demonstrated by mutating `-ss` handling
 - [ ] `reframe_seats` fixtures consumed by a test that computes the mapping from the frames
-- [ ] CI fails when the ffmpeg lane silently skips
+- [x] CI fails when the ffmpeg lane silently skips
 
 ### Issue 479: the gates that never ran — per-module coverage floors, diff-cover, and the pre-push hook
 
@@ -3962,4 +3982,32 @@ re-verify or refresh them.
 - Off-course bugs go to `docs/OFF_COURSE_BUGS.md`, not inline fixes.
 - Close-out updates `docs/PROJECT_STATE.md`; deviations update `docs/DECISIONS.md`.
 - Batch E requires an explicit `[DEC]` before any work begins.
-- Next free issue number: **483**.
+### Issue 483: contain/fit export mode — letterboxed layout with a real background fill (gated on screen-share demand)
+
+**Severity: enhancement — DO NOT BUILD until a beta creator actually uploads screen-share-heavy
+sources or requests it.** Filed 2026-08-13 as the successor to Issue 442's removal.
+
+Issue 442 removed the `background` style because every current render is a speaker-centric
+crop→scale full-bleed at all three aspects — there is never a letterbox, so a fill can do
+nothing. The legitimate use case competitors serve is CONTAIN layouts: screen-share /
+gameplay / slide-heavy sources where cropping to a speaker destroys the content, and the
+full frame is scaled INTO the vertical canvas with bars to fill (Opus "Fit" = opaque padding,
+https://help.opus.pro/docs/article/layout-and-reframing; Descript horizontal-in-vertical
+embedding, https://www.descript.com/blog/article/how-to-make-horizontal-video-vertical).
+
+**Scope when demand appears:** (a) new layout mode `fit` alongside the speaker crop — ffmpeg
+scale + pad (or scale2ref blur underlay), selectable per render and as a kit default; (b)
+background fill becomes a scoped option OF the fit mode only (blur | black | brand color) —
+never a global style key again; (c) auto-suggest fit when camera-region consensus (Issue 443)
+detects a small/absent camera region, i.e. screen-share-dominant content; (d)
+captions/caption_position must respect the padded safe area.
+
+**Acceptance**
+- [ ] Fit render green in the eval harness (setup-start unaffected)
+- [ ] style_learn extended only if the mode key becomes a real kit field
+- [ ] Kit + render API additions covered by the Issue-186/187 test patterns
+- [ ] No virality promise anywhere
+- [ ] Note: reuse of the JSONB key name `background` is acceptable only nested under the
+      fit-mode config, not top-level (old rows carry dead top-level keys)
+
+- Next free issue number: **484**.
