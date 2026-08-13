@@ -163,6 +163,11 @@ async def rerank_with_preference(
     """
     Re-rank an already-scored clip list using the creator's preference model.
     Falls back silently if no model is trained yet (below threshold).
+
+    Issue 465 contract: ``clip.score`` (the DNA/LLM fit composite) is NEVER
+    mutated here. The blend ``(1-w)*fit + w*pref`` is written to
+    ``clip.blended_score`` and drives the sort/rank; a NULL ``blended_score``
+    after this call means personalization was not applied to that clip.
     """
     from preference.features import clip_features
     from preference.model import blend_scores, preference_weight
