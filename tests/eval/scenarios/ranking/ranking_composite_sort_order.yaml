@@ -1,0 +1,19 @@
+scenario: ranking_composite_sort_order
+description: >
+  Composite-sort fixture (Issue 199; renamed by Issue 480): given recorded/stubbed
+  scores — NOT a live Anthropic call — the candidate with the highest COMPOSITE
+  score must rank #1 after the production rank_candidates() sort, with dense ranks
+  in descending score order. This proves the sort only: rank_candidates never reads
+  dna_match, so the DNA→score coupling is NOT exercised here. That coupling has two
+  real gates: the nightly live class-C test (dna_score ordering on an on-brief vs
+  off-brief pair, tests/test_llm_live_scoring.py — Issue 476) and the recorded
+  goldens replay (tests/test_scoring_goldens.py). The trained-preference rerank leg
+  is rerank_preference_flips_order.yaml (Issue 480).
+
+# In a subdir so the geometry scenario glob (scenarios/*.yaml) does not load this —
+# it has no timeline; it is exercised by test_ranking_composite_sort_order.
+candidates:
+  - {id: weak_signal_only, score: 0.41, dna_match: 0.20}
+  - {id: dna_preferred,    score: 0.88, dna_match: 0.91}
+  - {id: mid_fit,          score: 0.55, dna_match: 0.50}
+expected_top_id: dna_preferred
