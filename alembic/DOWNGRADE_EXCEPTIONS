@@ -3,3 +3,4 @@
 # `# rationale` after it. Entries whose downgrade() later becomes real are
 # flagged as STALE and fail CI — keep this list honest.
 0014  # onboarding-state backfill not safely reversible — would re-trigger the Issue 98 banner-stuck bug
+0062  # Issue 472 data repair — deleted rows were pure defects (masking skips that erased labels); recreating them would re-erase the creators' labels
