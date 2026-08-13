@@ -16,4 +16,7 @@ input:
       - {type: energy_spike, start_s: 30.0, end_s: 30.5, value: 0.2}
 
 expected:
-  min_candidates: 0
+  # Issue 477: `min_candidates: 0` was `assert len >= 0` — vacuously true for
+  # ANY output. The scenario's whole claim is that the false peak yields NO
+  # clip, so the assertion is the upper bound.
+  max_candidates: 0

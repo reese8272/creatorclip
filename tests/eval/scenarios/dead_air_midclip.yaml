@@ -20,7 +20,6 @@ input:
 
 expected:
   min_candidates: 1
-  all_setup_before_peak: true
   candidates:
     - peak_s_min: 53.0
       peak_s_max: 60.0

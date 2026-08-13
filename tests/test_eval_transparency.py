@@ -95,3 +95,17 @@ def test_every_scenario_file_is_readable_yaml(path: str) -> None:
         body = fh.read()
     assert body.strip(), f"{path} is empty"
     assert "scenario:" in body, f"{path} has no scenario key"
+
+
+def test_scenario_floor_is_pinned_in_two_places() -> None:
+    """Issue 477: SCENARIO_FLOOR guards deletion but nothing guarded LOWERING it
+    in the same commit as a scenario removal. Pinning the exact value here means
+    a floor change must touch two files — visible in any diff. Raise BOTH
+    together when adding scenarios; lowering is never allowed (the ratchet)."""
+    from tests.test_clip_engine import SCENARIO_FLOOR
+
+    assert SCENARIO_FLOOR == 23, (
+        f"SCENARIO_FLOOR is {SCENARIO_FLOOR}, but this pin says 23. If you ADDED "
+        "scenarios, raise both values in the same commit. If this fails because "
+        "the floor went DOWN, that is exactly the regression this test exists to stop."
+    )

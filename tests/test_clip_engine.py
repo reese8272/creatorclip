@@ -548,15 +548,19 @@ _ALLOWED_EXPECTED_KEYS: dict[str, frozenset[str]] = {
     ),
     "containment": frozenset({"survivors", "max_pairwise_overlap_s", "candidates"}),
     "recap": frozenset(
-        {"max_total_duration_s", "min_segments", "no_overlap", "chronological",
-         "all_principles_named"}
+        {
+            "max_total_duration_s",
+            "min_segments",
+            "no_overlap",
+            "chronological",
+            "all_principles_named",
+        }
     ),
 }
 _ALLOWED_CANDIDATE_KEYS: dict[str, frozenset[str]] = {
     "geometry": frozenset({"peak_s_min", "peak_s_max", "setup_start_s_min", "setup_start_s_max"}),
     "merge": frozenset(
-        {"origin", "setup_start_s_min", "setup_start_s_max", "end_s_min", "end_s_max",
-         "len_s_max"}
+        {"origin", "setup_start_s_min", "setup_start_s_max", "end_s_min", "end_s_max", "len_s_max"}
     ),
     "snap": frozenset({"setup_start_s_min", "setup_start_s_max", "end_s_min", "end_s_max"}),
     "containment": frozenset({"origin", "setup_start_s_min", "setup_start_s_max"}),
@@ -649,8 +653,7 @@ def _assert_scenario(scenario: dict) -> None:
     # and 10 of 15 geometry scenarios never opted in).
     for c in candidates:
         assert c["setup_start_s"] < c["peak_s"], (
-            f"[{scenario['scenario']}] setup_start_s={c['setup_start_s']} "
-            f">= peak_s={c['peak_s']}"
+            f"[{scenario['scenario']}] setup_start_s={c['setup_start_s']} >= peak_s={c['peak_s']}"
         )
 
     # Window overlap / deduplication check
@@ -920,3 +923,90 @@ def test_candidates_keeps_non_overlapping_windows():
     tl = _make_timeline([60.0, 160.0])  # 100s apart — cannot overlap
     candidates = extract_candidates(tl, max_candidates=8)
     assert len(candidates) == 2
+
+
+# ── Issue 477: the runner must reject what it does not read ──────────────────
+
+
+def test_runner_rejects_unknown_expectation_key():
+    """The typo'd-key proof: a scenario carrying an expectation the runner never
+    reads must FAIL at run time, not pass vacuously (the injection_in_transcript
+    failure mode — two dead keys counted toward the floor for weeks)."""
+    scenario = {
+        "scenario": "typo_fixture",
+        "input": {"timeline": {"duration_s": 60.0, "events": []}},
+        "expected": {"mim_candidates": 1},
+    }
+    with pytest.raises(AssertionError, match="mim_candidates"):
+        _assert_scenario(scenario)
+
+
+def test_runner_rejects_unknown_candidate_key():
+    scenario = {
+        "scenario": "typo_fixture",
+        "input": {"timeline": {"duration_s": 60.0, "events": []}},
+        "expected": {"candidates": [{"peek_s_min": 10.0}]},
+    }
+    with pytest.raises(AssertionError, match="peek_s_min"):
+        _assert_scenario(scenario)
+
+
+def test_runner_rejects_unknown_kind():
+    scenario = {
+        "scenario": "typo_fixture",
+        "kind": "geometri",
+        "input": {"timeline": {"duration_s": 60.0, "events": []}},
+        "expected": {},
+    }
+    with pytest.raises(AssertionError, match="geometri"):
+        _assert_scenario(scenario)
+
+
+def test_runner_rejects_unknown_window_subkey():
+    scenario = {
+        "scenario": "typo_fixture",
+        "input": {"timeline": {"duration_s": 60.0, "events": []}},
+        "expected": {
+            "max_candidates_in_window": {"window_start_s": 0, "window_end_s": 10, "mox": 1}
+        },
+    }
+    with pytest.raises(AssertionError, match="mox"):
+        _assert_scenario(scenario)
+
+
+def test_runner_enforces_setup_before_peak_unconditionally():
+    """The invariant must hold with NO opt-in key — a scenario cannot forget it
+    (10 of 15 geometry scenarios never opted in before Issue 477)."""
+    tl = _make_timeline([90.0])
+    candidates = extract_candidates(tl, max_candidates=8)
+    assert candidates, "fixture must produce a candidate"
+    # Sanity: the runner path itself asserts it for every scenario; here we pin
+    # that the key is not even accepted, so it cannot quietly return as opt-in.
+    assert "all_setup_before_peak" not in _ALLOWED_EXPECTED_KEYS["geometry"]
+    with pytest.raises(AssertionError, match="all_setup_before_peak"):
+        _assert_scenario(
+            {
+                "scenario": "opt_in_returned",
+                "input": {"timeline": tl},
+                "expected": {"all_setup_before_peak": True},
+            }
+        )
+
+
+def test_runner_one_to_one_matching_rejects_double_satisfaction():
+    """Two expectations may not both be satisfied by ONE candidate: the second
+    expectation must consume a different candidate (and fail if none fits)."""
+    tl = _make_timeline([90.0])  # exactly one candidate
+    with pytest.raises(AssertionError, match="no candidate left|<|>"):
+        _assert_scenario(
+            {
+                "scenario": "double_match",
+                "input": {"timeline": tl},
+                "expected": {
+                    "candidates": [
+                        {"peak_s_min": 88.0, "peak_s_max": 92.0},
+                        {"peak_s_min": 88.0, "peak_s_max": 92.0},
+                    ]
+                },
+            }
+        )

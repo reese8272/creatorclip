@@ -21,7 +21,8 @@ input:
 
 expected:
   min_candidates: 2
-  all_setup_before_peak: true
+  # Issue 477: flood bound — exactly two beats exist; a third clip is spurious.
+  max_candidates: 2
   candidates:
     - peak_s_min: 56.0
       peak_s_max: 64.0
