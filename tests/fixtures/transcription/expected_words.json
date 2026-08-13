@@ -1,0 +1,93 @@
+{
+  "audio": "librispeech_1089-134691-0001_16k.wav",
+  "duration_s": 5.415,
+  "reference_transcript": "FOR A FULL HOUR HE HAD PACED UP AND DOWN WAITING BUT HE COULD WAIT NO LONGER",
+  "tolerance_s": 0.25,
+  "words": [
+    {
+      "word": "for",
+      "start": 0.16,
+      "end": 0.56
+    },
+    {
+      "word": "a",
+      "start": 0.56,
+      "end": 0.71999997
+    },
+    {
+      "word": "full",
+      "start": 0.71999997,
+      "end": 0.96
+    },
+    {
+      "word": "hour",
+      "start": 0.96,
+      "end": 1.36
+    },
+    {
+      "word": "he",
+      "start": 1.36,
+      "end": 1.4399999
+    },
+    {
+      "word": "had",
+      "start": 1.4399999,
+      "end": 1.5999999
+    },
+    {
+      "word": "paced",
+      "start": 1.5999999,
+      "end": 2.0
+    },
+    {
+      "word": "up",
+      "start": 2.0,
+      "end": 2.1599998
+    },
+    {
+      "word": "and",
+      "start": 2.1599998,
+      "end": 2.32
+    },
+    {
+      "word": "down",
+      "start": 2.32,
+      "end": 2.56
+    },
+    {
+      "word": "waiting",
+      "start": 2.56,
+      "end": 3.36
+    },
+    {
+      "word": "but",
+      "start": 3.4399998,
+      "end": 3.6
+    },
+    {
+      "word": "he",
+      "start": 3.6,
+      "end": 3.76
+    },
+    {
+      "word": "could",
+      "start": 3.76,
+      "end": 3.9199998
+    },
+    {
+      "word": "wait",
+      "start": 3.9199998,
+      "end": 4.24
+    },
+    {
+      "word": "no",
+      "start": 4.24,
+      "end": 4.48
+    },
+    {
+      "word": "longer",
+      "start": 4.48,
+      "end": 4.88
+    }
+  ]
+}
