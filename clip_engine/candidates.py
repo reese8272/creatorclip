@@ -24,10 +24,18 @@ POST_PEAK_S = 20.0  # seconds to include after peak
 MIN_CLIP_S = 30.0  # clips shorter than this are discarded
 _NMS_IOU_THRESHOLD = 0.5  # IoU above which a lower-prominence candidate is suppressed
 _PEAK_PROMINENCE = 0.5  # find_peaks prominence floor shared by detection + skip-reason paths
+# Positive-evidence floor (Issue 458): prominence alone is RELATIVE — a flat 0
+# stretch between two -0.5 silences carries prominence 0.5 with no positive
+# signal at all, fabricating clips from nothing. scipy ANDs the absolute
+# `height` condition with prominence, so a peak must also carry real positive
+# mass. 0.25 sits far below the weakest genuine eval-fixture peak (1.35,
+# interrupted_setup) and above the all-zero floor.
+_PEAK_MIN_HEIGHT = 0.25
 
 # Named reasons a video produces no clips — each maps to a CLIPPING_PRINCIPLES.md principle.
 # These are the ONLY valid skip-reason strings; callers and tests should compare against these.
 SKIP_REASON_NO_SIGNAL = "no_signal_above_threshold"
+SKIP_REASON_NO_POSITIVE_SIGNAL = "no_positive_signal"
 SKIP_REASON_NO_RETENTION_DATA = "insufficient_retention_data"
 SKIP_REASON_SOURCE_UNAVAILABLE = "source_unavailable"
 SKIP_REASON_ALL_SUPPRESSED = "all_candidates_suppressed_by_nms"
@@ -39,6 +47,12 @@ _SKIP_REASON_LABELS: dict[str, str] = {
         "No engagement signal reached the detection threshold "
         "(Principle #6: Retention curve is ground truth — "
         "this video lacks the data density needed to locate a setup)."
+    ),
+    SKIP_REASON_NO_POSITIVE_SIGNAL: (
+        "No positive engagement signal was detected — the timeline contains only "
+        "silence or flat audio, so there is no moment to anchor a clip to "
+        "(Principle #6: Retention curve is ground truth — "
+        "a setup needs positive evidence, not the absence of sound)."
     ),
     SKIP_REASON_NO_RETENTION_DATA: (
         "Insufficient retention data to identify a setup window "
@@ -193,6 +207,7 @@ def _detect_peaks(timeline: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, d
         signal,
         distance=min_distance_samples,
         prominence=_PEAK_PROMINENCE,
+        height=_PEAK_MIN_HEIGHT,
     )
     return times, signal, peak_indices, properties
 
@@ -205,9 +220,11 @@ def derive_skip_reason(
 
     Priority order (first match wins):
       1. source_unavailable — caller tells us no stored media exists
-      2. no_signal_above_threshold — peak detection found nothing (signal too flat / short video)
-      3. insufficient_retention_data — timeline has no retention_spike events at all
-      4. all_candidates_suppressed_by_nms — peaks found but all suppressed by IoU overlap
+      2. no_signal_above_threshold — timeline empty / zero duration (no signal array)
+      3. no_positive_signal — the composite carries no positive mass at all
+         (silence-only or all-zero timelines; Issue 458)
+      4. insufficient_retention_data — timeline has no retention_spike events at all
+      5. all_candidates_suppressed_by_nms — peaks found but all suppressed by IoU overlap
 
     Used by routers/clips.py to populate ClipListOut.skip_reason so the creator
     gets an honest, principle-grounded explanation instead of a silent empty list.
@@ -219,6 +236,12 @@ def derive_skip_reason(
     _, signal, peak_indices, _ = _detect_peaks(timeline)
     if len(signal) == 0:
         return SKIP_REASON_NO_SIGNAL
+
+    # Issue 458: checked BEFORE the retention branch — a timeline whose composite
+    # never rises above zero has no positive evidence anywhere; "insufficient
+    # retention data" would misdiagnose it as a data-availability problem.
+    if float(signal.max()) <= 0.0:
+        return SKIP_REASON_NO_POSITIVE_SIGNAL
 
     if len(peak_indices) == 0:
         # No peaks — check whether there are any retention events at all to help
