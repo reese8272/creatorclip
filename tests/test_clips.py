@@ -324,9 +324,7 @@ def test_list_clips_carries_download_and_publication_state_without_n_plus_1(clie
         # Three executes TOTAL for a two-clip list: get_owned(Video), the clip
         # select, and ONE publications aggregate (load_latest is patched out).
         # A per-clip lookup would exhaust this side_effect list and error.
-        session.execute = AsyncMock(
-            side_effect=[owned_result(video), clips_result, pubs_result]
-        )
+        session.execute = AsyncMock(side_effect=[owned_result(video), clips_result, pubs_result])
         yield session
 
     app.dependency_overrides[get_current_creator] = lambda: creator

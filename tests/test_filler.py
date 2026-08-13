@@ -435,7 +435,6 @@ def test_clean_confirm_swap_is_a_conditional_update(client):
     so two concurrent confirms (or confirm-vs-discard) cannot double-swap. The
     swap also clears ``downloaded_at`` (Issue 447): the current render changed."""
     import uuid as _uuid
-    from unittest.mock import AsyncMock
 
     from auth import get_current_creator
     from db import get_session
@@ -453,9 +452,7 @@ def test_clean_confirm_swap_is_a_conditional_update(client):
 
     doc_clear = MagicMock()
     doc_clear.first.return_value = (4,)
-    session_factory, captured = _confirm_session_factory(
-        clip, MagicMock(rowcount=1), [doc_clear]
-    )
+    session_factory, captured = _confirm_session_factory(clip, MagicMock(rowcount=1), [doc_clear])
 
     app.dependency_overrides[get_current_creator] = lambda: creator
     app.dependency_overrides[get_session] = session_factory
