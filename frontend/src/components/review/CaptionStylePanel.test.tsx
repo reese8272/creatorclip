@@ -29,7 +29,6 @@ vi.mock('@/lib/taskStream', () => ({
 
 const kit: BrandKit = {
   subtitle: 'bold_pop',
-  background: null,
   captions_enabled: true,
   zoom_on_peak: false,
   denoise: false,

@@ -39,7 +39,7 @@ def test_dominant_style_exceeds_threshold_returns_value() -> None:
 
 def test_dominant_style_skips_missing_field() -> None:
     # 4 rows have the field, 4 rows don't — only 4 actual occurrences
-    history = [{"subtitle": "bold_pop"}] * 4 + [{"background": "blur"}] * 4
+    history = [{"subtitle": "bold_pop"}] * 4 + [{"aspect": "1:1"}] * 4
     assert dominant_style(history, "subtitle", threshold=5) is None
 
 
@@ -71,13 +71,13 @@ def test_style_suggestion_empty_history_returns_none() -> None:
 
 def test_style_suggestion_sparse_history_returns_none() -> None:
     """With < threshold occurrences of any value, no suggestion is made."""
-    history = [{"subtitle": "bold_pop"}] * 3 + [{"background": "blur"}] * 3
+    history = [{"subtitle": "bold_pop"}] * 3 + [{"aspect": "1:1"}] * 3
     assert style_suggestion(history, threshold=5) is None
 
 
 def test_style_suggestion_returns_first_dominant_field() -> None:
-    """subtitle comes before background in _KIT_FIELDS — should be returned first."""
-    history = [{"subtitle": "minimal", "background": "blur"}] * 6
+    """subtitle comes before aspect in _KIT_FIELDS — should be returned first."""
+    history = [{"subtitle": "minimal", "aspect": "1:1"}] * 6
     result = style_suggestion(history, threshold=5)
     assert result is not None
     assert result["field"] == "subtitle"
@@ -85,14 +85,13 @@ def test_style_suggestion_returns_first_dominant_field() -> None:
     assert result["count"] == 6
 
 
-def test_style_suggestion_returns_background_when_subtitle_absent() -> None:
-    """When subtitle has no dominant, fall through to background."""
+def test_style_suggestion_never_proposes_background() -> None:
+    """Issue 442 resurrection guard: "background" was removed end-to-end, but
+    historical clip.style_preset rows still carry it. The suggester must never
+    propose the dead key — the accept endpoint writes ANY suggested field into
+    the kit verbatim, so a background suggestion would resurrect it."""
     history = [{"background": "blur"}] * 7
-    result = style_suggestion(history, threshold=5)
-    assert result is not None
-    assert result["field"] == "background"
-    assert result["value"] == "blur"
-    assert result["count"] == 7
+    assert style_suggestion(history, threshold=5) is None
 
 
 def test_style_suggestion_custom_threshold() -> None:

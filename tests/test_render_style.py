@@ -64,7 +64,6 @@ def test_render_endpoint_accepts_style_body(client):
                 f"/clips/{clip.id}/render",
                 json={
                     "subtitle": "white_large",
-                    "background": "blur",
                     "captions_enabled": False,
                     "zoom_on_peak": True,
                 },
@@ -77,6 +76,38 @@ def test_render_endpoint_accepts_style_body(client):
     # The opt-in punch-in flag (Issue 184) must persist onto the clip's style_preset
     # (the endpoint merges the body into clip.style_preset before enqueuing).
     assert (clip.style_preset or {}).get("zoom_on_peak") is True
+
+
+def test_render_endpoint_rejects_removed_background_key(client):
+    """Issue 442: the never-implemented "background" style is removed end-to-end.
+
+    RenderStyleIn carries extra="forbid", so a body still sending the dead key
+    is a hard 422 — DELIBERATE: the SPA deploys together with the API, so the
+    only senders of "background" post-deploy are stale scripts, which should
+    fail loudly rather than have their intent silently dropped.
+    """
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session(clip)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        try:
+            resp = client.post(
+                f"/clips/{clip.id}/render",
+                json={"background": "blur"},
+                cookies={"session": "x"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 422
+    mock_task.delay.assert_not_called()
 
 
 def test_render_endpoint_no_style_body_still_works(client):
@@ -124,7 +155,7 @@ def test_render_endpoint_resets_done_clip_for_rerender(client):
         try:
             resp = client.post(
                 f"/clips/{clip.id}/render",
-                json={"background": "blur"},
+                json={"aspect": "1:1"},
                 cookies={"session": "x"},
             )
         finally:
@@ -135,7 +166,7 @@ def test_render_endpoint_resets_done_clip_for_rerender(client):
     # as the merged style, then the task is enqueued.
     assert clip.render_status == RenderStatus.pending
     assert clip.render_uri is None
-    assert clip.style_preset == {"subtitle": "bold_pop", "background": "blur"}
+    assert clip.style_preset == {"subtitle": "bold_pop", "aspect": "1:1"}
     mock_task.delay.assert_called_once_with(str(clip.id))
 
 

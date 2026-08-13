@@ -22,11 +22,6 @@ const ASPECT_OPTIONS: SelectOption[] = [
   { value: '1:1', label: '1:1 — square' },
   { value: '16:9', label: '16:9 — horizontal' },
 ]
-const BACKGROUND_OPTIONS: SelectOption[] = [
-  { value: '', label: 'Default (black)' },
-  { value: 'blur', label: 'Blur' },
-  { value: 'black', label: 'Black' },
-]
 // Issue 427 — where the captions sit in the frame. Default keeps them in the
 // lower band, below the speaker's face and above the Shorts UI overlays.
 const POSITION_OPTIONS: SelectOption[] = [
@@ -55,7 +50,6 @@ const SSE_CAP_MESSAGE = 'too many open streams'
 export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
   const queryClient = useQueryClient()
   const [subtitle, setSubtitle] = useState('')
-  const [background, setBackground] = useState('')
   const [captionsEnabled, setCaptionsEnabled] = useState(false)
   const [zoomOnPeak, setZoomOnPeak] = useState(false)
   const [denoise, setDenoise] = useState(false)
@@ -95,7 +89,6 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
     api<BrandKit>('/creators/me/brand-kit')
       .then((kit) => {
         setSubtitle(kit.subtitle ?? '')
-        setBackground(kit.background ?? '')
         setCaptionsEnabled(kit.captions_enabled)
         setZoomOnPeak(kit.zoom_on_peak)
         setDenoise(kit.denoise)
@@ -114,7 +107,6 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
         method: 'POST',
         body: {
           subtitle: subtitle || null,
-          background: background || null,
           captions_enabled: captionsEnabled,
           zoom_on_peak: zoomOnPeak,
           denoise: denoise,
@@ -167,17 +159,6 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
           value={captionPosition}
           onValueChange={setCaptionPosition}
           options={POSITION_OPTIONS}
-          size="sm"
-          className="w-[62%]"
-        />
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <label htmlFor="caption-background">Background fill</label>
-        <Select
-          id="caption-background"
-          value={background}
-          onValueChange={setBackground}
-          options={BACKGROUND_OPTIONS}
           size="sm"
           className="w-[62%]"
         />

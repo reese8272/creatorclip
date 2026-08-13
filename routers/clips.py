@@ -228,7 +228,6 @@ class RenderStyleIn(BaseModel):
     # (Issue-119 legacy keys white_large/yellow_impact/captions_sm were drawtext
     # placeholders that drew empty text; removed in Issue 133.)
     subtitle: str | None = None
-    background: str | None = None  # "blur" | "black" | null
     captions_enabled: bool | None = None
     zoom_on_peak: bool | None = None  # opt-in punch-in at peak (Issue 184)
     denoise: bool | None = None  # opt-in noise reduction (Issue 185)
@@ -911,7 +910,7 @@ async def render_clip(
 
     Accepts an optional style body (Issue 119). When present, persists the
     chosen style on the clip and passes it to the render task so the worker
-    can apply subtitle / background filters.
+    can apply subtitle / style filters.
     """
     await check_positive_balance(creator.id, session)
 

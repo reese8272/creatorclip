@@ -3487,7 +3487,7 @@ async def _poll_clip_outcomes_async() -> None:
 async def _brand_kit_style(session: Any, creator_id: uuid.UUID) -> dict:
     """Return the creator's saved brand-kit render style, or ``{}`` if none.
 
-    Used to seed auto-rendered clips (auto-render) so captions / aspect / background
+    Used to seed auto-rendered clips (auto-render) so captions / aspect
     match the creator's chosen style without a manual pick. Mirrors the brand-kit
     read in ``routers/clips.py::render_clip``; a copy is returned so the caller can
     assign it onto a clip without aliasing the ORM-tracked ``CreatorStyle.style``.
