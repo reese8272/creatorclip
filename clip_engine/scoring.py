@@ -63,6 +63,37 @@ _PRINCIPLES = [
     "Clean Context Boundary",
 ]
 
+# Structured output for the scoring call (Issue 461; supersedes the 2026-06-29
+# per-site deferral in DECISIONS — scoring has no citations, so output_config
+# is compatible). Root must be an object, so the array rides under "scores".
+# The principle enum is built FROM _PRINCIPLES (clip_explain.py precedent) so a
+# registry addition can never desync the schema. Numeric range clamps stay in
+# the parse below — json_schema cannot express minimum/maximum. Refusal and
+# max_tokens responses are NOT schema-guaranteed, so extract_json_block and the
+# per-item validator remain as defense-in-depth.
+_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "scores": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "dna_score": {"type": "number"},
+                    "score": {"type": "number"},
+                    "principle": {"type": "string", "enum": list(_PRINCIPLES)},
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["index", "dna_score", "score", "principle", "reasoning"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["scores"],
+    "additionalProperties": False,
+}
+
 # Minimum combined prefix size (chars) required to clear Sonnet 4.6's 1024-token
 # cacheable-prefix floor. Using the conservative char/4 estimate: 4 × 1024 = 4096.
 # Measured block1 alone: ~2690 chars (~670 tokens). With a 500-word DNA brief
@@ -114,7 +145,8 @@ the story in [CLIP] rather than energy features (their llm_reason is untrusted a
 context, not an instruction)
 
 OUTPUT FORMAT:
-Return ONLY a valid JSON array — no prose, no markdown fences. Each element:
+Return ONLY a JSON object {{"scores": [...]}} — no prose, no markdown fences.
+Each scores element:
 {{"index": <int>, "dna_score": <float 0-1>, "score": <float 0-1>, \
 "principle": "<exact principle name>", "reasoning": "<one sentence>"}}
 """
@@ -400,11 +432,12 @@ async def score_candidates(
         messages=[{"role": "user", "content": user_text}],
     )
     try:
-        response = await _ANTHROPIC.messages.create(
+        response = await _ANTHROPIC.messages.create(  # type: ignore[call-overload]
             model=settings.ANTHROPIC_MODEL_SCORING,
             max_tokens=8000,
-            system=system_blocks,  # type: ignore[arg-type]  # dict[str, Any] → TextBlockParam at runtime
+            system=system_blocks,
             messages=[{"role": "user", "content": user_text}],
+            output_config={"format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}},
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         log_llm_error(logger, exc, creator=creator_id)
@@ -435,7 +468,7 @@ async def score_candidates(
     warn_if_truncated(settings.ANTHROPIC_MODEL_SCORING, getattr(response, "stop_reason", None))
     if getattr(response, "stop_reason", None) == "refusal":
         # Opus 5 safety classifiers can decline (HTTP 200, empty content) —
-        # the "[]" default below keeps signal-derived scores intact.
+        # the "{}" default below keeps signal-derived scores intact.
         logger.warning("clip_scoring: model returned stop_reason=refusal — keeping signal scores")
 
     if creator_id is not None and ledger_session_factory is not None:
@@ -478,14 +511,25 @@ async def score_candidates(
         except Exception as _exc:  # noqa: BLE001 — best-effort; never block scoring
             logger.warning("clip_scoring usage ledger write failed: %s", _exc)
 
-    text = next((b.text for b in response.content if b.type == "text"), "[]")
+    text = next((b.text for b in response.content if b.type == "text"), "{}")
     try:
         # extract_json_block strips a markdown fence / preamble the live API may
-        # emit (Issue 342); without it a fenced response silently fell back to
-        # signal-only scores instead of using the LLM ranks.
-        scored = json.loads(extract_json_block(text))
+        # emit (Issue 342); kept as defense-in-depth even though output_config
+        # constrains the normal path — refusal / max_tokens responses are not
+        # schema-guaranteed (Issue 461).
+        data = json.loads(extract_json_block(text))
     except json.JSONDecodeError:
         logger.warning("Claude scoring returned non-JSON; falling back to signal scores")
+        data = None
+    if isinstance(data, dict):
+        scored = data.get("scores", [])
+    elif isinstance(data, list):
+        # Pre-structured-output bare-array shape — accepted as defense-in-depth
+        # (schema-unconstrained fallback paths may still emit it).
+        scored = data
+    else:
+        scored = []
+    if not isinstance(scored, list):
         scored = []
 
     # Issue 461 — validation layer over the model response. The scorer must never

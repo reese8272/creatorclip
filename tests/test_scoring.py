@@ -30,9 +30,11 @@ def _candidate(setup=10.0, peak=60.0, end=80.0):
 
 
 def _mock_claude_response(scores: list[dict]) -> MagicMock:
+    # Issue 461: structured output constrains the response to the root-object
+    # wrapper {"scores": [...]} — fixtures mirror the schema-guaranteed shape.
     block = MagicMock()
     block.type = "text"
-    block.text = json.dumps(scores)
+    block.text = json.dumps({"scores": scores})
     usage = MagicMock()
     usage.input_tokens = 300
     usage.output_tokens = 150
@@ -669,3 +671,61 @@ async def test_score_candidates_accepts_string_index():
 
     assert result[0]["score"] == pytest.approx(0.85)
     assert result[0]["principle"] == "Hook in the first 3 seconds"
+
+
+# ── Issue 461: structured output (output_config.format) ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_sends_structured_output_schema():
+    """The scoring call must request structured output (output_config.format,
+    json_schema) with a root-object wrapper {"scores": [...]} and a principle
+    enum built FROM the _PRINCIPLES registry — a hand-listed enum would desync
+    on the next registry addition. (Issue 461; supersedes the 2026-06-29
+    scoring deferral in DECISIONS.)
+    """
+    from clip_engine.scoring import _OUTPUT_SCHEMA, _PRINCIPLES
+
+    candidates = [_candidate()]
+    mock_resp = _mock_claude_response(
+        [{"index": 0, "score": 0.7, "principle": "Loop-ability", "reasoning": "x"}]
+    )
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    output_config = mock_client.messages.create.call_args.kwargs.get("output_config")
+    assert output_config == {"format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}}
+    item_schema = _OUTPUT_SCHEMA["properties"]["scores"]["items"]
+    assert item_schema["properties"]["principle"]["enum"] == list(_PRINCIPLES), (
+        "the principle enum must be built from _PRINCIPLES — registry additions "
+        "must not desync the schema"
+    )
+    assert item_schema["additionalProperties"] is False
+    assert _OUTPUT_SCHEMA["additionalProperties"] is False
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_accepts_legacy_bare_array():
+    """Defense-in-depth: refusal / max_tokens paths are NOT schema-guaranteed,
+    so the parse still accepts the pre-structured-output bare-array shape
+    (also keeps out-of-file fixtures like test_style_distill green).
+    """
+    candidates = [_candidate(setup=10.0, peak=60.0, end=80.0)]
+    block = MagicMock()
+    block.type = "text"
+    block.text = json.dumps(
+        [{"index": 0, "score": 0.85, "principle": "Loop-ability", "reasoning": "x"}]
+    )
+    resp = MagicMock()
+    resp.content = [block]
+    resp.usage = MagicMock(input_tokens=10, output_tokens=5)
+    del resp.usage.cache_read_input_tokens
+    del resp.usage.cache_creation_input_tokens
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=resp)
+        result = await score_candidates(candidates, _timeline(), dna_brief="dna")
+
+    assert result[0]["score"] == pytest.approx(0.85)
+    assert result[0]["principle"] == "Loop-ability"
