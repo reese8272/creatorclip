@@ -292,14 +292,32 @@ _DRILLS = {
 }
 
 
+async def _run_drills(names: list[str]) -> None:
+    """Run every selected drill on ONE event loop.
+
+    This must not become `asyncio.run()` per drill again. `get_redis_client()`
+    returns a process-wide singleton whose connection pool binds to the loop that
+    created it, so a second loop reusing it dies with::
+
+        RuntimeError: got Future <Future pending> attached to a different loop
+
+    That is exactly what happened on run 31722583316: `spend-trip` created the
+    client inside its own loop, then `rate-limit` — a fresh loop — inherited it
+    and blew up before its first probe. The bug was invisible while only one
+    drill touched Redis, and reordering the drills would have surfaced it just
+    as well. One loop for all drills removes the whole class.
+    """
+    for name in names:
+        log.info("=== drill: %s ===", name)
+        await _DRILLS[name]()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Stage-A staging drills.")
     parser.add_argument("drill", choices=[*_DRILLS, "all"])
     which = parser.parse_args().drill
     names = list(_DRILLS) if which == "all" else [which]
-    for name in names:
-        log.info("=== drill: %s ===", name)
-        asyncio.run(_DRILLS[name]())
+    asyncio.run(_run_drills(names))
     log.info("ALL DRILLS PASSED: %s", ", ".join(names))
     return 0
 
