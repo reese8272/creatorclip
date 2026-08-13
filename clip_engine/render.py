@@ -68,6 +68,14 @@ _DEFAULT_FORMAT = "9:16"
 # Default 9:16 dimensions, kept for callers/tests that reference them directly.
 _OUTPUT_W, _OUTPUT_H = OUTPUT_PRESETS[_DEFAULT_FORMAT]
 
+# Sub-second tolerance for end_s overshooting the render-time container probe
+# (Issue 469). The candidate pipeline clamps against the ingest-probed
+# container duration; a second probe of the same file can differ by a rounding
+# hair on VFR sources (muxer duration vs stream duration). Below this, clamp
+# and warn; at or above it the persisted geometry is genuinely wrong → the
+# ValueError stays terminal.
+_DURATION_OVERSHOOT_EPS_S = 1.0
+
 
 # ffmpeg stderr signatures of filtergraph configuration/parse errors (Issue 467).
 # These are deterministic — the same argv fails identically on every attempt — so
@@ -552,9 +560,26 @@ def render_clip_file(
         raise ValueError(f"start_s must be non-negative, got {start_s}")
     src_dur = _source_duration_s(source_path)
     if src_dur < float("inf") and end_s > src_dur:
-        raise ValueError(
-            f"end_s {end_s}s exceeds source duration {src_dur:.3f}s for {source_path.name}"
-        )
+        # Issue 469: candidates are clamped against the ingest-probed container
+        # duration, but a render-time re-probe can disagree by a rounding hair
+        # (VFR sources, muxer vs stream duration). Sub-epsilon overshoot →
+        # clamp + warn; anything larger means genuinely wrong geometry → still
+        # terminal (ValueError is permanent in render_clip).
+        overshoot = end_s - src_dur
+        if overshoot < _DURATION_OVERSHOOT_EPS_S:
+            logger.warning(
+                "duration_overshoot_clamped: end_s %.3f s exceeds container %.3f s by "
+                "%.3f s for %s — clamping to the container",
+                end_s,
+                src_dur,
+                overshoot,
+                source_path.name,
+            )
+            end_s = src_dur
+        else:
+            raise ValueError(
+                f"end_s {end_s}s exceeds source duration {src_dur:.3f}s for {source_path.name}"
+            )
     duration = end_s - start_s
     if duration <= 0:
         raise ValueError(f"Invalid clip range: {start_s}s–{end_s}s")

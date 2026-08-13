@@ -4,6 +4,7 @@ Unit tests for clip_engine/render.py.
 ffmpeg / ffprobe / cv2 calls are patched — no video files needed.
 """
 
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -547,6 +548,136 @@ def test_no_punch_in_when_peak_outside_window(tmp_path):
     # peak_s=200 → offset 190s > 60s clip duration → skipped.
     vf = _render_vf(tmp_path, style_preset={"zoom_on_peak": True}, peak_s=200.0)
     assert _PUNCH_MARKER not in vf
+
+
+# ── Issue 469: ONE duration authority (ingest probe → candidates → render) ────
+# These tests live in the render lane's file for W4: the natural homes
+# (tests/test_worker_pipeline.py, tests/test_sentence_snap.py) are owned by
+# sibling lanes this wave.
+
+
+def test_probed_duration_always_overwrites_youtube_seed():
+    """link_video seeds duration_s from YouTube's ISO-8601 INTEGER seconds
+    (routers/videos.py) and nothing ever corrected it. The ffprobe container
+    duration is the ONE authority the render enforces (Issue 469), so the
+    ingest probe must overwrite a non-empty row, not only fill an empty one."""
+    from types import SimpleNamespace
+
+    from models import VideoKind
+    from worker.tasks import _apply_probed_duration
+
+    video = SimpleNamespace(duration_s=180.0, kind=VideoKind.short)
+    _apply_probed_duration(video, 200.6)  # type: ignore[arg-type]
+    assert video.duration_s == 200.6
+    assert video.kind == VideoKind.long  # reclassified alongside (probe > 180s cap)
+
+
+def test_vfr_container_shorter_than_audio_clamps_candidates():
+    """VFR-shaped source (Issue 469): the librosa audio timeline runs to 120 s
+    but the ffprobe container — the duration the render enforces — is 100 s.
+    Candidate end_s must be clamped to the container, and a clamp that strands
+    the peak outside the window must fall through W2's repair-or-drop (456)."""
+    from clip_engine.sentence_snap import snap_candidates_to_sentences
+
+    def _seg(start, end, specs):
+        return {
+            "start": start,
+            "end": end,
+            "text": " ".join(w for w, _, _ in specs),
+            "words": [{"word": w, "start": s, "end": e} for w, s, e in specs],
+        }
+
+    segments = [
+        _seg(0.0, 29.5, [("Intro", 0.0, 0.5), ("beat.", 0.6, 29.5)]),
+        _seg(30.0, 110.0, [("Main", 30.0, 30.5), ("beat.", 30.6, 110.0)]),
+    ]
+    candidates = [
+        # Peak inside the container: survives with end clamped to 100.
+        {"setup_start_s": 30.0, "start_s": 20.0, "peak_s": 80.0, "end_s": 108.0},
+        # Peak past the container: no window inside 100 s can hold the 456
+        # invariant → repair cannot restore it → dropped, never persisted.
+        {"setup_start_s": 30.0, "start_s": 20.0, "peak_s": 105.0, "end_s": 108.0},
+    ]
+
+    out = snap_candidates_to_sentences(
+        [dict(c) for c in candidates], segments, duration_s=120.0, container_duration_s=100.0
+    )
+    assert len(out) == 1
+    assert out[0]["peak_s"] == 80.0
+    assert out[0]["end_s"] <= 100.0  # never past what the render will accept
+    # Issue 456 invariant holds on the survivor.
+    assert out[0]["setup_start_s"] + 0.1 <= out[0]["peak_s"] <= out[0]["end_s"] - 0.1
+
+    # Without the container the audio timeline alone would let end_s run to
+    # 110 s — the geometry the render used to hard-reject (the 469 defect).
+    unthreaded = snap_candidates_to_sentences(
+        [dict(candidates[0])], segments, duration_s=120.0
+    )
+    assert unthreaded[0]["end_s"] == 110.0
+
+
+def test_probed_duration_boundary_and_failure_behavior():
+    """classify_video_kind is `<= SHORTS_MAX_DURATION_S → short` (boundary
+    pinned); a failed probe (None/0) must never null out an existing value."""
+    from types import SimpleNamespace
+
+    from models import VideoKind
+    from worker.tasks import _apply_probed_duration
+
+    video = SimpleNamespace(duration_s=200.0, kind=VideoKind.long)
+    _apply_probed_duration(video, 180.0)  # type: ignore[arg-type]
+    assert video.duration_s == 180.0
+    assert video.kind == VideoKind.short  # exactly at the cap → short (<=)
+
+    _apply_probed_duration(video, None)  # type: ignore[arg-type]
+    assert video.duration_s == 180.0  # probe failure → keep the last good value
+    assert video.kind == VideoKind.short
+
+
+def _render_against_container(tmp_path, *, src_dur: float, end_s: float) -> list[list[str]]:
+    """Run render_clip_file with the container probe pinned to ``src_dur``.
+
+    Returns every captured subprocess argv (the render cmd carries ``-t``).
+    """
+    import numpy as np
+
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    captured: list[list[str]] = []
+
+    def _fake(cmd, **kwargs):
+        captured.append(cmd)
+        return MagicMock(returncode=0, stdout="1920,1080\n", stderr="")
+
+    with (
+        patch("clip_engine.render._source_duration_s", return_value=src_dur),
+        patch("subprocess.run", side_effect=_fake),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        render_clip_file(src, start_s=0.0, end_s=end_s, out_path=out)
+    return captured
+
+
+def test_subsecond_container_overshoot_clamps_and_renders(tmp_path, caplog):
+    """end_s 10.4 vs a 10.0 s container: a rounding-hair overshoot must clamp
+    to the container and render — not become a permanent ValueError failure
+    (Issue 469). The clamped duration reaches ffmpeg's -t."""
+    with caplog.at_level(logging.WARNING, logger="clip_engine.render"):
+        captured = _render_against_container(tmp_path, src_dur=10.0, end_s=10.4)
+    render_cmd = next(c for c in captured if "-vf" in c)
+    assert render_cmd[render_cmd.index("-t") + 1] == "10.0"
+    assert "duration_overshoot_clamped" in caplog.text
+
+
+def test_full_second_container_overshoot_still_raises(tmp_path):
+    """end_s 11.5 vs a 10.0 s container (≥ 1.0 s overshoot) means the persisted
+    geometry is genuinely wrong — still terminal."""
+    with pytest.raises(ValueError, match="exceeds source duration"):
+        _render_against_container(tmp_path, src_dur=10.0, end_s=11.5)
 
 
 # ── Camera-region pre-crop (Issue 430) ───────────────────────────────────────

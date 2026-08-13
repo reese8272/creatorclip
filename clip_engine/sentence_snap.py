@@ -366,6 +366,7 @@ def snap_candidates_to_sentences(
     duration_s: float,
     *,
     max_len_s: float = CLIP_TARGET_MAX_S,
+    container_duration_s: float | None = None,
 ) -> list[dict]:
     """Snap every candidate's edges to sentence boundaries, holding invariants.
 
@@ -383,6 +384,14 @@ def snap_candidates_to_sentences(
     backward snap bound, and the end repair — ``effective_max_len_s`` of the
     creator's native length, defaulting to the platform constant. A ceiling
     only: windows shorter than it are never extended toward it.
+
+    ``container_duration_s`` (Issue 469): the ffprobe container duration the
+    render will enforce. When it is shorter than the audio-derived
+    ``duration_s`` (VFR sources, stream VODs, container metadata quirks) the
+    end clamp uses the container — INSIDE the invariant tail, so a clamp that
+    cuts the payoff falls through the Issue-456 repair-or-drop rather than
+    persisting a peakless window. ``duration_s`` (the audio timeline) still
+    drives the degenerate-index check, which is about transcript coverage.
     """
     if not candidates or not segments:
         return candidates
@@ -399,6 +408,12 @@ def snap_candidates_to_sentences(
             duration_s,
         )
         return candidates
+
+    # The tightest end authority available (Issue 469): the container when the
+    # caller knows it, else the audio timeline. 0/None mean "unknown" → no cap.
+    cap_s = duration_s
+    if container_duration_s is not None and container_duration_s > 0:
+        cap_s = min(cap_s, container_duration_s) if cap_s > 0 else container_duration_s
 
     snapped: list[dict] = []
     for c in candidates:
@@ -440,8 +455,8 @@ def snap_candidates_to_sentences(
 
         if cand["end_s"] - cand["setup_start_s"] < MIN_CLIP_S:
             cand["end_s"] = round(cand["setup_start_s"] + MIN_CLIP_S, 2)
-        if duration_s > 0:
-            cand["end_s"] = round(min(cand["end_s"], duration_s), 2)
+        if cap_s > 0:
+            cand["end_s"] = round(min(cand["end_s"], cap_s), 2)
         cand["setup_start_s"] = min(cand["setup_start_s"], peak - _PEAK_MARGIN_S)
 
         # Issue 456, stage 1 — REPAIR: snapping/clamping ended the clip at or
@@ -450,8 +465,8 @@ def snap_candidates_to_sentences(
         # length ceiling.
         if cand["end_s"] <= peak + _PEAK_MARGIN_S:
             repaired = min(raw_end, cand["setup_start_s"] + max_len_s)
-            if duration_s > 0:
-                repaired = min(repaired, duration_s)
+            if cap_s > 0:
+                repaired = min(repaired, cap_s)
             cand["end_s"] = round(repaired, 2)
 
         if cand["end_s"] - cand["setup_start_s"] < MIN_CLIP_S:

@@ -1908,6 +1908,26 @@ async def _tenant_id_or_raise(video_id: str, creator_id: str | None) -> str:
     return creator_id
 
 
+def _apply_probed_duration(video: Video, duration_s: float | None) -> None:
+    """Write the ffprobe container duration (and kind) onto the video row.
+
+    ONE duration authority (Issue 469): the local ffprobe of the actual media
+    is what the render path enforces, so it ALWAYS overwrites on probe success
+    — previously only-if-empty, which let link-registered videos keep YouTube's
+    ISO-8601 integer seconds (routers/videos.py) forever. A stale/rounded seed
+    that under-reports the container turns every end-of-video clip into a
+    permanent render failure. ``kind`` is reclassified alongside because the
+    YouTube-metadata kind is itself ``classify_video_kind`` of the parsed ISO
+    duration — same classifier, worse input. No-op when the probe failed
+    (``duration_s`` falsy) so a re-ingest can never null out a good value.
+    """
+    if duration_s:
+        from youtube.data_api import classify_video_kind
+
+        video.duration_s = duration_s
+        video.kind = classify_video_kind(duration_s)
+
+
 async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
     """Ingest stage of the upload chain.
 
@@ -2114,14 +2134,7 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                 # not discard spans an earlier run resolved.
                 if overlay_spans_json:
                     video.overlay_spans_jsonb = overlay_spans_json
-                if duration_s and not video.duration_s:
-                    # Direct-to-R2 uploads (Issue 395) register with duration_s=None
-                    # and a provisional kind — the local probe is the authority for
-                    # both, so reclassify alongside the duration write.
-                    from youtube.data_api import classify_video_kind
-
-                    video.duration_s = duration_s
-                    video.kind = classify_video_kind(duration_s)
+                _apply_probed_duration(video, duration_s)
                 if duration_s:
                     from billing.ledger import deduct_for_video
 
@@ -3562,6 +3575,12 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                 raise ValueError(f"Signals not available for video {video_id}")
             timeline = signals.timeline_jsonb
 
+            # Issue 469: the ingest-probed container duration is the ONE end
+            # authority — threaded into candidate geometry so end_s is clamped
+            # against the duration render_clip_file enforces, not the (possibly
+            # longer) audio-derived timeline duration.
+            container_duration_s = float(video.duration_s) if video.duration_s else None
+
             transcript = await session.get(Transcript, video_uuid)
             transcript_segments = (
                 transcript.segments_jsonb.get("segments", []) if transcript else []
@@ -3611,6 +3630,7 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                 style_notes=style_notes,
                 video_context=video_context,
                 optimal_clip_len_s=dna_optimal_len_s,
+                container_duration_s=container_duration_s,
             )
 
         async with db.tenant_session(creator_id) as session:

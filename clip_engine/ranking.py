@@ -263,8 +263,16 @@ async def score_and_rank(
     video_context: dict | None = None,
     exclude_windows: list[dict] | None = None,
     optimal_clip_len_s: float | None = None,
+    container_duration_s: float | None = None,
 ) -> list[dict]:
     """Extract candidates → merge LLM moments → score (ONE LLM call) → rank → trim.
+
+    ``container_duration_s`` (Issue 469): the ffprobe container duration
+    persisted at ingest — the same value ``render_clip_file`` enforces. Threaded
+    to ``extract_candidates`` and ``snap_candidates_to_sentences`` so candidate
+    ``end_s`` is clamped against the duration the render will actually check;
+    the audio-derived ``timeline["duration_s"]`` can exceed it on VFR sources
+    and stream VODs. ``None`` (unknown) keeps the audio timeline as the cap.
 
     ``optimal_clip_len_s`` (Issue 464 — Principle 10, Option A): the active
     DNA's Shorts-derived native length. ``effective_max_len_s`` turns it into
@@ -314,10 +322,13 @@ async def score_and_rank(
     max_len_s = effective_max_len_s(optimal_clip_len_s)
     candidates = await asyncio.to_thread(
         lambda: snap_candidates_to_sentences(
-            extract_candidates(timeline, signal_pool_max),
+            extract_candidates(
+                timeline, signal_pool_max, container_duration_s=container_duration_s
+            ),
             segments,
             duration_s,
             max_len_s=max_len_s,
+            container_duration_s=container_duration_s,
         )
     )
 
