@@ -14,6 +14,7 @@ import pytest
 pytest.importorskip("cv2")  # skip whole file if libGL is absent on this host
 
 from clip_engine import camera_region as _camera_region
+from clip_engine.overlay_bands import OVERLAY_SPANS_VERSION
 from clip_engine.render import (
     _detect_face_center_x,
     _extract_keyframe,
@@ -651,7 +652,7 @@ def test_overlay_mask_precedes_the_region_pre_crop(tmp_path):
     the mask works whether or not a camera region was detected.
     """
     spans = {
-        "version": 1,
+        "version": OVERLAY_SPANS_VERSION,
         "y": 785,
         "height": 202,
         "frame": {"width": 1920, "height": 1080},
@@ -672,7 +673,7 @@ def test_overlay_mask_precedes_the_region_pre_crop(tmp_path):
 def test_no_overlay_mask_is_byte_identical(tmp_path):
     """A clip that misses every span must render exactly what it renders today."""
     spans = {
-        "version": 1,
+        "version": OVERLAY_SPANS_VERSION,
         "y": 785,
         "height": 202,
         "frame": {"width": 1920, "height": 1080},
@@ -685,7 +686,7 @@ def test_no_overlay_mask_is_byte_identical(tmp_path):
 def test_overlay_mask_ignored_when_measured_against_other_dimensions(tmp_path):
     """Masking the wrong rows is worse than not masking at all."""
     spans = {
-        "version": 1,
+        "version": OVERLAY_SPANS_VERSION,
         "y": 785,
         "height": 202,
         "frame": {"width": 1280, "height": 720},  # source here is 1920x1080

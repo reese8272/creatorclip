@@ -174,9 +174,44 @@ def test_seek_sampling_survives_individual_frame_failures():
         patch("clip_engine.camera_region.subprocess.run", side_effect=_flaky),
         patch("pathlib.Path.exists", return_value=True),
     ):
-        ok = _sample_by_seeking(_SRC, 0.0, 1617.2, 8, 60.0, "/tmp")
-    assert ok is True
+        captured, scanned_until_s = _sample_by_seeking(_SRC, 0.0, 1617.2, 8, 60.0, "/tmp")
     assert len(seen) == 8, "a failed frame must not abort the remaining samples"
+    # Issue 466 contract: the captured (timestamp, path) list IS the ordering
+    # authority, and a completed loop reports the full span as scanned.
+    assert len(captured) == 4
+    stamps = [t for t, _ in captured]
+    assert stamps == sorted(stamps)
+    assert scanned_until_s == pytest.approx(1617.2)
+
+
+def test_seek_sampled_stack_is_read_back_in_temporal_order_past_999_samples():
+    """Issue 466 defect 1: >999 samples must come back in TEMPORAL order.
+
+    Repro of the live failure: frames were rediscovered with a lexicographic
+    glob, so `f1000` sorted before `f101` and the stack's timeline scrambled.
+    Each fake ffmpeg call writes a 1x1 PNG whose pixel value encodes the
+    capture index, so ordering is asserted end to end through the real
+    read-back path.
+    """
+    import cv2
+
+    from clip_engine.camera_region import _sample_gray_frames
+
+    written = [0]
+
+    def _fake_run(cmd, **kwargs):
+        from unittest.mock import MagicMock
+
+        idx = written[0]
+        written[0] += 1
+        cv2.imwrite(cmd[-1], np.full((1, 1), idx % 256, np.uint8))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("clip_engine.camera_region.subprocess.run", side_effect=_fake_run):
+        stack = _sample_gray_frames(_SRC, 0.0, 1200.0, 1050, 3600.0)
+
+    assert stack is not None and len(stack) == 1050
+    assert [int(f[0, 0]) for f in stack] == [i % 256 for i in range(1050)]
 
 
 # ── video-level region (Issue 439 Stage 2) ───────────────────────────────────

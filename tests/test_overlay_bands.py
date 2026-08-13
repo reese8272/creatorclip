@@ -11,8 +11,10 @@ identical to what `camera_region._sample_gray_frames` returns.
 
 import glob
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import cv2
+import numpy as np
 import pytest
 
 from clip_engine.overlay_bands import (
@@ -240,24 +242,34 @@ def _combined_stack() -> list:
     return _load("onset_*.png") + _load("clean_*.png") + _load("offset_*.png")
 
 
+def _timed(frames: list, interval: float = 1.0) -> tuple[list, float]:
+    """Wrap plain frames the way `_sample_gray_frames_timed` returns them:
+    evenly spaced sample-centre timestamps plus the fully-scanned duration."""
+    stamps = [(i + 0.5) * interval for i in range(len(frames))]
+    return list(zip(stamps, frames, strict=True)), len(frames) * interval
+
+
 def test_detect_builds_the_stored_document_from_real_frames(monkeypatch) -> None:
     """Only the ffmpeg sampler is stubbed; every frame is production footage.
 
     36 frames over a 36 s duration means one sample per second, so the runs at
-    indices 6-11 and 24-30 become spans padded by _SPAN_PAD_S.
+    indices 6-11 and 24-30 (sample centres 6.5-11.5 and 24.5-30.5) become
+    spans padded by _SPAN_PAD_S.
     """
     import clip_engine.overlay_bands as ob
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", lambda *a, **k: _combined_stack())
-    doc = ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080)
+    monkeypatch.setattr(ob, "_sample_gray_frames_timed", lambda *a, **k: _timed(_combined_stack()))
+    doc = ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080, sample_interval_s=1.0)
 
     assert doc is not None
     assert doc["version"] == OVERLAY_SPANS_VERSION
     assert doc["frame"] == {"width": 1920, "height": 1080}
     assert doc["samples"] == 36
+    assert doc["scanned_until_s"] == 36.0
+    assert doc["sample_interval_s"] == 1.0
     assert len(doc["spans"]) == 2, "one span per banner instance"
-    assert doc["spans"][0] == {"start_s": 5.5, "end_s": 12.5}
-    assert doc["spans"][1] == {"start_s": 23.5, "end_s": 31.5}
+    assert doc["spans"][0] == {"start_s": 6.0, "end_s": 12.0}
+    assert doc["spans"][1] == {"start_s": 24.0, "end_s": 31.0}
 
     # Band rect, scaled from 480x270 analysis rows to source pixels and padded.
     # The union must reach the TALLER banner's top (analysis row 199 -> ~796px).
@@ -273,7 +285,9 @@ def test_detect_returns_none_on_clean_footage(monkeypatch) -> None:
     """No banner, no document — and therefore no mask at render."""
     import clip_engine.overlay_bands as ob
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", lambda *a, **k: _load("clean_*.png"))
+    monkeypatch.setattr(
+        ob, "_sample_gray_frames_timed", lambda *a, **k: _timed(_load("clean_*.png"))
+    )
     assert ob.detect_overlay_spans(Path("unused.mp4"), 12.0, 1920, 1080) is None
 
 
@@ -281,15 +295,141 @@ def test_detect_returns_none_when_sampling_fails_or_is_too_short(monkeypatch) ->
     """Ingest must never fail on this; None simply means no masking."""
     import clip_engine.overlay_bands as ob
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", lambda *a, **k: None)
+    monkeypatch.setattr(ob, "_sample_gray_frames_timed", lambda *a, **k: None)
     assert ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080) is None
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", lambda *a, **k: _load("onset_*.png")[:2])
+    monkeypatch.setattr(
+        ob, "_sample_gray_frames_timed", lambda *a, **k: _timed(_load("onset_*.png")[:2])
+    )
     assert ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080) is None
 
     # Degenerate inputs are rejected before any sampling is attempted.
     assert ob.detect_overlay_spans(Path("unused.mp4"), 0.0, 1920, 1080) is None
     assert ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 0) is None
+
+
+def _synthetic_frame(band: bool) -> np.ndarray:
+    """54x32 gray frame; ``band`` paints 8 anomalously bright rows in the
+    lower region — enough to clear the scaled `_MIN_BRIGHT_ROWS_FRAC` gate."""
+    frame = np.full((54, 32), 60, np.uint8)
+    if band:
+        frame[42:50, :] = 200
+    return frame
+
+
+class _SeekClock:
+    """Stand-in for camera_region's ``time`` module — ``monotonic()`` under
+    test control so the sampling budget trips deterministically."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+def test_span_times_survive_dropped_frames_and_a_budget_cut(monkeypatch) -> None:
+    """Issue 466 defects 2+3: span times must come from real timestamps.
+
+    A 1000 s source with a banner at t=300-330 s, every 4th sample failing and
+    the budget exhausted at ~700 s of source time must still yield a span at
+    300-330 — and the stored document must say how far the scan actually got.
+    Before the fix, ``duration / len(stack)`` dilated the surviving indices
+    (the live repro mapped a real 300-330 s banner to ~606-668 s) and the
+    truncation was silent.
+    """
+    import clip_engine.camera_region as cr
+    import clip_engine.overlay_bands as ob
+
+    clock = _SeekClock()
+    monkeypatch.setattr(cr, "time", clock)
+    calls: list[float] = []
+
+    def _fake_run(cmd, **kwargs):
+        clock.now += 1.0  # one fake second per seek; timeout_s below caps the count
+        t = float(cmd[cmd.index("-ss") + 1])
+        calls.append(t)
+        if len(calls) % 4 == 0:
+            return MagicMock(returncode=1, stdout="", stderr="")
+        cv2.imwrite(cmd[-1], _synthetic_frame(300.0 <= t <= 330.0))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cr.subprocess, "run", _fake_run)
+
+    # 0.5 s cadence over 1000 s = 2000 samples; the fake clock stops the scan
+    # after 1400 seeks, i.e. at source time ~700 s.
+    doc = ob.detect_overlay_spans(Path("unused.mp4"), 1000.0, 1920, 1080, timeout_s=1400.0)
+
+    assert doc is not None
+    assert doc["version"] == OVERLAY_SPANS_VERSION
+    [span] = doc["spans"]
+    assert span["start_s"] == pytest.approx(300.0, abs=1.0)
+    assert span["end_s"] == pytest.approx(330.0, abs=1.0)
+    # Truncation is explicit, and the stored cadence is the REQUESTED one.
+    assert doc["scanned_until_s"] == pytest.approx(700.0, abs=1.0)
+    assert doc["sample_interval_s"] == pytest.approx(0.5)
+
+
+@pytest.mark.integration
+def test_real_sampler_finds_band_spans_on_a_600s_source(tmp_path: Path) -> None:
+    """Issue 466 acceptance: the REAL sampler, end to end, past 999 samples.
+
+    A generated 600 s source carries a white lower-frame band at exactly
+    200-230 s and 400-477 s. Detection at 0.5 s cadence issues 1200 seeks —
+    crossing the f999/f1000 boundary that scrambled the glob read-back — and
+    must report both spans at their true times with the full runtime scanned.
+    ~50 s of ffmpeg work, hence the integration marker.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+
+    import clip_engine.overlay_bands as ob
+
+    src = tmp_path / "band_source.mp4"
+    draw = (
+        "drawbox=x=0:y=ih*0.85:w=iw:h=ih*0.10:color=white:t=fill"
+        ":enable='between(t,200,230)+between(t,400,477)'"
+    )
+    gen = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x180:rate=5:duration=600",
+            "-vf",
+            draw,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-g",
+            "10",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert gen.returncode == 0, gen.stderr[-800:]
+
+    doc = ob.detect_overlay_spans(src, 600.0, 320, 180, sample_interval_s=0.5, timeout_s=600.0)
+
+    assert doc is not None
+    assert doc["version"] == OVERLAY_SPANS_VERSION
+    assert doc["samples"] >= 1190, "the 1200-seek pass must not silently thin out"
+    assert doc["scanned_until_s"] == pytest.approx(600.0, abs=1.0)
+    assert len(doc["spans"]) == 2, f"expected both banner instances, got {doc['spans']}"
+    assert doc["spans"][0]["start_s"] == pytest.approx(200.0, abs=1.0)
+    assert doc["spans"][0]["end_s"] == pytest.approx(230.0, abs=1.0)
+    assert doc["spans"][1]["start_s"] == pytest.approx(400.0, abs=1.0)
+    assert doc["spans"][1]["end_s"] == pytest.approx(477.0, abs=1.0)
 
 
 def test_detect_swallows_detector_errors(monkeypatch) -> None:
@@ -299,5 +439,5 @@ def test_detect_swallows_detector_errors(monkeypatch) -> None:
     def _boom(*a, **k):
         raise RuntimeError("ffmpeg exploded")
 
-    monkeypatch.setattr(ob, "_sample_gray_frames", _boom)
+    monkeypatch.setattr(ob, "_sample_gray_frames_timed", _boom)
     assert ob.detect_overlay_spans(Path("unused.mp4"), 36.0, 1920, 1080) is None

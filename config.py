@@ -488,6 +488,12 @@ class Settings(BaseSettings):
     # separated produces no mask at all, because a false positive blurs a
     # speaker's face in an otherwise good clip.
     OVERLAY_BAND_DETECT_ENABLED: bool = False
+    # Wall-clock budget (seconds) for the whole-source overlay scan. Long
+    # sources cost one ffmpeg input-seek per 0.5 s sample, so full coverage is
+    # not a viable target (a 3 h VOD is 21,600 seeks ≈ tens of minutes); the
+    # scan is time-boxed instead and the stored document records
+    # `scanned_until_s` — masking applies only within the scanned range.
+    OVERLAY_BAND_TIMEOUT_S: float = 600.0
 
     # Persisted clips per video (post-dedup, post-trim). 8 → 12 (2026-08-05,
     # user directive): one ingest, wider option set — feedback on un-rendered

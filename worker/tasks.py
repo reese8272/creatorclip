@@ -2086,6 +2086,7 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                         duration_s or 0.0,
                         frame_w,
                         frame_h,
+                        timeout_s=_cfg.OVERLAY_BAND_TIMEOUT_S,
                     )
                 except Exception as exc:  # noqa: BLE001 — see the note above
                     logger.warning("overlay-band detection failed for video %s: %s", video_id, exc)
@@ -3951,7 +3952,12 @@ async def _backfill_video_camera_regions_async() -> None:
                     )
                 if want_spans:
                     spans_json = await asyncio.to_thread(
-                        detect_overlay_spans, src, duration_s or 0.0, frame_w, frame_h
+                        detect_overlay_spans,
+                        src,
+                        duration_s or 0.0,
+                        frame_w,
+                        frame_h,
+                        timeout_s=settings.OVERLAY_BAND_TIMEOUT_S,
                     )
         except Exception as exc:  # noqa: BLE001 — one bad source must not end the batch
             logger.warning("video-analysis backfill failed for video %s: %s", video_id, exc)
