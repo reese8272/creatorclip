@@ -368,6 +368,9 @@ async def generate_clips(
 
     dna_profile = await get_active(session, creator.id)
     dna_brief = dna_profile.brief_text if dna_profile else None
+    # Issue 464: the DNA's Shorts-derived native length rides into clip geometry
+    # as a length ceiling; None (cold start) keeps the platform constants.
+    dna_optimal_len_s = dna_profile.optimal_clip_len_s if dna_profile else None
     # Issue 371: distilled review-feedback preferences ride into scoring as a
     # separate system block (fetched here, before the session closes below).
     style_row = await get_style_notes(session, creator.id)
@@ -407,6 +410,7 @@ async def generate_clips(
         ledger_session_factory=db.AsyncSessionLocal,
         style_notes=style_notes,
         video_context=video_context,
+        optimal_clip_len_s=dna_optimal_len_s,
     )
     if not ranked:
         return {"clips": []}
@@ -491,6 +495,8 @@ async def generate_more_clips(
 
     dna_profile = await get_active(session, creator.id)
     dna_brief = dna_profile.brief_text if dna_profile else None
+    # Issue 464: same native-length ceiling as the initial generation pass.
+    dna_optimal_len_s = dna_profile.optimal_clip_len_s if dna_profile else None
     style_row = await get_style_notes(session, creator.id)
     style_notes = style_row.notes_text if style_row else None
 
@@ -517,6 +523,7 @@ async def generate_more_clips(
         style_notes=style_notes,
         video_context=video_context,
         exclude_windows=exclude_windows,
+        optimal_clip_len_s=dna_optimal_len_s,
     )
 
     async with db.AsyncSessionLocal() as persist_session:

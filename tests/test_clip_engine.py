@@ -398,7 +398,14 @@ def _assert_merge_scenario(scenario: dict) -> None:
 
     moments = validate_context({"moments": inp.get("moments", [])}, duration_s)["moments"]
     signal_cands = extract_candidates(timeline, max_candidates=8)
-    llm_cands = llm_moments_to_candidates(moments, timeline)
+    # Issue 464: input.optimal_clip_len_s (the per-creator native length) flows
+    # to the LLM-window clamp exactly as score_and_rank threads it; absent →
+    # the platform-constant path, byte-identical for every pre-464 scenario.
+    from clip_engine.sentence_snap import effective_max_len_s
+
+    llm_cands = llm_moments_to_candidates(
+        moments, timeline, max_len_s=effective_max_len_s(inp.get("optimal_clip_len_s"))
+    )
     merged = merge_candidates(signal_cands, llm_cands)
 
     llm_in_merged = [c for c in merged if c.get("origin") == "llm"]
@@ -998,6 +1005,80 @@ def test_candidates_keeps_non_overlapping_windows():
     tl = _make_timeline([60.0, 160.0])  # 100s apart — cannot overlap
     candidates = extract_candidates(tl, max_candidates=8)
     assert len(candidates) == 2
+
+
+# ── Issue 464: Native length wiring (Principle 10, Option A) ─────────────────
+
+
+def test_effective_max_len_s_band():
+    """clamp(optimal * 1.25, 45.0, CLIP_TARGET_MAX_S); None (cold start) → the
+    platform constant, keeping pre-464 geometry byte-identical."""
+    from clip_engine.sentence_snap import CLIP_TARGET_MAX_S, effective_max_len_s
+
+    assert effective_max_len_s(None) == CLIP_TARGET_MAX_S
+    assert effective_max_len_s(45.0) == pytest.approx(56.25)
+    assert effective_max_len_s(20.0) == pytest.approx(45.0)  # floor: platform-viable band
+    assert effective_max_len_s(300.0) == CLIP_TARGET_MAX_S  # ceiling: platform limit
+
+
+def _native_len_segments() -> list[dict]:
+    """Sentences [45, 60], [60.5, 75], [75.5, 91.5], [92, 108]: cut points at
+    60 / 75 / 91.5 — the last one ≈46.5 s after the setup and past the peak —
+    and the next sentence end (108) beyond the 56.25 s native ceiling."""
+
+    def seg(words: list[tuple[str, float, float]]) -> dict:
+        return {"words": [{"word": w, "start": s, "end": e} for w, s, e in words]}
+
+    return [
+        seg([("The", 45.0, 45.4), ("story", 50.0, 51.0), ("begins.", 59.0, 60.0)]),
+        seg([("It", 60.5, 61.0), ("builds.", 74.0, 75.0)]),
+        seg([("Then", 75.5, 76.0), ("boom.", 91.0, 91.5)]),
+        seg([("Crowd", 92.0, 93.0), ("reacts.", 107.0, 108.0)]),
+    ]
+
+
+def test_snap_candidates_native_max_sentence_aligned_clamp():
+    """Issue 464 geometry: with a 45 s native length, the 65 s signal window is
+    cut at the latest sentence end under the 56.25 s ceiling — landing ≈46.5 s
+    (the creator's native band), never at the generic 90 s constant."""
+    from clip_engine.sentence_snap import effective_max_len_s, snap_candidates_to_sentences
+
+    cand = {"setup_start_s": 45.0, "start_s": 45.0, "peak_s": 90.0, "end_s": 110.0}
+    out = snap_candidates_to_sentences(
+        [dict(cand)], _native_len_segments(), 300.0, max_len_s=effective_max_len_s(45.0)
+    )
+    assert len(out) == 1
+    assert out[0]["end_s"] - out[0]["setup_start_s"] <= 56.25 + 1e-6
+    assert out[0]["end_s"] == pytest.approx(91.5)  # sentence-aligned ≈45 s target
+    assert out[0]["setup_start_s"] < out[0]["peak_s"] < out[0]["end_s"]
+
+
+def test_snap_candidates_without_native_max_unchanged():
+    """Cold start (optimal None → default max): byte-identical constants path —
+    the 65 s window sits under the 90 s ceiling, so nothing is clamped."""
+    from clip_engine.sentence_snap import snap_candidates_to_sentences
+
+    cand = {"setup_start_s": 45.0, "start_s": 45.0, "peak_s": 90.0, "end_s": 110.0}
+    out = snap_candidates_to_sentences([dict(cand)], _native_len_segments(), 300.0)
+    assert out[0]["setup_start_s"] == pytest.approx(45.0)
+    assert out[0]["end_s"] == pytest.approx(110.0)
+
+
+def test_llm_moments_native_max_hard_clamp_never_stretches():
+    """LLM windows honor the per-creator ceiling: a 115 s moment is cut at the
+    56.25 s ceiling; a 45 s moment is NEVER stretched toward the max."""
+    from clip_engine.merge import llm_moments_to_candidates
+    from clip_engine.sentence_snap import effective_max_len_s
+
+    timeline = {"duration_s": 300.0, "events": []}
+    moments = [
+        {"start_s": 10.0, "end_s": 125.0, "confidence": 0.9},
+        {"start_s": 200.0, "end_s": 245.0, "confidence": 0.8},
+    ]
+    out = llm_moments_to_candidates(moments, timeline, max_len_s=effective_max_len_s(45.0))
+    assert len(out) == 2
+    assert out[0]["end_s"] - out[0]["setup_start_s"] == pytest.approx(56.25)
+    assert out[1]["end_s"] == pytest.approx(245.0)  # already native-length: untouched
 
 
 # ── Issue 477: the runner must reject what it does not read ──────────────────

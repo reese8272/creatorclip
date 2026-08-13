@@ -35,6 +35,29 @@ SENTENCE_SNAP_MAX_S = 10.0  # sentence-scale search radius (the word-level 3 s c
 SENTENCE_LEAD_IN_S = 0.3  # small breath before the sentence's first word
 CLIP_TARGET_MAX_S = 90.0  # hard ceiling for LLM-proposed windows (60–90 s target)
 
+# Issue 464 — Principle 10 "Native length over generic length", Option A: the
+# creator's Shorts-derived watch duration sets a PER-CREATOR ceiling on clip
+# length. Max-clamp only — a window is never stretched toward the ceiling.
+NATIVE_LENGTH_HEADROOM = 1.25  # room for the sentence-aligned cut to finish a thought
+NATIVE_LENGTH_FLOOR_S = 45.0  # never clamp below the platform-viable Short band
+
+
+def effective_max_len_s(optimal_clip_len_s: float | None) -> float:
+    """Per-creator clip-length ceiling (Issue 464, Option A).
+
+    ``clamp(optimal * 1.25, 45.0, CLIP_TARGET_MAX_S)`` when the active DNA
+    carries a Shorts-derived ``optimal_clip_len_s``; the platform constant on
+    cold start (None — no DNA or no metered Shorts), keeping pre-464 geometry
+    byte-identical.
+    """
+    if optimal_clip_len_s is None:
+        return CLIP_TARGET_MAX_S
+    return min(
+        max(optimal_clip_len_s * NATIVE_LENGTH_HEADROOM, NATIVE_LENGTH_FLOOR_S),
+        CLIP_TARGET_MAX_S,
+    )
+
+
 # Tokens that cannot open a clip (Issue 441). A Deepgram utterance boundary is a
 # PAUSE, not a grammatical break, so "because they still don't know what Mikey
 # is." is a first-class sentence start and snapping to it is a no-op — which is
@@ -341,6 +364,8 @@ def snap_candidates_to_sentences(
     candidates: list[dict],
     segments: list[dict],
     duration_s: float,
+    *,
+    max_len_s: float = CLIP_TARGET_MAX_S,
 ) -> list[dict]:
     """Snap every candidate's edges to sentence boundaries, holding invariants.
 
@@ -353,6 +378,11 @@ def snap_candidates_to_sentences(
     no-op when segments are absent (no-transcript videos and the eval
     harness's geometry scenarios are unaffected) and when the sentence index
     is the degenerate single-span no-utterance fallback.
+
+    ``max_len_s`` (Issue 464): the length ceiling used by the clamp, the
+    backward snap bound, and the end repair — ``effective_max_len_s`` of the
+    creator's native length, defaulting to the platform constant. A ceiling
+    only: windows shorter than it are never extended toward it.
     """
     if not candidates or not segments:
         return candidates
@@ -380,9 +410,9 @@ def snap_candidates_to_sentences(
         # A forward-snapped start must still leave a valid clip: before the
         # peak, and long enough against the (pre-snap) end.
         forward_limit = min(peak - _PEAK_MARGIN_S, cand["end_s"] - MIN_CLIP_S)
-        # A backward-snapped start must leave the 90 s ceiling room to keep a
+        # A backward-snapped start must leave the length ceiling room to keep a
         # payoff tail after the peak (Issue 456).
-        backward_limit = peak - (CLIP_TARGET_MAX_S - _MIN_PAYOFF_TAIL_S)
+        backward_limit = peak - (max_len_s - _MIN_PAYOFF_TAIL_S)
         cand["setup_start_s"] = round(
             snap_start(
                 cand["setup_start_s"],
@@ -394,16 +424,18 @@ def snap_candidates_to_sentences(
         )
         cand["end_s"] = round(snap_end(cand["end_s"], sentences), 2)
 
-        # Hard 90 s ceiling for ALL candidates (2026-08-05 live finding: a
+        # Hard length ceiling for ALL candidates (2026-08-05 live finding: a
         # signal window at 95 s natural max stretched to 100.6 s after edge
-        # snapping). The sentence-aligned cut can never land before the peak:
-        # setup >= peak - 85 (75 s lookback + <=10 s snap), so the ceiling sits
-        # >= 5 s past the peak — but a sparse sentence index could still pick an
-        # earlier end, so floor at the bare ceiling when it would cut the payoff.
-        if cand["end_s"] - cand["setup_start_s"] > CLIP_TARGET_MAX_S:
-            new_end = clamp_window_to_target(cand["setup_start_s"], cand["end_s"], sentences)
+        # snapping; per-creator native ceiling since Issue 464). The
+        # sentence-aligned cut can rarely land before the peak (a sparse
+        # sentence index, or a native ceiling tighter than the setup→peak
+        # distance), so floor at the bare ceiling when it would cut the payoff.
+        if cand["end_s"] - cand["setup_start_s"] > max_len_s:
+            new_end = clamp_window_to_target(
+                cand["setup_start_s"], cand["end_s"], sentences, max_len_s=max_len_s
+            )
             if new_end <= peak:
-                new_end = cand["setup_start_s"] + CLIP_TARGET_MAX_S
+                new_end = cand["setup_start_s"] + max_len_s
             cand["end_s"] = round(new_end, 2)
 
         if cand["end_s"] - cand["setup_start_s"] < MIN_CLIP_S:
@@ -417,7 +449,7 @@ def snap_candidates_to_sentences(
         # past the peak by construction), re-clamped to the container and the
         # length ceiling.
         if cand["end_s"] <= peak + _PEAK_MARGIN_S:
-            repaired = min(raw_end, cand["setup_start_s"] + CLIP_TARGET_MAX_S)
+            repaired = min(raw_end, cand["setup_start_s"] + max_len_s)
             if duration_s > 0:
                 repaired = min(repaired, duration_s)
             cand["end_s"] = round(repaired, 2)

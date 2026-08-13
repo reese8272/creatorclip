@@ -47,6 +47,8 @@ def llm_moments_to_candidates(
     moments: list[dict],
     timeline: dict,
     segments: list[dict] | None = None,
+    *,
+    max_len_s: float = CLIP_TARGET_MAX_S,
 ) -> list[dict]:
     """Convert validated VideoContext moments into candidates.py-shaped dicts.
 
@@ -54,8 +56,10 @@ def llm_moments_to_candidates(
       - cut points sentence-snapped via the segment-aware ``sentence_snap``
         pass (#12 Clean Context Boundary) when transcript segments are
         available (Issue 428),
-      - length hard-clamped to ``CLIP_TARGET_MAX_S`` at the latest sentence
-        end inside the target window (the 110 s live case — Issue 428),
+      - length hard-clamped to ``max_len_s`` — the per-creator native ceiling
+        (Issue 464), defaulting to ``CLIP_TARGET_MAX_S`` — at the latest
+        sentence end inside the target window (the 110 s live case — Issue
+        428); a ceiling only, shorter windows are never stretched toward it,
       - bounds clamped to the timeline duration,
       - ``MIN_CLIP_S`` enforced (re-extend, then drop when impossible),
       - ``setup_start_s < peak_s`` invariant held.
@@ -87,10 +91,10 @@ def llm_moments_to_candidates(
             start = snap_start(start, sentences)
             end = snap_end(end, sentences)
 
-        # Hard length clamp to the 60–90 s target (validate_context admits up to
-        # 120 s): cut at the latest sentence end inside the window, or the bare
-        # ceiling when no sentence index exists.
-        end = clamp_window_to_target(start, end, sentences, max_len_s=CLIP_TARGET_MAX_S)
+        # Hard length clamp to the creator's ceiling (validate_context admits up
+        # to 120 s): cut at the latest sentence end inside the window, or the
+        # bare ceiling when no sentence index exists.
+        end = clamp_window_to_target(start, end, sentences, max_len_s=max_len_s)
 
         start = max(0.0, start)
         if duration_s > 0:
