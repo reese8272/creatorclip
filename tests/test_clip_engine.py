@@ -817,11 +817,17 @@ def test_eval_scenario_pass_rate():
     )
 
 
-def test_ranking_dna_preferred_ranks_first():
-    """Ranking-aware fixture (Issue 199): with recorded/stubbed scores (no live
-    Anthropic), the production rank_candidates() sort must place the DNA-preferred
-    candidate at rank #1. Pins 'ranking reflects DNA fit' independent of geometry."""
-    path = os.path.join(SCENARIOS_DIR, "ranking", "ranking_dna_preferred_first.yaml")
+def test_ranking_composite_sort_order():
+    """Composite-sort fixture (Issue 199; renamed by Issue 480): with
+    recorded/stubbed scores (no live Anthropic), the production rank_candidates()
+    sort must place the highest-composite candidate at rank #1 with dense
+    descending ranks. Honest scope: rank_candidates never reads dna_match, so
+    this pins the SORT only — the DNA→score coupling is gated by the nightly
+    live class-C dna_score-ordering test (tests/test_llm_live_scoring.py,
+    Issue 476) and the goldens replay (tests/test_scoring_goldens.py); the
+    trained-preference rerank leg is tests/preference/test_rerank_eval.py
+    (Issue 480)."""
+    path = os.path.join(SCENARIOS_DIR, "ranking", "ranking_composite_sort_order.yaml")
     with open(path) as f:
         fx = yaml.safe_load(f)
     ranked = rank_candidates([dict(c) for c in fx["candidates"]])
