@@ -467,6 +467,14 @@ jobs:
     # that doesn't touch clip_engine/ would report it as "passed" — a no-op gate.
     # The commit-status API always reports the real outcome (pending / success /
     # failure) regardless of skip state, so branch protection can require it.
+    #
+    # The status MUST be posted to the PR HEAD sha, never `context.sha`. On a
+    # pull_request event `context.sha` is the ephemeral refs/pull/N/merge commit,
+    # but branch protection evaluates required contexts on the HEAD commit — so
+    # posting to context.sha lands the status on a commit nothing looks at and
+    # every PR hangs on "Expected — Waiting for status to be reported". Verified
+    # on PR #100: head cf9fcca had 0 statuses while merge 483ad33 carried the
+    # success. `?? context.sha` keeps workflow_dispatch/push runs working.
     name: Clip eval gate (setup-before-peak)
     runs-on: ubuntu-latest
     permissions:
@@ -524,7 +532,7 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: context.sha,
+              sha: context.payload.pull_request?.head?.sha ?? context.sha,
               state: 'success',
               context: 'eval/clip-quality',
               description: 'Clip eval scenarios passed',
@@ -537,7 +545,7 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: context.sha,
+              sha: context.payload.pull_request?.head?.sha ?? context.sha,
               state: 'failure',
               context: 'eval/clip-quality',
               description: 'Clip eval scenarios FAILED — check setup-before-peak invariant',
@@ -550,7 +558,7 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: context.sha,
+              sha: context.payload.pull_request?.head?.sha ?? context.sha,
               state: 'success',
               context: 'eval/clip-quality',
               description: 'Skipped — no clip_engine/ or tests/eval/ changes',
