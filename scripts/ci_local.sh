@@ -98,12 +98,20 @@ gate_static() {
 #    session boundary BY DESIGN (CLAUDE.md testing rules), so the old Postgres
 #    :5432 precondition was wrong and silently skipped the whole lane on every
 #    Docker-less box — the exact machines this local gate exists for (Issue 479;
-#    the lane runs 2975 tests green here with no Postgres). ─────────────────────
+#    the lane runs 2975 tests green here with no Postgres).
+#
+#    Invoke pytest BARE. A `-m` on the command line REPLACES pytest.ini's addopts
+#    `-m` rather than intersecting with it, so the old `-m "not integration"`
+#    silently re-selected every lane addopts excludes — render_env (real ffmpeg +
+#    mediapipe), llm_live (real ANTHROPIC_API_KEY) and transcription_live (real
+#    DEEPGRAM_API_KEY). None of those exist on a dev box, so Layer 1 errored for
+#    everyone and every push had to be forced through with --no-verify, which is
+#    the whole gate defeated. ci.yml runs it bare for exactly this reason. ──────
 gate_unit() {
-  hdr "pytest -m 'not integration'"
+  hdr "pytest (default lane per pytest.ini addopts)"
   command -v pytest >/dev/null 2>&1 || { skip "pytest unit" "pytest not installed"; return; }
   redis-cli ping >/dev/null 2>&1 || { skip "pytest unit" "Redis down on :6379 — CI covers it"; return; }
-  if pytest -m "not integration" -q; then pass "pytest unit"; else fail "pytest unit"; fi
+  if pytest -q; then pass "pytest unit"; else fail "pytest unit"; fi
 }
 
 # ── coverage floor (full profile only; Redis-only for the same Issue-479 reason) ─

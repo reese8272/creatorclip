@@ -521,3 +521,23 @@ def test_render_env_marker_excluded_from_default_lane() -> None:
         "addopts must exclude render_env from the default lane; the dedicated "
         "CI step is what runs it"
     )
+
+
+def test_local_ci_does_not_override_the_default_marker_lane() -> None:
+    """scripts/ci_local.sh must invoke pytest BARE, never with a `-m` override.
+
+    A `-m` on the command line REPLACES pytest.ini's addopts `-m` instead of
+    intersecting with it, so `pytest -m "not integration"` re-selects every lane
+    addopts deliberately excludes — render_env (real ffmpeg + mediapipe),
+    llm_live and transcription_live (real API keys). None are available on a dev
+    box, so the pre-push hook (Layer 1) errors for everyone and the only way to
+    push becomes --no-verify — the gate defeated rather than passed.
+    """
+    ci_local = (_REPO_ROOT / "scripts" / "ci_local.sh").read_text()
+    unit_gate = ci_local.split("gate_unit()", 1)[1].split("\n}", 1)[0]
+    assert '-m "not integration"' not in unit_gate and "-m 'not integration'" not in unit_gate, (
+        "gate_unit must run pytest bare so pytest.ini's addopts governs the lane; "
+        "a -m override REPLACES addopts and drags in render_env/llm_live/"
+        "transcription_live, which no dev machine can run"
+    )
+    assert "pytest -q" in unit_gate, "gate_unit must still actually invoke pytest"
