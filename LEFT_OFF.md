@@ -54,8 +54,10 @@ verification plus hand adjudication (repros rerun) of all SEV1s.
 ```bash
 export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH && hash -r   # node 26 = 35 phantom jsdom fails
 redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
-# backend:  .venv/bin/python -m pytest -m "not integration" -p no:langsmith -q
-#           audit baseline at 41012fc: 2975 passed / 0 failed / 64 skipped (60.6 s)
+# backend:  .venv/bin/python -m pytest -p no:langsmith -q     # BARE — no -m override!
+#           A -m on the CLI REPLACES pytest.ini's addopts, re-selecting render_env /
+#           llm_live / transcription_live (real ffmpeg+mediapipe / real API keys) and
+#           erroring on any dev box. Baseline at 0d15481: 3137 passed / 0 failed / 64 skipped.
 # frontend: run from frontend/ — npx vitest run; AND `npm run build` (tsc -b type-checks TESTS;
 #           `npx tsc --noEmit` does NOT and has lied before)
 # Layer 0:  PATH="$PWD/.venv/bin:$PATH" .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py
