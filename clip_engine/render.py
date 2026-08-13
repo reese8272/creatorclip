@@ -69,6 +69,20 @@ _DEFAULT_FORMAT = "9:16"
 _OUTPUT_W, _OUTPUT_H = OUTPUT_PRESETS[_DEFAULT_FORMAT]
 
 
+# ffmpeg stderr signatures of filtergraph configuration/parse errors (Issue 467).
+# These are deterministic — the same argv fails identically on every attempt — so
+# `_run` maps them to ValueError, which `render_clip` (worker/tasks.py) treats as
+# PERMANENT. Everything else stays RuntimeError (transient → retried). Before
+# this, the broken punch-in filter burned 3 retries per render while the UI sat
+# on "Rendering…".
+_FILTER_CONFIG_ERROR_SIGNATURES = (
+    "Error when evaluating the expression",
+    "Error reinitializing filters",
+    "Error initializing filter",
+    "No such filter",
+)
+
+
 def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
     from verbose import now_ms, vlog
 
@@ -95,6 +109,11 @@ def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
             stderr=result.stderr,
             duration_ms=int(now_ms() - _t0),
         )
+        if any(sig in result.stderr for sig in _FILTER_CONFIG_ERROR_SIGNATURES):
+            raise ValueError(
+                f"ffmpeg {label} failed with a filter-configuration error "
+                f"[{shlex.join(cmd)}]: {result.stderr[-500:]}"
+            )
         raise RuntimeError(f"ffmpeg {label} failed [{shlex.join(cmd)}]: {result.stderr[-500:]}")
     vlog("ffmpeg_done", label=label, duration_ms=int(now_ms() - _t0))
 
@@ -294,7 +313,9 @@ def extract_poster_frame(
                 "poster frame",
                 timeout_s=timeout_s,
             )
-        except (RuntimeError, OSError) as exc:
+        except (RuntimeError, ValueError, OSError) as exc:
+            # ValueError included (Issue 467): _run classifies filter-config
+            # errors as ValueError; this function's contract is NEVER raises.
             logger.warning("poster_frame_attempt_failed seek=%.3f err=%s", attempt_seek, exc)
             continue
         if out_path.exists() and out_path.stat().st_size > 0:
@@ -441,24 +462,37 @@ def _face_inside(
     return rx <= fx + fw / 2 <= rx + rw and ry <= fy + fh / 2 <= ry + rh
 
 
-# Auto-zoom punch-in at peak (Issue 184, opt-in via style_preset["zoom_on_peak"]).
-# Principle 4 (pattern interrupt). A triangular zoom pulse centered on the clip's
-# peak ramps to (1 + _PUNCH_IN_SCALE)× over ±_PUNCH_IN_RAMP_S seconds, then back to
-# 100%. Implemented with crop's per-frame `t` variable + scale — NOT zoompan, which
-# is built for stills and resamples the stream.
+# Auto-zoom punch-in at peak (Issue 184, opt-in via style_preset["zoom_on_peak"];
+# rebuilt in Issue 467). Principle 4 (pattern interrupt). A triangular zoom pulse
+# centered on the clip's peak ramps to (1 + _PUNCH_IN_SCALE)× over ±_PUNCH_IN_RAMP_S
+# seconds, then back to 100%. Implemented as an animated `scale` (its w/h
+# expressions accept `t` under eval=frame) followed by a CONSTANT centered crop
+# back to the output geometry. NOT crop-with-animated-w/h: ffmpeg evaluates
+# crop's w/h (out_w/out_h) ONCE at filter-configuration time, where `t` is NaN —
+# "Error when evaluating the expression … Error reinitializing filters!",
+# rc=234 on every render (verified on ffmpeg 8.1.2; only crop's x/y are
+# per-frame). NOT zoompan either: it is built for still images (`d` holds each
+# INPUT frame for d output frames) and forces a fixed output fps that re-clocks
+# the stream.
 _PUNCH_IN_SCALE = 0.08
 _PUNCH_IN_RAMP_S = 0.6
 
 
 def _punch_in_filter(peak_offset_s: float, out_w: int, out_h: int) -> str:
-    """ffmpeg crop+scale chain for a brief punch-in centered at ``peak_offset_s``
-    (clip-relative seconds). Zoom ``z(t)=1+A·max(0,1−|t−p|/W)``; the centered crop
-    shrinks by ``z`` then scales back to the output resolution. Outside the pulse
-    ``z=1`` → crop is the full frame → a no-op."""
+    """ffmpeg scale+crop chain for a brief punch-in centered at ``peak_offset_s``
+    (clip-relative seconds). Zoom ``z(t)=1+A·max(0,1−|t−p|/W)``: the frame is
+    upscaled by ``z`` (``trunc(*/2)*2`` keeps dimensions even for libx264) and a
+    constant centered crop cuts it back to the output size. Outside the pulse
+    ``z=1`` → scale is the identity and the crop is the full frame. The trailing
+    crop is deliberately UNLABELED so sendcmd commands (which target
+    ``crop@spk``) can never address it."""
     # `\,` escapes the comma inside max() so the filtergraph parser doesn't read
     # it as a filter separator.
     z = f"(1+{_PUNCH_IN_SCALE}*max(0\\,1-abs(t-{peak_offset_s:.3f})/{_PUNCH_IN_RAMP_S}))"
-    return f"crop=w=iw/{z}:h=ih/{z}:x=(iw-iw/{z})/2:y=(ih-ih/{z})/2,scale={out_w}:{out_h}"
+    return (
+        f"scale=w='trunc({out_w}*{z}/2)*2':h='trunc({out_h}*{z}/2)*2':eval=frame,"
+        f"crop={out_w}:{out_h}"
+    )
 
 
 def render_clip_file(

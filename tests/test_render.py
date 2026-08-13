@@ -45,6 +45,41 @@ _LOUDNORM_JSON = """[Parsed_loudnorm_0 @ 0x55]
 }
 """
 
+# ── _run: filter-configuration errors are terminal (Issue 467) ────────────────
+
+
+@pytest.mark.parametrize(
+    "signature",
+    [
+        "Error when evaluating the expression 'ih/(1+0.08*max(0,1-abs(t-1.000)/0.6))'",
+        "Error reinitializing filters!",
+        "Error initializing filter 'crop' with args 'w=iw/nan'",
+        "No such filter: 'zoompan'",
+    ],
+)
+def test_run_filter_config_error_raises_valueerror(signature):
+    """A broken filtergraph is deterministic — the same argv fails identically on
+    every attempt — so it must map to ValueError, which render_clip treats as
+    permanent. Before Issue 467 it was RuntimeError → 3 pointless retries."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=234, stdout="", stderr=f"frame=0\n{signature}\nConversion failed!\n"
+        )
+        with pytest.raises(ValueError, match="filter-configuration"):
+            _run(["ffmpeg", "-i", "in.mp4", "out.mp4"], "render")
+
+
+def test_run_plain_failure_stays_runtimeerror():
+    """Failures WITHOUT a filter-config signature keep RuntimeError (transient →
+    retried): an I/O blip must not become a permanent clip failure."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="av_interleaved_write_frame(): I/O error\n"
+        )
+        with pytest.raises(RuntimeError, match="ffmpeg render failed"):
+            _run(["ffmpeg", "-i", "in.mp4", "out.mp4"], "render")
+
+
 # ── _frame_dimensions ─────────────────────────────────────────────────────────
 
 
@@ -437,10 +472,12 @@ def test_render_cleaned_clip_file_chains_loudnorm_into_graph(tmp_path):
     assert "[outaln]" in cmd
 
 
-# ── auto-zoom punch-in at peak (Issue 184) ────────────────────────────────────
+# ── auto-zoom punch-in at peak (Issue 184, rebuilt Issue 467) ─────────────────
 
-# The crop expression's escaped comma inside max() is the unique punch-in marker.
-_PUNCH_MARKER = "max(0\\,1-abs(t-"
+# The punch-in is an animated scale (eval=frame) + constant trailing crop;
+# ":eval=frame,crop=" appears nowhere else in any chain, so it is the unique
+# punch-in marker.
+_PUNCH_MARKER = ":eval=frame,crop="
 
 
 def _render_vf(
@@ -489,6 +526,11 @@ def test_punch_in_applied_when_enabled_and_peak_in_window(tmp_path):
     vf = _render_vf(tmp_path, style_preset={"zoom_on_peak": True}, peak_s=40.0)
     assert _PUNCH_MARKER in vf
     assert "abs(t-30.000)" in vf  # peak centered at peak_s - start_s = 30s
+    # The trailing crop is CONSTANT (config-time-legal) — crop w/h expressions
+    # are evaluated once at filter configuration, where `t` is NaN (Issue 467).
+    assert vf.endswith(",crop=1080:1920")
+    punch = vf[vf.index("scale=w='trunc(") :]
+    assert "crop=w=" not in punch and "crop=h=" not in punch
 
 
 def test_no_punch_in_when_disabled(tmp_path):
@@ -732,7 +774,7 @@ def test_reframe_region_punch_in_stays_after_scale(tmp_path):
     ):
         vf = _render_vf(tmp_path, style_preset={"zoom_on_peak": True}, peak_s=40.0)
     scale_idx = vf.index("scale=1080:1920")
-    punch_idx = vf.index("crop=w=iw/")
+    punch_idx = vf.index("scale=w='trunc(")
     assert punch_idx > scale_idx
     assert "@spk" not in vf[punch_idx:]
 
