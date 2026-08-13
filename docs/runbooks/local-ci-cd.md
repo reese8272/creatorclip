@@ -27,7 +27,10 @@ bash scripts/setup_hooks.sh      # sets core.hooksPath → .githooks
 What runs on `git push` (the `--fast` profile in `scripts/ci_local.sh`):
 
 - `ruff format --check` + `run_layer0.py --gates ruff,mypy,bandit` (lint, types, SAST)
-- `pytest -m "not integration"` (needs local Redis on :6379)
+- `pytest` — invoked BARE, so `pytest.ini`'s `addopts` picks the lane (needs local Redis on :6379).
+  Never add `-m` here: a command-line `-m` *replaces* `addopts`' `-m` instead of intersecting with
+  it, which silently re-selects `render_env` / `llm_live` / `transcription_live` — lanes needing
+  real ffmpeg+mediapipe and real API keys, so the gate fails on every dev box (PR #99).
 - frontend: `eslint`, `vitest run`, `tsc -b && vite build`
 
 Run it by hand any time:
