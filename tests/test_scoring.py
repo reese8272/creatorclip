@@ -250,6 +250,70 @@ def test_transcript_context_before_excludes_clip_text():
     assert "clip only" not in before_section
 
 
+def _section_text(result: str, name: str) -> str:
+    """Decode the JSON-encoded payload of one wrap_untrusted section."""
+    import re
+
+    m = re.search(rf'<untrusted name="{name}">(.*?)</untrusted>', result, re.S)
+    assert m is not None, f"section {name!r} missing from: {result!r}"
+    return json.loads(m.group(1))
+
+
+def test_transcript_context_before_keeps_tail_nearest_cut():
+    """Issue 462: [BEFORE] over the 200-char cap must keep the TAIL — the words
+    immediately before the cut are what the setup judgment needs. Head-keep
+    retained t≈0-15s text and dropped the sentence adjacent to the clip start.
+    """
+    far = ("FAR_TEXT " * 30).strip()  # ~270 chars at t≈0-15s
+    near = ("NEAR_CUT " * 30).strip()  # ~270 chars adjacent to the setup
+    segs = [
+        {"start": 0.0, "end": 15.0, "text": far},
+        {"start": 50.0, "end": 59.0, "text": near},
+        {"start": 60.0, "end": 70.0, "text": "clip body"},
+    ]
+    result = _transcript_context(60.0, 90.0, segs)
+    before_text = _section_text(result, "transcript_before")
+    assert before_text.endswith("NEAR_CUT"), (
+        f"[BEFORE] must end with the words nearest the cut, got: {before_text[-40:]!r}"
+    )
+    assert "FAR_TEXT" not in before_text, "[BEFORE] must drop the far end, not the cut end"
+    assert len(before_text) <= 200, "per-section cap for [BEFORE] must stay 200"
+
+
+def test_transcript_context_after_keeps_head_nearest_clip_end():
+    """Issue 462 companion pin: [AFTER] over the 150-char cap keeps its HEAD —
+    the words nearest the clip end (already correct; regression guard).
+    """
+    payoff = "PAYOFF right after the clip ends"
+    later = ("LATER_TEXT " * 30).strip()  # pushes [AFTER] past its 150-char cap
+    segs = [
+        {"start": 60.0, "end": 70.0, "text": "clip body"},
+        {"start": 91.0, "end": 95.0, "text": payoff},
+        {"start": 100.0, "end": 110.0, "text": later},
+    ]
+    result = _transcript_context(60.0, 90.0, segs)
+    after_text = _section_text(result, "transcript_after")
+    assert after_text.startswith("PAYOFF"), (
+        f"[AFTER] must start with the words nearest the clip end, got: {after_text[:40]!r}"
+    )
+    assert len(after_text) <= 150, "per-section cap for [AFTER] must stay 150"
+
+
+def test_transcript_context_section_caps_unchanged():
+    """Issue 462: the 200/250/150 per-section caps are prompt-size guarantees —
+    the tail-keep fix must not change them.
+    """
+    segs = [
+        {"start": 30.0, "end": 59.0, "text": "b" * 400},
+        {"start": 61.0, "end": 89.0, "text": "c" * 400},
+        {"start": 91.0, "end": 110.0, "text": "a" * 400},
+    ]
+    result = _transcript_context(60.0, 90.0, segs)
+    assert len(_section_text(result, "transcript_before")) == 200
+    assert len(_section_text(result, "transcript_clip")) == 250
+    assert len(_section_text(result, "transcript_after")) == 150
+
+
 def test_transcript_context_straddling_segment_assigned_once():
     """A segment straddling setup_s must land in exactly ONE section, not vanish.
 

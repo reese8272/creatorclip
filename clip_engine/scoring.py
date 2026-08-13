@@ -25,6 +25,7 @@ import uuid
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
+from typing import Literal
 
 import httpx
 import numpy as np
@@ -276,7 +277,9 @@ def _transcript_context(setup_s: float, end_s: float, segments: list | None) -> 
     before_start = max(0.0, setup_s - _CONTEXT_BEFORE_S)
     after_end = end_s + _CONTEXT_AFTER_S
 
-    def _gather(start_min: float, end_max: float, cap: int) -> str:
+    def _gather(
+        start_min: float, end_max: float, cap: int, keep: Literal["head", "tail"] = "head"
+    ) -> str:
         # Midpoint assignment (not full containment): a segment straddling a
         # section boundary lands in exactly one section instead of vanishing
         # from both — full containment dropped the clip's opening sentence
@@ -288,9 +291,13 @@ def _transcript_context(setup_s: float, end_s: float, segments: list | None) -> 
             for seg in segments
             if start_min <= (seg.get("start", 0.0) + seg.get("end", 0.0)) / 2.0 < end_max
         ]
-        return " ".join(parts)[:cap]
+        joined = " ".join(parts)
+        # Issue 462: when a section overflows its cap, keep the end nearest the
+        # clip window — tail for [BEFORE] (the sentence adjacent to the cut is
+        # what the setup judgment needs), head for [CLIP] and [AFTER].
+        return joined[-cap:] if keep == "tail" else joined[:cap]
 
-    before = _gather(before_start, setup_s, 200)
+    before = _gather(before_start, setup_s, 200, keep="tail")
     clip = _gather(setup_s, end_s, 250)
     after = _gather(end_s, after_end, 150)
 
