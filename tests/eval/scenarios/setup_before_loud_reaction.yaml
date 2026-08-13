@@ -1,0 +1,37 @@
+scenario: setup_before_loud_reaction
+description: >
+  Issue 457: a quiet setup builds to a punchline (retention spike at ~57-60s),
+  then the room erupts — laughter and an energy spike OVERLAP on the same
+  reaction samples (63-71s). Summing both classes stacked 3.5x weight on the
+  reaction, making the aftermath the most peak-shaped thing in the timeline:
+  the peak landed on the reaction and the setup search anchored to the beat of
+  silence right before it (63s) instead of the joke's lead-in (23s). With the
+  cross-class max cap, the punchline retention peak wins and the clip opens at
+  the joke's setup while the reaction stays inside the window as payoff.
+  Principle: "Clip the setup, not the aftermath".
+
+input:
+  timeline:
+    version: 1
+    duration_s: 160.0
+    events:
+      - {type: silence,         start_s: 20.0, end_s: 23.0}
+      - {type: energy_spike,    start_s: 23.0, end_s: 58.0, value: 0.3}
+      - {type: retention_spike, start_s: 57.0, end_s: 60.0, value: 1.0}
+      # A beat of silence before the room erupts — the trap the summed
+      # double-count fell into (setup anchored here at 63s).
+      - {type: silence,         start_s: 61.0, end_s: 63.0}
+      - {type: laughter,        start_s: 63.0, end_s: 71.0, value: 1.0}
+      - {type: energy_spike,    start_s: 63.0, end_s: 71.0, value: 1.0}
+
+expected:
+  min_candidates: 1
+  max_candidates: 1
+  candidates:
+    - peak_s_min: 55.0
+      # The peak must land on the punchline complex, not on the loud reaction
+      # alone (summed stacking put it at ~67s).
+      peak_s_max: 62.0
+      # Setup anchors to the joke's lead-in silence (23s), NOT the pre-reaction
+      # beat (63s).
+      setup_start_s_max: 23.5

@@ -61,6 +61,38 @@ def test_build_signal_array_silence_lowers_signal():
     assert signal[idx] < 0.0
 
 
+def test_build_signal_array_overlapping_laughter_energy_capped():
+    """Issue 457: a sample under overlapping laughter + energy_spike contributes
+    the max of the two class weights, not their 3.5x sum — the loud reaction
+    must not out-peak the moment that caused it."""
+    timeline = {
+        "duration_s": 20.0,
+        "events": [
+            {"type": "laughter", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+            {"type": "energy_spike", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+        ],
+    }
+    _, signal = build_signal_array(timeline)
+    idx = int(11.0 / RESOLUTION_S)
+    assert signal[idx] == pytest.approx(2.0)  # max(2.0, 1.5), never 3.5
+
+
+def test_build_signal_array_retention_additive_over_capped_audio():
+    """Issue 457: the cross-class cap applies to audio classes only — retention
+    (ground truth) still adds on top of the capped laughter/energy value."""
+    timeline = {
+        "duration_s": 20.0,
+        "events": [
+            {"type": "laughter", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+            {"type": "energy_spike", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+            {"type": "retention_spike", "start_s": 10.0, "end_s": 12.0, "value": 1.0},
+        ],
+    }
+    _, signal = build_signal_array(timeline)
+    idx = int(11.0 / RESOLUTION_S)
+    assert signal[idx] == pytest.approx(5.0)  # max(2.0, 1.5) + 3.0
+
+
 def test_build_signal_array_unknown_event_type_ignored():
     timeline = {
         "duration_s": 10.0,
@@ -97,6 +129,20 @@ def test_find_setup_start_most_recent_silence():
 def test_find_setup_start_falls_back_to_energy_spike():
     tl = _timeline([{"type": "energy_spike", "start_s": 60.0, "end_s": 75.0, "value": 0.8}])
     result = _find_setup_start(tl, peak_s=90.0)
+    assert result == pytest.approx(60.0)
+
+
+def test_find_setup_start_uses_most_recent_energy_spike():
+    """Issue 460: with two in-window spikes and no silence, the fallback takes
+    the MOST RECENT spike start before the peak — mirroring the silence rule
+    and the module contract ("most recent content boundary")."""
+    tl = _timeline(
+        [
+            {"type": "energy_spike", "start_s": 20.0, "end_s": 30.0, "value": 0.8},
+            {"type": "energy_spike", "start_s": 60.0, "end_s": 70.0, "value": 0.8},
+        ]
+    )
+    result = _find_setup_start(tl, peak_s=89.0)
     assert result == pytest.approx(60.0)
 
 
@@ -172,6 +218,20 @@ def test_extract_candidates_min_clip_length_respected():
     candidates = extract_candidates(tl)
     for c in candidates:
         assert c["end_s"] - c["setup_start_s"] >= MIN_CLIP_S
+
+
+def test_extract_candidates_first_sample_spike_degenerate_clamp():
+    """Issue 459: a retention spike confined to the very first signal sample
+    still yields a candidate; the endpoint peak is nudged one sample inward
+    (times[1] = 0.5s) so setup(0.0) < peak_s holds."""
+    tl = {
+        "duration_s": 120.0,
+        "events": [{"type": "retention_spike", "start_s": 0.0, "end_s": 0.4, "value": 1.5}],
+    }
+    candidates = extract_candidates(tl)
+    assert len(candidates) == 1
+    assert candidates[0]["peak_s"] == pytest.approx(0.5)
+    assert candidates[0]["setup_start_s"] == pytest.approx(0.0)
 
 
 # ── CORE INVARIANT: setup always before peak ──────────────────────────────────

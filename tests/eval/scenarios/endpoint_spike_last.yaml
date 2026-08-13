@@ -1,0 +1,21 @@
+scenario: endpoint_spike_last
+description: >
+  Issue 459: a retention spike inside the video's final 0.5s bucket — the
+  closing-payoff retention pop. find_peaks never reports the last array
+  sample as a peak, so without endpoint padding the spike was invisible and
+  the video produced zero candidates. The 75s backward window still anchors
+  the setup well before the peak.
+  Principle: "Retention curve is ground truth" (the signal exists; see it).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 120.0
+    events:
+      - {type: retention_spike, start_s: 119.5, end_s: 120.0, value: 1.5}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 118.0
+      peak_s_max: 120.0

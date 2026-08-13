@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from clip_engine.candidates import (
     SKIP_REASON_ALL_SUPPRESSED,
+    SKIP_REASON_NO_POSITIVE_SIGNAL,
     SKIP_REASON_NO_RETENTION_DATA,
     SKIP_REASON_NO_SIGNAL,
     SKIP_REASON_SOURCE_UNAVAILABLE,
@@ -61,29 +62,44 @@ def test_derive_skip_reason_no_signal_empty_timeline():
     assert reason == SKIP_REASON_NO_SIGNAL
 
 
-def test_derive_skip_reason_silence_only_no_retention_data():
-    """Timeline with only silence events (no retention data) → SKIP_REASON_NO_RETENTION_DATA.
+def test_derive_skip_reason_silence_only_no_positive_signal():
+    """Issue 458: silence-only timelines → SKIP_REASON_NO_POSITIVE_SIGNAL.
 
-    Silences contribute weight -0.5 to the signal array, which makes the array non-zero
-    but produces a trough, not a peak — find_peaks returns no peaks. Since there are also
-    no retention_spike events the branch is no_retention_data.
+    The composite has no positive mass (0 everywhere, -0.5 in silences), yet
+    the flat stretches between silences carry prominence 0.5 — the source of
+    the phantom-candidate repro. The honest reason is that no positive signal
+    exists, checked BEFORE the retention-data branch.
     """
-    tl = _tl([{"type": "silence", "start_s": 10.0, "end_s": 20.0}], duration_s=60.0)
+    tl = _tl(
+        [
+            {"type": "silence", "start_s": 100.0, "end_s": 110.0},
+            {"type": "silence", "start_s": 200.0, "end_s": 210.0},
+        ],
+        duration_s=300.0,
+    )
     reason = derive_skip_reason(timeline=tl, source_available=True)
-    assert reason == SKIP_REASON_NO_RETENTION_DATA
+    assert reason == SKIP_REASON_NO_POSITIVE_SIGNAL
 
 
-def test_derive_skip_reason_no_retention_data():
-    """Timeline has non-zero duration but no events at all → SKIP_REASON_NO_RETENTION_DATA.
+def test_derive_skip_reason_all_zero_no_positive_signal():
+    """Issue 458: non-empty but event-less (all-zero) timeline → no_positive_signal.
 
-    build_signal_array returns a flat-zero array → find_peaks finds no peaks.
-    No retention_spike events → reason is no_retention_data (not no_signal, which
-    is reserved for empty/zero-duration timelines).
+    build_signal_array returns a flat-zero array — signal.max() <= 0.0, so the
+    positive-evidence check fires before the retention-data branch.
     """
-    # Flat timeline: duration > 0 so build_signal_array returns an array, but all
-    # values are 0 (no events) → find_peaks finds no peaks. No retention_spike events
-    # means no retention data.
     tl = _tl([], duration_s=60.0)
+    reason = derive_skip_reason(timeline=tl, source_available=True)
+    assert reason == SKIP_REASON_NO_POSITIVE_SIGNAL
+
+
+def test_derive_skip_reason_weak_positive_no_retention_data():
+    """A timeline with positive mass below the peak floor and no retention
+    events still reports no_retention_data — the retention branch survives
+    Issue 458 for signals that exist but are too weak to peak."""
+    tl = _tl(
+        [{"type": "energy_spike", "start_s": 30.0, "end_s": 30.5, "value": 0.2}],
+        duration_s=60.0,
+    )
     reason = derive_skip_reason(timeline=tl, source_available=True)
     assert reason == SKIP_REASON_NO_RETENTION_DATA
 
@@ -124,6 +140,7 @@ def test_derive_skip_reason_source_unavailable_beats_signal():
     "reason",
     [
         SKIP_REASON_NO_SIGNAL,
+        SKIP_REASON_NO_POSITIVE_SIGNAL,
         SKIP_REASON_NO_RETENTION_DATA,
         SKIP_REASON_SOURCE_UNAVAILABLE,
         SKIP_REASON_ALL_SUPPRESSED,
@@ -153,6 +170,7 @@ _VIRALITY_TERMS = frozenset({"viral", "virality", "promises virality", "guarante
     "reason",
     [
         SKIP_REASON_NO_SIGNAL,
+        SKIP_REASON_NO_POSITIVE_SIGNAL,
         SKIP_REASON_NO_RETENTION_DATA,
         SKIP_REASON_SOURCE_UNAVAILABLE,
         SKIP_REASON_ALL_SUPPRESSED,
