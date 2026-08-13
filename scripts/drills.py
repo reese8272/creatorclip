@@ -217,30 +217,72 @@ async def drill_spend_trip() -> None:
     log.info("spend-trip: manual reset restored the flag. PASS")
 
 
+async def _clear_rate_limit_buckets(creator_id: str) -> int:
+    """Delete this creator's slowapi/limits buckets so the drill starts at zero.
+
+    The daily ceiling is a PERSISTENT per-creator counter in Redis, so a second
+    run on the same day starts with the quota already spent. Without this the
+    drill's first probe is 429, ``first_429 == 0``, and the pre-quota guard
+    degenerates to ``all([]) == True`` — it would confirm "a 429 occurs" while
+    proving nothing about WHEN. Mirrors drill_spend_trip, which likewise clears
+    its own counters rather than depending on inherited state.
+
+    `limits` (5.x) namespaces every bucket under the ``LIMITS:`` prefix and the
+    key embeds the limiter key — here the creator id (limiter.py `_creator_key`).
+    Scoped to that id so no other tenant's buckets are touched.
+    """
+    from youtube._redis import get_redis_client
+
+    r = get_redis_client()
+    keys = [k async for k in r.scan_iter(match=f"LIMITS:*{creator_id}*", count=500)]
+    if keys:
+        await r.delete(*keys)
+    return len(keys)
+
+
 async def drill_rate_limit() -> None:
     """#228: the render daily quota 429s past the cap; normal request unaffected."""
     from config import settings
 
-    _, token = _mint_token()
+    creator_id, token = _mint_token()
     limit = int(settings.RENDER_DAILY_JOB_LIMIT)
     ghost = uuid.uuid4()
     path = f"/clips/{ghost}/render"
-    codes: list[int] = []
-    for _ in range(limit + 5):
-        codes.append(await _post(path, token))
-        if codes[-1] == 429:
-            break
-    assert 429 in codes, f"no 429 within {limit + 5} calls; tail={codes[-5:]}"
-    first_429 = codes.index(429)
-    assert all(c == 404 for c in codes[:first_429]), (
-        f"pre-quota probes should be cheap 404s: {set(codes[:first_429])}"
-    )
-    log.info(
-        "rate-limit: %d cheap 404 probes then 429 at request #%d (limit=%d). PASS",
-        first_429,
-        first_429 + 1,
-        limit,
-    )
+    try:
+        cleared = await _clear_rate_limit_buckets(creator_id)
+        log.info("rate-limit: cleared %d pre-existing bucket key(s)", cleared)
+        codes: list[int] = []
+        for _ in range(limit + 5):
+            codes.append(await _post(path, token))
+            if codes[-1] == 429:
+                break
+        assert 429 in codes, f"no 429 within {limit + 5} calls; tail={codes[-5:]}"
+        first_429 = codes.index(429)
+        # THE property (#228): the 429 must arrive only AFTER the quota, not on
+        # some arbitrary earlier request. This is what makes the guard below
+        # non-vacuous — first_429 == 0 now fails loudly instead of passing.
+        assert first_429 >= limit, (
+            f"429 arrived at request #{first_429 + 1} but the limit is {limit} — "
+            "the bucket was not empty at the start, so this run proves nothing "
+            "about the quota boundary"
+        )
+        assert all(c == 404 for c in codes[:first_429]), (
+            f"pre-quota probes should be cheap 404s: {set(codes[:first_429])}"
+        )
+        log.info(
+            "rate-limit: %d cheap 404 probes then 429 at request #%d (limit=%d). PASS",
+            first_429,
+            first_429 + 1,
+            limit,
+        )
+    finally:
+        # Leave the counter clean so the NEXT run also starts from zero. Never let
+        # a cleanup error replace a real assertion failure — the diagnosis matters
+        # more than the tidy-up, and the next run clears at its start anyway.
+        try:
+            await _clear_rate_limit_buckets(creator_id)
+        except Exception:  # noqa: BLE001 — best-effort cleanup, never masks the verdict
+            log.warning("rate-limit: post-drill bucket cleanup failed", exc_info=True)
 
 
 _DRILLS = {
