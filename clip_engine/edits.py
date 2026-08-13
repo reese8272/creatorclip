@@ -287,6 +287,150 @@ def empty_document() -> dict:
     return {"version": SUPPORTED_DOC_VERSION, "cuts": [], "last_applied_at": None}
 
 
+# ── Effective render geometry (Issue 470) ───────────────────────────────────
+#
+# When a trim/clean is confirmed, the delivered video is a concatenation of
+# keep segments of the previous delivered video — but the clip row's
+# start_s/end_s/setup_start_s keep describing the SOURCE window. The helpers
+# below are the single shared vocabulary for the durable record of what was
+# actually delivered (`clips.pending_geometry_jsonb` /
+# `clips.effective_geometry_jsonb` — see models.py):
+#
+#   {"version": 1, "keep_segments_s": [[a, b], ...], "duration_s": <sum>}
+#
+# In `effective_geometry_jsonb` the segments are ORIGINAL clip-relative seconds
+# (origin = setup_start_s ?? start_s) so transcript words map straight through;
+# in `pending_geometry_jsonb` they are relative to the timeline of the render
+# the cuts were applied to (composed into original time at confirm).
+
+GEOMETRY_DOC_VERSION = 1
+
+
+def geometry_doc(keep_ranges: list[tuple[float, float]]) -> dict:
+    """Build the persisted geometry document from ffmpeg keep ranges."""
+    segments = [[round(float(s), 4), round(float(e), 4)] for s, e in keep_ranges]
+    return {
+        "version": GEOMETRY_DOC_VERSION,
+        "keep_segments_s": segments,
+        "duration_s": round(sum(e - s for s, e in segments), 4),
+    }
+
+
+def parse_geometry(doc: object) -> list[tuple[float, float]] | None:
+    """Tolerantly parse a stored geometry document into keep segments.
+
+    Returns ``None`` for anything that is not a well-formed, non-empty,
+    ascending, disjoint segment list at a supported version — readers then
+    fall back to the source-window numbers (the pre-Issue-470 behavior)
+    instead of computing against garbage.
+    """
+    if not isinstance(doc, dict):
+        return None
+    if doc.get("version") != GEOMETRY_DOC_VERSION:
+        return None
+    raw = doc.get("keep_segments_s")
+    if not isinstance(raw, list) or not raw:
+        return None
+    segments: list[tuple[float, float]] = []
+    cursor = -math.inf
+    for item in raw:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            return None
+        try:
+            start, end = float(item[0]), float(item[1])
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(start) and math.isfinite(end)):
+            return None
+        if start < cursor or end <= start:
+            return None
+        segments.append((start, end))
+        cursor = end
+    return segments
+
+
+def geometry_duration_s(doc: object) -> float | None:
+    """Delivered duration recorded by a geometry document, or ``None``."""
+    segments = parse_geometry(doc)
+    if segments is None:
+        return None
+    return sum(e - s for s, e in segments)
+
+
+def playable_duration_s(
+    *,
+    setup_start_s: float | None,
+    start_s: float,
+    end_s: float,
+    effective_geometry: object,
+) -> float:
+    """Duration of the clip's DELIVERED video, in clip-relative seconds.
+
+    When a confirmed trim/clean recorded effective geometry, that is the
+    authority; otherwise the render origin is ``setup_start_s`` when set — the
+    engine starts the clip at the setup, not the peak's aftermath — so that,
+    not ``start_s``, is what every clip-relative time is measured from.
+    """
+    effective = geometry_duration_s(effective_geometry)
+    if effective is not None:
+        return effective
+    origin_s = setup_start_s if setup_start_s is not None else start_s
+    return end_s - origin_s
+
+
+def compose_keep_segments(
+    prior: list[tuple[float, float]] | None,
+    pending: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Map ``pending`` keep segments (in prior-DELIVERED time) through
+    ``prior`` keep segments (in original clip-relative time).
+
+    ``prior is None`` means the previous delivered video WAS the original
+    window (identity), so ``pending`` is already original-relative. A pending
+    segment that straddles a prior seam maps to multiple original intervals.
+    """
+    if prior is None:
+        return list(pending)
+    composed: list[tuple[float, float]] = []
+    offset = 0.0  # delivered-time start of the current prior segment
+    for a, b in prior:
+        seg_len = b - a
+        for p_start, p_end in pending:
+            lo = max(p_start, offset)
+            hi = min(p_end, offset + seg_len)
+            if hi > lo:
+                composed.append((a + (lo - offset), a + (hi - offset)))
+        offset += seg_len
+    composed.sort()
+    return composed
+
+
+def map_words_to_delivered(
+    words: list[dict], keep_segments: list[tuple[float, float]]
+) -> list[dict]:
+    """Project clip-relative word dicts (``{"word", "start", "end"}``) onto the
+    delivered timeline described by ``keep_segments`` (same timebase as the
+    words). Words falling entirely inside a cut are dropped; a word straddling
+    a seam is clamped to its largest kept overlap. Output times are
+    delivered-relative seconds, ascending.
+    """
+    mapped: list[dict] = []
+    for w in words:
+        w_start = float(w.get("start", 0.0))
+        w_end = float(w.get("end", w_start))
+        best: tuple[float, float, float] | None = None  # (overlap, d_start, d_end)
+        offset = 0.0
+        for a, b in keep_segments:
+            lo = max(w_start, a)
+            hi = min(w_end, b)
+            if hi > lo and (best is None or hi - lo > best[0]):
+                best = (hi - lo, offset + (lo - a), offset + (hi - a))
+            offset += b - a
+        if best is not None:
+            mapped.append({**w, "start": best[1], "end": best[2]})
+    return mapped
+
+
 def _invert_cuts(
     cuts: list[tuple[float, float]], clip_duration_s: float
 ) -> list[tuple[float, float]]:
