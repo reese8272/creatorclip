@@ -434,6 +434,32 @@ def test_render_env_step_is_hard_and_guarded() -> None:
     assert "pytest -m render_env -q" in run, "the render-env step must actually run the lane"
 
 
+def test_llm_nightly_runs_scoring_behavioral_lane() -> None:
+    """The nightly live-LLM workflow must run the Issue-476 scoring lane.
+
+    llm-e2e-nightly.yml hardcodes its pytest path; before Issue 476 it ran ONLY
+    tests/test_llm_live.py, so the clip scorer — the single decision-maker for
+    what ships and which principle it cites — had no behavioral gate anywhere.
+    This pin makes silently dropping the scoring lane from the nightly a CI
+    failure, the same pattern as the render-env and coverage pins above.
+    """
+    src = _load_workflow("llm-e2e-nightly.yml")
+    assert "tests/test_llm_live_scoring.py" in src, (
+        "llm-e2e-nightly.yml's pytest invocation must include "
+        "tests/test_llm_live_scoring.py — the Issue-476 scoring behavioral lane "
+        "(setup-vs-aftermath ordering, shape/principle/range, dna_score ordering) "
+        "runs nowhere else."
+    )
+    assert "tests/test_llm_live.py" in src, (
+        "llm-e2e-nightly.yml must keep tests/test_llm_live.py — adding the "
+        "scoring lane must not displace the Issue-319 feature-module lane."
+    )
+    assert "Scoring behavioral lane" in src, (
+        "llm-e2e-nightly.yml's step summary must include the '## Scoring "
+        "behavioral lane' section so the nightly posts the Issue-476 margins."
+    )
+
+
 def test_render_env_marker_excluded_from_default_lane() -> None:
     """pytest.ini must keep the underscored `render_env` marker registered and
     excluded from the default addopts lane. The hyphenated `render-env`
