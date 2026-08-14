@@ -4087,4 +4087,100 @@ these survived it and belong with this work because they share the same boundary
 - [ ] `docs/OFF_COURSE_BUGS.md` 2026-08-10 entry flipped from 📋 Open to ✅ Fixed with the PR
 - [ ] Verified on real output in the next fresh-upload session, not only on the fixture
 
-- Next free issue number: **485**.
+---
+
+### Issue 485: the Stripe webhook URL points at a 404 — no purchase has ever credited minutes
+
+- [ ] **Status:** open · **Size:** S · filed 2026-08-13 (live defect, found by the first real
+      purchase on prod) · **Lane:** L28 · **BETA BLOCKER**
+
+**Severity: SEV1 — every completed purchase takes the customer's money and grants nothing.**
+
+**What happened.** The owner bought the `starter` pack on prod on 2026-08-13. Stripe session
+`cs_live_a119Bph…` came back `status=complete`, `payment_status=paid`, `amount_total=1800`. The
+minutes never appeared. `POST /billing/webhook` was never hit — `billing_webhook_received` does not
+appear in the log at all, so Stripe never delivered rather than being rejected.
+
+**Root cause.** The webhook endpoint registered in the Stripe account is
+`https://autoclip.studio/webhooks/stripe`, but the app serves the handler at
+**`/billing/webhook`** — `routers/billing.py:26` mounts the router at `prefix="/billing"` and
+`:220` declares `@router.post("/webhook")`. Probed live:
+
+| URL | Response |
+|---|---|
+| `https://autoclip.studio/webhooks/stripe` (registered in Stripe) | **404** |
+| `https://autoclip.studio/billing/webhook` (actually served) | 400 — alive, correctly rejecting an unsigned probe |
+
+**Why it hid for so long.** Issue 453's `HTTPXClient` outage meant no Checkout Session was ever
+*created* between 2026-05-31 and 2026-08-12, so no webhook was ever *delivered*, so a wrong
+delivery URL could not surface. Fixing 453 exposed the next defect in the same path. This is the
+second consecutive billing failure where the layer under test passed while the feature stayed
+broken — `POST /billing/checkout` returns a clean 200 and logs `billing checkout_session` even
+though the customer receives nothing.
+
+**Mitigation already in place (do not rebuild it).** `reconcile_stripe_ledger`
+(`worker/tasks.py:1347`, Issue 205) exists precisely for "paid Checkout sessions that the webhook
+never delivered" and runs every 24 h (`worker/schedule.py:88`), granting idempotently via
+`UNIQUE(stripe_session_id)`. The 2026-08-13 purchase is deliberately being left to the scheduled
+beat so that the reconciliation path gets proven on real data.
+
+**The fix — Stripe Dashboard, not code.** Edit the **existing** endpoint's URL to
+`https://autoclip.studio/billing/webhook`. ⚠️ **Edit it; do not create a new endpoint.** A new
+endpoint is issued a new signing secret, which would no longer match `STRIPE_WEBHOOK_SECRET` on the
+VM — turning a 404 into `billing_webhook_rejected reason=bad_signature`, i.e. the same broken
+outcome with a different error.
+
+**Acceptance**
+- [ ] The registered endpoint URL is `https://autoclip.studio/billing/webhook`
+- [ ] `STRIPE_WEBHOOK_SECRET` on the VM still matches that endpoint's signing secret (confirm by a
+      real delivery, not by inspection)
+- [ ] A fresh live purchase logs `billing_webhook_received` → `billing_webhook_processed` and
+      credits minutes **without** waiting for the reconcile sweep
+- [ ] The 2026-08-13 `starter` purchase is credited (via reconcile or the fixed webhook), verified
+      against the balance
+- [ ] A test asserts the served webhook path matches the value documented for the Stripe endpoint,
+      so a future route-prefix change cannot silently re-break delivery
+- [ ] `docs/GO_LIVE.md` billing row updated with the evidence
+
+---
+
+### Issue 486: give AutoClip its own Stripe account — checkout currently shows another product's branding
+
+- [ ] **Status:** open · **Size:** M · filed 2026-08-13 (owner decision same day) · **Lane:** L28 ·
+      **Blocks a non-friend audience, not the friend beta**
+
+**Severity: high — it lands on the card-entry page, the highest-trust surface in the product.**
+
+**What's wrong.** One Stripe account currently serves both AutoClip and an unrelated product. The
+account's registered webhook endpoints show both:
+
+```
+https://autoclip.studio/webhooks/stripe   → checkout.session.completed
+https://wheretoliv.com/stripe/webhook     → checkout.session.completed, customer.subscription.*
+```
+
+Stripe Checkout renders the **account-level** business profile and offers no per-product override,
+so AutoClip customers see the other product's name and domain at the moment they enter card
+details. Legacy sessions in the same account carry foreign metadata shapes (`{"plan": "recruiter"}`
+vs our `{"creator_id", "pack_id"}`), which also makes any ledger reconciliation noisier than it
+needs to be.
+
+**Decision (owner, 2026-08-13):** stand up a **separate Stripe account for AutoClip** rather than
+rewriting the shared account's profile — the shared-profile edit is account-wide and would simply
+move the branding mismatch onto the other product. A separate account also keeps revenue, payouts
+and bookkeeping uncommingled.
+
+**Acceptance**
+- [ ] A dedicated AutoClip Stripe account exists with the business profile reading **AutoClip** and
+      `autoclip.studio`
+- [ ] Its minute-pack prices/products are recreated and the pack ids match `billing/packs`
+- [ ] `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` rotated on the VM and in GitHub Secrets, with
+      the webhook endpoint registered at `/billing/webhook` (see #485)
+- [ ] `scripts/doctor.py --full` green against the new account (it probes through
+      `billing.stripe_client._STRIPE`, so it exercises the real transport)
+- [ ] A live purchase on the new account credits minutes end to end
+- [ ] Old-account handling recorded: the 2026-08-13 `starter` purchase stays where it settled;
+      note in `docs/DECISIONS.md` whether any further migration is needed
+- [ ] `docs/SECRETS.md` updated for the new key origin
+
+- Next free issue number: **487**.
