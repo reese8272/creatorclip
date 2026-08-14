@@ -126,6 +126,15 @@ def test_build_analysis_prompt_top_performer() -> None:
 
 
 def test_build_analysis_prompt_underperformer_no_metrics() -> None:
+    """With no metrics the prompt must not assert the video under-performed.
+
+    This previously asserted `"underperformer" in result` and `"unknown" in
+    result` — i.e. it pinned a prompt that said "It has unknown views and unknown
+    engagement rate" while also instructing the model to "be concrete and cite
+    the numbers", and labelled the video an underperformer on no evidence. The
+    model then either invented figures or hedged, and the result was persisted
+    as a CreatorInsight.
+    """
     result = _build_analysis_prompt(
         video_title="Another Video",
         kind="vlog",
@@ -134,8 +143,11 @@ def test_build_analysis_prompt_underperformer_no_metrics() -> None:
         performer_kind="bottom",
         dna_brief=None,
     )
-    assert "underperformer" in result
-    assert "unknown" in result
+    assert "No performance metrics are available" in result
+    assert "underperformer" not in result
+    assert "unknown views" not in result
+    # The model must be told not to invent the missing figures.
+    assert "Do NOT state, estimate, or imply any view count" in result
     assert "Creator DNA summary" not in result
 
 

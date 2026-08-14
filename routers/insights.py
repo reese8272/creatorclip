@@ -382,7 +382,21 @@ async def _fetch_performers(
             "performance_score": score,
             "performance_score_components": components,
         }
-    return [by_id[vid] for vid in video_ids if vid in by_id]
+    resolved = [by_id[vid] for vid in video_ids if vid in by_id]
+    if len(resolved) < len(video_ids):
+        # A DNA profile can outlive the videos it was built from (catalog purge,
+        # re-sync, right-to-erasure). When that happens this returns [] while the
+        # UI still tells the creator their DNA "was learned from your top videos"
+        # — a claim with nothing behind it. Log so the staleness is visible; the
+        # DnaCard age badge is what surfaces it to the creator.
+        logger.info(
+            "DNA references %d video(s) for creator %s but only %d still resolve — "
+            "the profile is stale relative to the catalog",
+            len(video_ids),
+            creator_id,
+            len(resolved),
+        )
+    return resolved
 
 
 def _coerce_uuid_list(raw: object) -> list[uuid.UUID]:
@@ -766,6 +780,23 @@ def _build_analysis_prompt(
     eng_str = f"{(engagement_rate * 100):.1f}%" if engagement_rate is not None else "unknown"
     perf_label = "top performer" if performer_kind == "top" else "underperformer"
     dna_context = f"\n\nCreator DNA summary:\n{dna_brief[:800]}" if dna_brief else ""
+    # With no VideoMetrics row the prompt read "It has unknown views and unknown
+    # engagement rate" while still instructing "Be concrete and cite the numbers"
+    # — so the model either invented figures or hedged, and either way the result
+    # was persisted as a CreatorInsight titled "Why '<title>' excelled". Name the
+    # gap explicitly and forbid inventing numbers.
+    if views is None and engagement_rate is None:
+        return (
+            wrap_untrusted("video_title", video_title)
+            + f"No performance metrics are available for the video above ({kind}) — "
+            "YouTube Analytics has not returned views or engagement data for it yet."
+            f"{dna_context}\n\n"
+            "In 2-3 sentences, say plainly that there is not yet enough performance "
+            "data to explain how this video did, and describe at most one thing worth "
+            "watching once data arrives. Do NOT state, estimate, or imply any view "
+            "count, engagement rate, or comparison to other videos. Do not promise "
+            "virality or make guarantees."
+        )
     # Issue 224: video_title is YouTube-sourced (attacker-influenceable). Wrapping
     # it with wrap_untrusted JSON-encodes the title so an adversarially-crafted
     # title cannot break out of the surrounding prompt text via quote injection
@@ -928,7 +959,19 @@ async def analyze_performer(
             status_code=503, detail="Analysis service temporarily unavailable"
         ) from exc
 
-    title = f"Why '{video.title or video.youtube_video_id}' {'excelled' if body.performer_kind == 'top' else 'underperformed'}"
+    has_metrics = metrics_row is not None and (
+        metrics_row.views is not None or metrics_row.engagement_rate is not None
+    )
+    if has_metrics:
+        title = (
+            f"Why '{video.title or video.youtube_video_id}' "
+            f"{'excelled' if body.performer_kind == 'top' else 'underperformed'}"
+        )
+    else:
+        # Don't title an analysis "Why X excelled" when no performance data exists
+        # to say that it did.
+        title = f"'{video.title or video.youtube_video_id}' — not enough data yet"
+
     insight = CreatorInsight(
         creator_id=creator.id,
         video_id=video_id,
@@ -938,6 +981,25 @@ async def analyze_performer(
         dna_version=dna_version,
         is_saved=False,
     )
+    # Only persist when the analysis was actually grounded in metrics. The cache
+    # key is (video, insight_type, dna_version), so a metrics-less analysis wrote
+    # a row under dna_version=NULL that nothing ever invalidated: once real
+    # metrics arrived the key changed, the stale row was never cleaned up, and
+    # GET /insights/saved kept serving it (the UI renders its version as "?").
+    # Returning it unsaved keeps the endpoint's contract without poisoning the
+    # cache — the next call regenerates against whatever data exists by then.
+    if not has_metrics:
+        logger.info(
+            "performer analysis for video=%s ran without metrics — returning without "
+            "caching so it regenerates once YouTube Analytics data arrives",
+            video_id,
+        )
+        # Never committed, so the server-side created_at default has not fired and
+        # _insight_to_dict would raise on None.isoformat(). Stamp the transient
+        # row so the response shape is identical to the cached path.
+        insight.created_at = datetime.now(UTC)
+        return _insight_to_dict(insight)
+
     session.add(insight)
     await session.commit()
     await session.refresh(insight)

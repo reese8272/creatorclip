@@ -319,8 +319,13 @@ def _build_request(
     """
     static_text = _SYSTEM_STATIC.format(principles="\n".join(f"- {p}" for p in CLIPPING_PRINCIPLES))
     system: list[dict] = [{"type": "text", "text": static_text}]
-    if dna_brief:
-        system.append(dna_system_block(static_text, dna_brief))
+    # dna_system_block returns None when there is no brief, so the `if dna_brief`
+    # guard this used to carry is now redundant — and checking the block itself
+    # is what makes the omission provable to the type checker. Same shape as the
+    # six sibling builders.
+    dna_block = dna_system_block(static_text, dna_brief)
+    if dna_block:
+        system.append(dna_block)
 
     user_content = ""
     if identity_text:

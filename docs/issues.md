@@ -4026,4 +4026,442 @@ captions/caption_position must respect the padded safe area.
 - [ ] Note: reuse of the JSONB key name `background` is acceptable only nested under the
       fit-mode config, not top-level (old rows carry dead top-level keys)
 
-- Next free issue number: **484**.
+---
+
+### Issue 484: clips must not open on a clause that inverts the speaker's meaning
+
+- [ ] **Status:** open · **Size:** M · filed 2026-08-13 (promoted from `docs/OFF_COURSE_BUGS.md`
+      2026-08-10, where it had sat open, unfiled and unowned) · **Lane:** L29 follow-up ·
+      **BETA BLOCKER for a non-friend audience**
+
+**Severity: SEV2 — a clip that states the inverse of the creator's actual opinion is the worst
+output this system can produce.** It is worse than an awkward open: an awkward open is a quality
+problem, this is a *misattribution* problem. Rank 9 is unrendered today, but the creator can render
+it from the UI at any time, so the exposure is live.
+
+**The defect.** `build_sentence_index` treats a Deepgram **utterance** boundary as a **grammatical
+sentence** boundary. Deepgram ended an utterance between `"don't"` and `"feel"`, so the index opened
+a sentence span at `"feel"`, and `snap_start` therefore considered it a clean standalone open —
+`is_weak_opener("feel")` is correctly `False`, because "feel" is not a weak opener. The clip opens:
+
+> *"feel like Percy Butler is a starting free anything"*
+
+The word immediately before it is **"don't"**. The rendered claim is the **opposite** of what the
+speaker said. Rank 7 (`"the Terry thing, no."`, preceded by `"but"`) is the same shape and was
+knowingly scoped out of Issue 441 as "a fragment, not a closed grammatical class".
+
+**Why the obvious fix is the wrong fix — do not do this.** *Do not extend the weak-opener word
+list.* No closed class of words catches this: "feel" is a perfectly good sentence opener in general,
+and the defect is not a property of the opening word at all — it is a property of the **boundary**
+being fake. A longer list would add false positives without touching the real cause.
+
+**Tractable signals** (from the 2026-08-10 root cause; settle the choice in this issue's own CHECK
+phase, and prefer whichever is provable from the fixture):
+- **(a)** the previous word carrying **no terminal punctuation** *and* a **sub-threshold pause** —
+  this pair is what actually distinguishes a genuine sentence break from an utterance break, and it
+  is available in the Deepgram word objects we already persist;
+- **(b)** a **negation or auxiliary** immediately preceding the candidate start (`don't`, `won't`,
+  `never`, `can't`, `isn't`, and the auxiliary class generally), which is the specific construction
+  that inverts meaning rather than merely truncating it.
+
+Signal (a) is the more general fix and (b) the narrower high-precision one; they compose.
+
+**Also in scope — the Issue 441 residual** (`docs/issues.md:2487`). Issue 449 shipped a partial fix;
+these survived it and belong with this work because they share the same boundary root cause:
+- hedge opens outside the shipped list — rank 6 `"Like,"`, rank 12 `"maybe"`
+- the fragment class — rank 7 `"the Terry thing, no."`
+
+**Acceptance**
+- [ ] An eval fixture built from **this exact case** — the `"don't" / "feel like Percy Butler…"`
+      boundary — is added to `tests/eval/scenarios/` and fails before the fix, passes after
+- [ ] A clip does not open at a sentence-index boundary that is an utterance boundary rather than a
+      grammatical one, per the signal chosen in CHECK
+- [ ] The weak-opener word list is **not** extended (regression guard: the fix must hold with the
+      list unchanged)
+- [ ] The Issue 441 residual hedge opens (`"Like,"`, `"maybe"`) and the fragment class no longer
+      open a clip
+- [ ] `SCENARIO_FLOOR` ratcheted to reflect the added fixture(s), in both pinned locations
+      (`tests/test_clip_engine.py`, `tests/test_eval_transparency.py`)
+- [ ] Setup-start geometry is unaffected — the existing geometry and snap scenarios stay green
+- [ ] Scores still cite a named principle from `docs/CLIPPING_PRINCIPLES.md`
+- [ ] `docs/OFF_COURSE_BUGS.md` 2026-08-10 entry flipped from 📋 Open to ✅ Fixed with the PR
+- [ ] Verified on real output in the next fresh-upload session, not only on the fixture
+
+---
+
+### Issue 485: the Stripe webhook URL points at a 404 — no purchase has ever credited minutes
+
+- [x] **Status:** **DONE 2026-08-14** · **Size:** S · filed 2026-08-13 (live defect, found by the
+      first real purchase on prod) · **Lane:** L28 · was **BETA BLOCKER**
+
+**Severity: SEV1 — every completed purchase takes the customer's money and grants nothing.**
+
+> ### ⚠️ Root cause was TWO defects, and the one filed first was the lesser one
+>
+> This issue was originally filed naming the wrong-URL 404 as the root cause. That was
+> **incomplete**: the operative blocker was at the Cloudflare edge, and the 404 sat behind it.
+>
+> **485a — Cloudflare's OWASP Core Ruleset blocked Stripe's POSTs before they reached the app.**
+> Stripe's delivery attempt received a Cloudflare *"Sorry, you have been blocked"* page (Ray
+> `a2acda78fc1e5509`) from source `54.187.205.235` — an address on
+> [Stripe's published webhook IP list](https://docs.stripe.com/ips). Confirmed in Security Events,
+> which named the OWASP Core Ruleset as the acting service. The payload is not malicious; this is
+> the documented OWASP **anomaly-score** false positive on Stripe webhook JSON — the same failure
+> Troy Hunt documented on Have I Been Pwned, resolved the same way.
+> **Fix:** `stripe-webhook-skip-waf` managed-rules exception, path + Stripe-IP scoped, Skip all
+> remaining rules, placed First. Recorded in `docs/EDGE_SECURITY.md` **Rule 2**.
+>
+> *A trap worth recording:* Bot Fight Mode is the intuitive suspect (it is ON, and
+> `docs/EDGE_SECURITY.md` already noted it 403'd GitHub health checks). It was **not** the cause —
+> and had it been, the fix above would not have worked, because Bot Fight Mode does not run on the
+> Ruleset Engine and **cannot** be skipped by a WAF rule on the Free plan. Read Security Events
+> before designing the fix.
+>
+> **485b — the endpoint URL 404**, described below, was real and would have bitten the instant the
+> edge block lifted. Fixed by editing the endpoint in place (preserving the signing secret).
+>
+> **Verified 2026-08-14:** a real purchase logged `billing checkout_session` →
+> `billing_webhook_received` → `billing grant … minutes=200 reason=purchase` →
+> `billing_webhook_processed`, all under `request_id=48801afa…`. `billing_webhook_received` had
+> never appeared in this app's history before that moment. `docs/GO_LIVE.md` billing row is GREEN.
+
+**What happened.** The owner bought the `starter` pack on prod on 2026-08-13. Stripe session
+`cs_live_a119Bph…` came back `status=complete`, `payment_status=paid`, `amount_total=1800`. The
+minutes never appeared. `POST /billing/webhook` was never hit — `billing_webhook_received` does not
+appear in the log at all, so Stripe never delivered rather than being rejected.
+
+**Root cause.** The webhook endpoint registered in the Stripe account is
+`https://autoclip.studio/webhooks/stripe`, but the app serves the handler at
+**`/billing/webhook`** — `routers/billing.py:26` mounts the router at `prefix="/billing"` and
+`:220` declares `@router.post("/webhook")`. Probed live:
+
+| URL | Response |
+|---|---|
+| `https://autoclip.studio/webhooks/stripe` (registered in Stripe) | **404** |
+| `https://autoclip.studio/billing/webhook` (actually served) | 400 — alive, correctly rejecting an unsigned probe |
+
+**Why it hid for so long.** Issue 453's `HTTPXClient` outage meant no Checkout Session was ever
+*created* between 2026-05-31 and 2026-08-12, so no webhook was ever *delivered*, so a wrong
+delivery URL could not surface. Fixing 453 exposed the next defect in the same path. This is the
+second consecutive billing failure where the layer under test passed while the feature stayed
+broken — `POST /billing/checkout` returns a clean 200 and logs `billing checkout_session` even
+though the customer receives nothing.
+
+**Mitigation already in place (do not rebuild it).** `reconcile_stripe_ledger`
+(`worker/tasks.py:1347`, Issue 205) exists precisely for "paid Checkout sessions that the webhook
+never delivered" and runs every 24 h (`worker/schedule.py:88`), granting idempotently via
+`UNIQUE(stripe_session_id)`. The 2026-08-13 purchase is deliberately being left to the scheduled
+beat so that the reconciliation path gets proven on real data.
+
+**The fix — Stripe Dashboard, not code.** Edit the **existing** endpoint's URL to
+`https://autoclip.studio/billing/webhook`. ⚠️ **Edit it; do not create a new endpoint.** A new
+endpoint is issued a new signing secret, which would no longer match `STRIPE_WEBHOOK_SECRET` on the
+VM — turning a 404 into `billing_webhook_rejected reason=bad_signature`, i.e. the same broken
+outcome with a different error.
+
+**Acceptance**
+- [x] Stripe's webhook IPs can reach `/billing/webhook` through the Cloudflare edge —
+      `stripe-webhook-skip-waf` exception deployed 2026-08-14 (`docs/EDGE_SECURITY.md` Rule 2)
+- [x] The registered endpoint URL is `https://autoclip.studio/billing/webhook`
+- [x] `STRIPE_WEBHOOK_SECRET` on the VM still matches that endpoint's signing secret — confirmed by
+      a real signed delivery being accepted, not by inspection (the endpoint was edited in place
+      rather than recreated, so the secret never rotated)
+- [x] A fresh live purchase logs `billing_webhook_received` → `billing_webhook_processed` and
+      credits minutes **without** waiting for the reconcile sweep — 2026-08-14, 200 minutes,
+      `request_id=48801afa…`
+- [x] `docs/GO_LIVE.md` billing row updated with the evidence → **GREEN**
+- [ ] **Follow-up, not blocking:** a test asserts the served webhook path matches the URL registered
+      with Stripe, so a future router-prefix change cannot silently re-break delivery. Tracked as
+      **Issue 487**.
+- [ ] **Follow-up, not blocking:** confirm the 2026-08-13 `starter` purchase (the one that was
+      blocked) also credited — it should have been swept up by `reconcile_stripe_ledger`, and
+      confirming it closes an otherwise-unverified Issue 205 acceptance criterion.
+
+---
+
+### Issue 486: fix checkout branding — checkout showed another product's branding
+
+- [x] **Status:** **DONE 2026-08-14 — resolved differently than filed.** · **Size:** M · filed
+      2026-08-13 · **Lane:** L28
+
+> ### ✅ Resolved by rebranding the shared account, NOT by splitting accounts
+>
+> Filed as "give AutoClip its own Stripe account". That is **no longer the right fix**, and the
+> separate-account plan is **descoped** — see `docs/DECISIONS.md` 2026-08-14.
+>
+> **What changed:** wheretoliv.com turned out to be **dormant**, so the shared-account objection
+> ("rebranding moves the mismatch onto the other product") evaporated. The owner also has a real
+> legal entity — **Ludwick Solutions LLC** — which is the correct merchant of record for *both*
+> products. Billing every product under the parent entity is the normal arrangement; splitting
+> Stripe accounts would fragment revenue and payouts for no benefit.
+>
+> **Applied 2026-08-14, verified against the live account:**
+>
+> | Field | Before | After |
+> |---|---|---|
+> | `business_profile.name` | `Reese Ludwick` | `Ludwick Solutions LLC` |
+> | `business_profile.url` | `wheretoliv.com` | `autoclip.studio` |
+> | statement descriptor | `LUDWICK SOLUTIONS LLC` | `AUTOCLIP.STUDIO` |
+> | card descriptor prefix | *(unset → truncated to `LUDWICK SO`)* | `AUTOCLIP` |
+>
+> **The statement descriptor was the real find here.** Stripe truncates an unset card prefix from
+> the static descriptor to 10 characters, so card charges were going out as **`LUDWICK SO`** — an
+> unrecognizable string on the statement of someone who bought "AutoClip". That is the textbook
+> cause of avoidable disputes ([Stripe docs](https://docs.stripe.com/get-started/account/statement-descriptors)),
+> and it was invisible until billing actually worked. Legitimate under Stripe's rule that the
+> descriptor "reflects your DBA name" — AutoClip is the trade name Ludwick Solutions LLC sells under.
+>
+> **Residual (not blocking):** `business_profile.support_email` is still unset, so Stripe prints no
+> support contact on receipts. Set it alongside Issue 488's contact-address work.
+> The `support_address` is still the owner's **home address** — replace with the same PO box /
+> CMRA mailbox that `MAILING_ADDRESS` (#246) needs.
+
+**Severity: high — it lands on the card-entry page, the highest-trust surface in the product.**
+
+**What's wrong.** One Stripe account currently serves both AutoClip and an unrelated product. The
+account's registered webhook endpoints show both:
+
+```
+https://autoclip.studio/webhooks/stripe   → checkout.session.completed
+https://wheretoliv.com/stripe/webhook     → checkout.session.completed, customer.subscription.*
+```
+
+Stripe Checkout renders the **account-level** business profile and offers no per-product override,
+so AutoClip customers see the other product's name and domain at the moment they enter card
+details. Legacy sessions in the same account carry foreign metadata shapes (`{"plan": "recruiter"}`
+vs our `{"creator_id", "pack_id"}`), which also makes any ledger reconciliation noisier than it
+needs to be.
+
+**Decision (owner, 2026-08-13):** stand up a **separate Stripe account for AutoClip** rather than
+rewriting the shared account's profile — the shared-profile edit is account-wide and would simply
+move the branding mismatch onto the other product. A separate account also keeps revenue, payouts
+and bookkeeping uncommingled.
+
+**Acceptance** *(rewritten 2026-08-14 for the shared-account resolution; the original
+separate-account criteria are descoped — no key rotation, no product recreation, no webhook
+re-registration is needed, which is most of why this approach won)*
+- [x] Checkout no longer shows an unrelated product's domain — `business_profile.url` is
+      `autoclip.studio`
+- [x] The merchant of record is the real legal entity — `business_profile.name` is
+      `Ludwick Solutions LLC`
+- [x] Card statements show a descriptor the customer recognizes — prefix `AUTOCLIP`,
+      static `AUTOCLIP.STUDIO`, both verified against the live account
+- [x] `docs/DECISIONS.md` records why the separate account was descoped
+- [ ] **Residual:** `business_profile.support_email` set (currently unset → no support contact on
+      receipts)
+- [ ] **Residual:** `business_profile.support_address` moved off the owner's home address — same
+      mailbox as `MAILING_ADDRESS` (#246); tracked with Issue 488
+
+---
+
+### Issue 487: pin the Stripe webhook path so a router change cannot silently kill revenue
+
+- [ ] **Status:** open · **Size:** S · filed 2026-08-14 (follow-up to #485) · **Lane:** L28
+
+**Severity: SEV3 — cheap insurance on a path that has already failed silently once.**
+
+Issue 485 cost a 100%-silent revenue outage partly because the URL registered in Stripe
+(`/webhooks/stripe`) and the URL the app serves (`/billing/webhook`) drifted apart with nothing
+watching. The served path is assembled from two places — `APIRouter(prefix="/billing")` at
+`routers/billing.py:26` and `@router.post("/webhook")` at `:220` — so a future prefix change would
+move the endpoint with no test failing and no error anywhere. The failure mode is invisible: Stripe
+retries into a 404 and the app logs nothing at all.
+
+**Approach.** A unit test that reads the **app's own route table** (`app.routes`) and asserts the
+Stripe webhook path equals a single documented constant, rather than hardcoding the string twice.
+Same shape as the existing CI-config pins. Cheap, no network, no Stripe dependency.
+
+Consider also asserting the path in `docs/EDGE_SECURITY.md` Rule 2's expression matches — the WAF
+exception is scoped to the literal path, so a route change silently breaks the edge exception too,
+re-creating the *other* half of #485.
+
+**Acceptance**
+- [ ] A test resolves the webhook route from the FastAPI app's route table and asserts it equals the
+      documented path
+- [ ] The test names #485 in a comment so the next reader knows why it exists
+- [ ] Failing the test names the remediation (update the Stripe endpoint URL **and** the
+      `docs/EDGE_SECURITY.md` Rule 2 expression), not just "paths differ"
+
+---
+
+### Issue 488: name the legal entity in the ToS and Privacy Policy — the operator is now an LLC
+
+- [ ] **Status:** open · **Size:** S · filed 2026-08-14 · **Lane:** L28 ·
+      **Required before non-friend users; also read by Google's OAuth review (#29)**
+
+**Severity: medium — a compliance-accuracy gap, not a bug.**
+
+**What changed.** As of 2026-08-14 the service bills under a real legal entity, **Ludwick Solutions
+LLC** (Issue 486). The legal pages have not caught up: `static/privacy.html` and `static/tos.html`
+still route the most serious contact channels to a **personal Gmail address** —
+
+- `static/privacy.html`: *"Data breach queries and reports can be directed to
+  `reesepludwick@gmail.com`"*
+- `static/privacy.html`: the COPPA under-age escalation path, same address
+- ToS carries the same address
+
+**Why it matters, concretely:**
+1. **GDPR/CCPA identify-the-controller.** A privacy policy is expected to name the **data
+   controller** — now the LLC, not an individual. Issue 252 rewrote these pages for GDPR/CCPA when
+   the operator *was* an individual; that premise has changed.
+2. **Google's OAuth verification reads this page.** `docs/issues-archive-2026-08-03.md` records
+   *"Privacy Policy inaccuracy … is a common Google rejection reason."* An entity mismatch between
+   the billing merchant, the consent screen, and the privacy policy is exactly the class of
+   inconsistency that review catches (#29).
+3. **A personal Gmail as the breach-report channel** is a credibility problem the moment a user is
+   not a friend — and a breach channel that depends on one person's personal inbox is a genuine
+   operational weakness, not only a cosmetic one.
+4. **The Stripe account has the same shape of gap** — `support_email` unset, `support_address` is
+   the owner's home address. Both surface on customer receipts.
+
+**Approach.** Introduce the entity name once, in config, and reference it from the templates rather
+than hardcoding it in two HTML files — the same mistake as any duplicated constant. Then sweep every
+user-facing legal surface for the personal address.
+
+**Acceptance**
+- [ ] `static/privacy.html` and `static/tos.html` identify **Ludwick Solutions LLC** as the operator
+      and data controller
+- [ ] Breach-report and COPPA contacts point to a role address on the domain (e.g.
+      `privacy@autoclip.studio`), not a personal Gmail
+- [ ] Stripe `business_profile.support_email` set to the same role address (closes an Issue 486
+      residual)
+- [ ] Stripe `support_address` + `MAILING_ADDRESS` (#246) both set to a PO box or CMRA mailbox —
+      **not** the owner's home address, since both are printed publicly
+- [ ] `docs/COMPLIANCE.md` names the controlling entity
+- [ ] The existing structural doc tests still pass (`tests/test_static.py` pins these pages)
+- [ ] No personal email address remains in any user-facing surface — grep clean
+
+---
+
+### 489 — Catalog sync imported nothing for 7 weeks (`fields=` / `kind` contract drift) — DONE 2026-08-14
+
+**SEV0 — the single defect behind "sync says 0 videos and 0 Shorts".**
+
+`youtube/data_api.py` requested `snippet(resourceId/videoId,title,publishedAt)` while
+`list_channel_videos` filtered items on `resource_id.get("kind") == "youtube#video"`. A Google
+`fields` spec returns ONLY the properties it names, so `kind` was absent, every item was dropped,
+and `sync_video_catalog` hit its `if not playlist_items: return` guard. HTTP 200, no exception,
+`"Synced N video(s)"` in the worker log. Introduced by `38317eb` (Issue 260, 2026-06-24).
+
+**Proven live** inside the prod app container against `UCNU5Tnt0xp7YtHNPgxDrSIw`: with the filter,
+`resourceId` keys are `['videoId']`, 0 of 5 items survive; without it, `['kind','videoId']`, 5 of 5
+survive. Prod DB corroborates: every `origin=catalog` row created 2026-06-01/02, zero since.
+
+**Why nothing caught it — the part worth keeping.** `tests/fixtures/yt_playlist_items.json`
+hand-writes `"kind": "youtube#video"`, a shape the real request cannot produce, and **nothing
+referenced the fixture at all**; the only playlistItems test asserted merely that a `fields` key was
+sent. Meanwhile `fetched` counted loop iterations, not persisted rows, and
+`sync_video_analytics` returns early and silently in three distinct cases.
+
+**Acceptance**
+- [x] `resourceId/kind` requested; unread `description` dropped from spec and parser together
+- [x] Contract test applies the REAL `_FIELDS_*` spec to each fixture before parsing — verified to
+      FAIL on the pre-fix spec with `[] == ['video_long_1','video_short_1']`, the production symptom
+- [x] `list_channel_videos` logs loudly when it parses 0 of N items (the outage's exact signature)
+- [x] `sync_video_analytics` returns whether metrics were WRITTEN; `sync_video_catalog` returns rows
+      added; worker reports both instead of iteration counts
+- [ ] **Live verification on prod: one real sync produces catalog rows + metrics + a non-zero data
+      gate.** Evidence: ________
+
+### 490 — Beat analytics refresh discarded a whole run and starved the queue — DONE 2026-08-14
+
+Catalog sync, every video's analytics, audience data and the `last_analytics_refreshed_at` stamp all
+sat under ONE `session.commit()`. A `QuotaSubBudgetExhaustedError` mid-loop rolled back everything
+already fetched, never reached `sync_audience_data` (so `AudienceActivity`/`Demographics` stayed
+permanently empty for any large channel — silently disabling `optimal_upload_gap_h`, upload_intel,
+and the chat audience tool), and left the timestamp NULL — which the `NULLS FIRST` ordering then
+used to pin that creator to the head of the queue on every subsequent run.
+
+**Acceptance**
+- [x] Audience data fetched BEFORE the per-video loop
+- [x] Commits per batch; sub-budget exhaustion costs at most the in-flight video
+- [x] Partial progress stamps the timestamp (via explicit UPDATE — rollback expires ORM instances
+      regardless of `expire_on_commit=False`) so the creator rotates off the queue head
+- [x] Videos selected stalest-first (`VideoMetrics.fetched_at NULLS FIRST`) so each run advances the
+      frontier instead of redoing the front of the list
+- [x] Regression test asserts audience data still runs when the video loop raises
+
+### 491 — LLM surfaces claimed channel grounding they did not have — DONE 2026-08-14
+
+Seven prompt builders injected `"No DNA profile available yet."` as a `CREATOR DNA PROFILE:` block
+under instructions commanding the model to cite channel patterns, then appended "grounded in your
+channel data" unconditionally. See `docs/DECISIONS.md` 2026-08-14 for the full rationale.
+
+**Acceptance**
+- [x] `dna_system_block` returns `dict | None`; all seven builders omit the block when absent
+- [x] `grounding_disclaimer()` keys the disclaimer off the same signal so they cannot drift
+- [x] Thumbnail task passes `patterns=None` instead of an all-`unknown` dict; prompt says no patterns
+      were observed and forbids inventing one (it was fabricating `based_on_pattern`, rendered in the
+      UI as "Based on: …")
+- [x] `compute_retention_drop` returns `baseline_available`; "nothing to compare against" is no
+      longer reported as "no significant retention drop" (which the UI paints success-green)
+- [x] `analyze-performer` refuses to invent figures with no metrics, and no longer persists an
+      ungrounded insight under `dna_version=NULL` that nothing invalidates
+- [x] Dead `_DISCLAIMER` constants removed; false "always appended by Python" docstring corrected
+- [x] `tests/test_grounding_honesty.py` guards it structurally — verified to fail on the pre-fix code
+
+### 492 — Clip LLM calls described the wrong part of the video — DONE 2026-08-14
+
+Issue 414 fixed per-clip transcript windowing for title-suggestions but was never applied to its
+three siblings: caption-hooks, explanation, and the chat `suggest_clip_titles` tool all passed the
+WHOLE video transcript truncated to its opening. A rank-8 clip at 42:00 got overlay text and an
+explanation written about minute 0.
+
+**Acceptance**
+- [x] All three use `extract_transcript_window(segments, setup_start_s ?? start_s, end_s)`
+- [x] `clip_explain` no longer defaults `clip_principle` to a literal that the prompt then labels
+      "Principle cited by engine"
+- [x] Source-level guard over all four call sites, plus a behavioural test
+
+### 493 — In-app YouTube reconnect (the weekly Testing-mode expiry) — DONE 2026-08-14
+
+`reauth_required` notifications and their email both linked to `/app/profile`, which is read-only
+and had no reconnect control; Settings only offers the separate `youtube.upload` grant. Since Google
+expires Testing-mode refresh tokens every 7 days, this dead end was the most frequently hit recovery
+path in the beta. Does not replace **#29** — verification is the only real fix — but stops the
+weekly expiry from stranding the user.
+
+**Acceptance**
+- [x] `/auth/me` returns `youtube_connected` + `youtube_expires_at`
+- [x] `YouTubeConnectionCard` on Profile: connected / expiring / disconnected, with a reconnect
+      action, and a neutral state while `/auth/me` is in flight (so a red "Disconnected" does not
+      flash on every page load)
+- [x] Sets expectations up front — an unexplained weekly prompt reads as breakage
+- [x] DNA age badge on `DnaCard` past 30 days; `get_channel_dna` chat tool exposes `built_at`/
+      `age_days` so the assistant can qualify a stale brief
+
+### 494 — Two billed LLM routes had no kill switch or spend gate — DONE 2026-08-14
+
+`GET /creators/me/thumbnail-patterns` (a Claude multimodal vision call over 10 images) and
+`POST /creators/me/dna/build` (a Sonnet call) carried neither `require_flag("llm_generation")` nor
+`require_budget`. Flipping the kill switch during an incident did not stop them and a creator past
+their spend cap was not blocked.
+
+**Acceptance**
+- [x] Both routes carry both dependencies
+- [x] `require_flag` names its closure `require_flag_<key>` (every instance was `_gate`, which made
+      dependency lists unreadable and blocked a structural assertion)
+- [x] `tests/test_flags.py` enumerates every billed LLM route and asserts both gates; a renamed or
+      removed route fails loudly rather than silently dropping out of coverage
+
+### 495 — Deferred from the 2026-08-14 pass (triage before Stage B)
+
+Found and verified during the audit; deliberately NOT built, per the owner's
+"correctness + honesty + reconnect" scope call.
+
+- [ ] Brand-kit fields cannot be cleared: `routers/creators.py` skips `null`, returns 200, and the
+      UI prints "Brand kit saved." while the value is unchanged
+- [ ] `captions_enabled` toggle is persisted but no renderer reads it (`render.py` gates on
+      `subtitle`) — the `style_preset["background"]` shape again
+- [ ] `Profile.tsx` "Shorts published" / "Clip ratings" are hardcoded `"—"`; the data exists
+- [ ] Data export (`routers/export.py`) is fully built and has NO UI — GDPR Art. 15/20 relevant
+- [ ] `is_rewatch_spike` is never written, so DNA retention spikes and the Issue-127 signal arm are
+      permanently inert; `captions_available` likewise never written but exposed via API as `false`
+- [ ] `push_enabled` accepted and stored, never read
+- [ ] `_upsert_style_field` writes any client-supplied key into the style JSONB with no allowlist
+- [ ] `AskSurfaceTabs` links to bare `/analysis`, whose four tools are gated on `?video_id=` — the
+      same dead end the nav entry was removed for (its own comment says so)
+
+---
+
+- Next free issue number: **496**.

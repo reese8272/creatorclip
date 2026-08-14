@@ -5,7 +5,168 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-12 (latest) — Issue 453: restore Stripe's sync transport rather than rewrite two money paths as async
+## 2026-08-14 (latest) — LLM surfaces omit the DNA block and swap the disclaimer when ungrounded, rather than injecting a placeholder
+
+**Decision — when a creator has no Creator DNA profile, prompt builders OMIT the DNA system block
+entirely and Python appends a non-personalized disclaimer.** They no longer inject the string
+`"No DNA profile available yet."` as a `CREATOR DNA PROFILE:` block, and no longer append
+"grounded in your channel data" to output that isn't.
+
+**Why this diverges.** Seven builders shared the line
+`dna_text = (dna_brief or "No DNA profile available yet.")` and passed it to `dna_system_block`,
+which dutifully emitted the placeholder into the system prompt — directly beneath static
+instructions commanding the model to rank "for THIS channel" and make `based_on_pattern`
+"reference the channel's actual observed patterns, not generic advice". Nothing branched on the
+placeholder. So the model was told to cite channel data, handed a string saying there is none, and
+produced ranked, rationale-bearing, CTR-signalled output anyway — to which Python unconditionally
+appended a channel-grounding claim. Against the north star ("the only AI editor that truly knows
+your channel") that is an honesty defect, not just a correctness one.
+
+**Alternatives considered.** (a) Hard-refuse when ungrounded, as `improvement/brief.py` already
+does — rejected because a brand-new creator would meet a wall of dead buttons before their first
+sync completes. (b) Leave the placeholder and fix only the disclaimer — rejected because the prompt
+itself would still instruct the model to cite patterns it does not have.
+
+**Precedent followed, not invented.** `analysis/video_context.py:322` already omitted the DNA block
+rather than substituting a placeholder, and `clip_engine/scoring.py:358` already branched to a
+cold-start annotation with honest reasoning text and no LLM call. This generalises the posture the
+codebase had in two places to the seven that lacked it.
+
+**Prompt-cache impact: none, verified.** The `cache_control {ttl:"1h"}` marker was already
+floor-gated in `knowledge/util.py` on the measured static+DNA prefix clearing Sonnet 4.6's
+1024-token minimum. An omitted block leaves the prefix below that floor, so no marker is written —
+which is the desired outcome, since a 1h cache WRITE bills at 2× base input. The DNA block is
+per-creator, so there is no cross-creator prefix to preserve. Confirmed against Anthropic's
+prompt-caching docs (prefix-match semantics, per-model minimum cacheable prefix).
+
+**Mechanism.** `dna_system_block(static, dna_text)` now returns `dict | None`; a new
+`grounding_disclaimer(grounded_text, *, is_grounded)` selects the disclaimer from the SAME signal,
+so the prompt and the claim cannot drift apart. `tests/test_grounding_honesty.py` iterates the
+builders structurally, so a new generator that reintroduces the placeholder fails without anyone
+remembering to add a case.
+
+**Related, same date:** the thumbnail task now passes `patterns=None` (rather than an all-`unknown`
+dict) when the vision pass never ran, and the prompt says so explicitly instead of demanding the
+model cite patterns it was never shown; `compute_retention_drop` returns a third element,
+`baseline_available`, so "nothing to compare against" is no longer reported as "no significant
+retention drop detected" (which the UI paints success-green).
+
+---
+
+## 2026-08-14 — Descope the separate Stripe account; bill everything under Ludwick Solutions LLC
+
+**Decision — reverse the 2026-08-13 call to stand up a dedicated AutoClip Stripe account. Rebrand
+the existing account to the parent legal entity instead.** Issue 486 is closed by a different fix
+than it was filed with.
+
+**What changed since yesterday.** The separate-account decision rested on one objection: rebranding
+the shared account would move the branding mismatch onto wheretoliv.com. Two facts landed after it
+was made — **wheretoliv is dormant**, so there is nothing to mismatch; and the owner has a real
+registered entity, **Ludwick Solutions LLC**, which is the correct merchant of record for every
+product he sells. Billing multiple products under one parent entity is the ordinary arrangement,
+not a compromise. Splitting Stripe accounts would fragment revenue, payouts and bookkeeping to
+solve a problem that no longer exists.
+
+**What the cheaper fix avoided.** The separate account required rotating `STRIPE_SECRET_KEY` and
+`STRIPE_WEBHOOK_SECRET` on the VM and in GitHub Secrets, recreating products/prices, and
+re-registering the webhook endpoint — on the exact path that had just been unbroken after a
+four-layer outage (Issue 485). Not touching freshly-verified billing plumbing is worth a great deal
+on its own.
+
+**Applied and verified against the live account:** `business_profile.name` `Reese Ludwick` →
+`Ludwick Solutions LLC`; `business_profile.url` `wheretoliv.com` → `autoclip.studio`; statement
+descriptor `LUDWICK SOLUTIONS LLC` → `AUTOCLIP.STUDIO`; card descriptor prefix unset → `AUTOCLIP`.
+
+**The statement descriptor was the non-obvious part.** Stripe derives the card prefix from the
+static descriptor when none is set, truncated to 10 characters — so card charges were going out as
+**`LUDWICK SO`**, which no customer who bought "AutoClip" would recognise. Stripe names unclear
+descriptors as a leading cause of avoidable disputes
+(<https://docs.stripe.com/get-started/account/statement-descriptors>). Legitimate under their rule
+that a descriptor "reflects your DBA name": AutoClip is the trade name the LLC sells under. This
+defect was structurally invisible until billing actually worked — nobody had ever received a
+statement.
+
+**Consequence, filed as Issue 488.** Becoming an entity opened a gap the legal pages have not
+caught up with: `static/privacy.html` and `static/tos.html` still route breach reports and COPPA
+escalations to a personal Gmail. GDPR expects the **data controller** to be named, that is now the
+LLC, and Google's OAuth review reads the privacy policy for exactly this kind of inconsistency.
+
+---
+
+## 2026-08-13 — Launch sequencing for a non-friend audience: four calls
+
+**Trigger.** The owner asked what remains before inviting real users who are *not* personal friends,
+and whether auto-clipping is "95% done". Answering it required auditing the clip engine and the
+launch ledger together, which surfaced both a structural misclassification of the target and three
+factual errors in the handoff docs.
+
+---
+
+**(1) A non-friend audience is Stage B, not a widened Stage A.**
+
+The obvious reading is that "a few more users" is just Stage A with more invites, capped at Google's
+100-test-user limit. That is wrong, and the cap is not the reason. **In Testing mode Google expires
+each tester's OAuth connection after 7 days** (`docs/ACCESS.md:51-54`), so every user must re-click
+"Connect YouTube" weekly *and* be manually whitelisted first. A friend tolerates that; a stranger
+churns. Issue #29 (OAuth verification, **1–4 week external review**) is therefore a hard blocker for
+this audience and the only remaining item with an incompressible clock — so it moves to day 0.
+
+*Consequence:* **#282 (status page) is un-deferred.** Its 2026-07-31 deferral was explicitly scoped
+to "owner + ~3 friends who will simply text him", and its own re-open criteria are *"(a) users are
+people who won't contact you directly, (b) you start charging someone who isn't a friend, or (c)
+Stage B"*. A non-friend audience trips all three. The deferral was correct for its scope and is
+simply out of scope now — this is not a reversal of the reasoning.
+
+**(2) Fresh upload FIRST, then one consolidated fix wave — not fix-then-verify.**
+
+*Evidence.* Every time a human has examined real rendered output, it found defects the backlog had
+not predicted: the first post-wave upload filed Issues **427–430**, the second filed **448, 449,
+450**. More pointedly, Issue 440 was *graded green on its numeric criteria* while the clip showed the
+wrong person — `docs/issues.md:2414` records it as *"This audit graded 440 green on the numbers
+alone and missed it."* Fixing the three known-open defects before the upload would therefore be
+optimizing against a defect list we have concrete evidence is incomplete. Running the upload first
+also clears ~8 pending live-verification ACs in one pass, since nearly everything left in L26–L29 is
+of the form "upload one real video and check N things at once."
+
+*Ruled out:* fix-the-known-three-first (slower, and the upload would likely surface more anyway) and
+ship-as-is (the meaning-inverting cut is the class of defect that costs a creator's trust permanently
+— unacceptable for someone who has no personal relationship to extend goodwill).
+
+**(3) Issue 445 (three-pile triage UI) is built before non-friends arrive.**
+
+It is genuinely unbuilt — 6 unchecked ACs, four unresolved design questions — despite a handoff doc
+claiming the L27 triage UI had shipped. Strangers hit the review queue on their **first** upload, and
+today reviewed state does not survive a reload and the Dashboard badge counts rendered clips rather
+than pending triage (`pages/Dashboard.tsx:108`). A first-run experience that loses the user's work on
+refresh is not shippable to someone with no reason to be patient.
+
+**(4) The master checklist extends `docs/GO_LIVE.md` rather than becoming a new document.**
+
+Issue 303 deliberately collapsed three disagreeing gate lists into GO_LIVE, and `CLAUDE.md`,
+`docs/PROJECT_STATE.md` and `docs/COMPLIANCE.md` now only point there. A separate
+`LAUNCH_CHECKLIST.md` would immediately become the fourth list and drift the same way — a cost this
+project has already paid once. The new "Stage A→B execution plan" section cites runbooks by anchor
+instead of restating steps, preserving one copy of each procedure.
+
+**Ledger corrections made in the same pass.** #395 (upload, a flagged BETA BLOCKER) had **never been
+a row in GO_LIVE at all** despite breaking the first thing a new user does — added, with all three
+of its outstanding drills promoted to first-class items because two of them were hidden inside a
+*checked* box and a status line. #296 was stale-OPEN and is in fact GREEN — `ci.yml:365-408` runs the
+online downgrade round-trip with a `pg_dump --schema-only` byte-diff plus an irreversibility
+detector, satisfying both its ACs. And the meaning-inverting cold open
+(`docs/OFF_COURSE_BUGS.md:146`) — the highest-impact known clip defect — had been open, unfiled and
+unowned since 2026-08-10; it is now **Issue 484**, carrying its recorded fix direction *and* the
+warning against the plausible wrong fix (do not extend the weak-opener word list; no closed class
+catches a fake sentence boundary).
+
+**Honest readiness readout.** Clip *selection* engine ≈95% (all five L29 SEV1s merged, every AC in
+456–482 checked, eval floor 21→31). Clip *rendered output* ≈75% — not missing code but missing
+**measurement**: no test rasterizes a frame, proves the crop landed on the speaking person, or
+measures LUFS of a real artifact. No L29 SEV1 fix has yet been proven on a real upload.
+
+---
+
+## 2026-08-12 — Issue 453: restore Stripe's sync transport rather than rewrite two money paths as async
 
 **Decision — fix the 10-week billing outage with `stripe.HTTPXClient(allow_sync_methods=True)`,
 and explicitly decline the "more idiomatic" async rewrite.**

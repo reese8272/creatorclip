@@ -235,8 +235,13 @@ async def sync_video_catalog(
     access_token: str,
     *,
     charge_sub_budget: bool = True,
-) -> None:
+) -> int:
     """Upsert Video rows from the uploads playlist. Skips existing rows.
+
+    Returns the number of NEW Video rows staged on the session (not committed
+    here). Callers report that number rather than assuming success: this
+    function returning without raising previously meant nothing at all, which
+    is how a 7-week catalog outage read as "Synced N video(s)" in the log.
 
     ``charge_sub_budget`` controls whether the underlying YouTube reads are
     charged to this creator's per-day refresh sub-budget. The Beat fan-out
@@ -248,7 +253,12 @@ async def sync_video_catalog(
     budget_creator_id = creator.id if charge_sub_budget else None
     playlist_items = await list_channel_videos(access_token, creator_id=budget_creator_id)
     if not playlist_items:
-        return
+        # Distinguishable at this layer only as "nothing came back"; the
+        # shape-drift case is detected and logged inside list_channel_videos.
+        logger.info(
+            "sync_video_catalog: uploads playlist returned no videos for creator %s", creator.id
+        )
+        return 0
 
     video_id_map = {item["video_id"]: item for item in playlist_items}
     all_ids = list(video_id_map.keys())
@@ -265,6 +275,7 @@ async def sync_video_catalog(
     )
     existing_ids = {row[0] for row in existing_result}
 
+    added = 0
     for video_id, item in video_id_map.items():
         if video_id in existing_ids:
             continue
@@ -285,6 +296,9 @@ async def sync_video_catalog(
                 ingest_status=IngestStatus.pending,
             )
         )
+        added += 1
+
+    return added
 
 
 async def sync_video_analytics(
@@ -294,8 +308,15 @@ async def sync_video_analytics(
     access_token: str,
     *,
     charge_sub_budget: bool = True,
-) -> None:
+) -> bool:
     """Fetch and upsert VideoMetrics and RetentionCurve for one video.
+
+    Returns True only when VideoMetrics were actually staged. There are three
+    ways this function does nothing at all — no channel_id, no
+    youtube_video_id, and an empty Analytics report — and the caller cannot
+    distinguish them from success by return alone. Counting calls instead of
+    writes is what produced "metrics fetched for 4 new video(s)" against a
+    creator whose video_metrics table stayed empty across repeated runs.
 
     ``charge_sub_budget`` (see ``sync_video_catalog``): the interactive
     onboarding path passes ``False`` so a large first-sync is bounded only by
@@ -303,20 +324,21 @@ async def sync_video_analytics(
     """
     if not creator.channel_id:
         logger.warning("Creator %s has no channel_id; skipping analytics", creator.id)
-        return
+        return False
 
     # A standalone upload (Issue 317) has no published YouTube video, so there
     # is no YouTube Analytics data to fetch — skip rather than query with a NULL
     # id. Associated uploads / catalog rows carry an id and proceed normally.
     youtube_video_id = video.youtube_video_id
     if not youtube_video_id:
-        return
+        return False
 
     budget_creator_id = creator.id if charge_sub_budget else None
     metrics_data = await fetch_video_metrics(
         access_token, youtube_video_id, creator.channel_id, creator_id=budget_creator_id
     )
     now = datetime.now(UTC)
+    wrote_metrics = bool(metrics_data)
     if metrics_data:
         existing = await session.get(VideoMetrics, video.id)
         if existing:
@@ -327,6 +349,17 @@ async def sync_video_analytics(
             existing.fetched_at = now
         else:
             session.add(VideoMetrics(video_id=video.id, fetched_at=now, **metrics_data))
+    else:
+        # Normal for a video published in the last ~48h, or one with no views —
+        # but the unmeasured-video query re-selects exactly these on every run,
+        # so without a log an empty report is indistinguishable from a bug and
+        # silently re-burns quota forever.
+        logger.info(
+            "sync_video_analytics: empty Analytics report for video %s (creator %s) — "
+            "no metrics written",
+            youtube_video_id,
+            creator.id,
+        )
 
     duration_s = video.duration_s or 0.0
     if duration_s > 0:
@@ -340,6 +373,8 @@ async def sync_video_analytics(
         await session.execute(delete(RetentionCurve).where(RetentionCurve.video_id == video.id))
         for point in retention:
             session.add(RetentionCurve(video_id=video.id, **point))
+
+    return wrote_metrics
 
 
 async def sync_audience_data(
@@ -356,6 +391,11 @@ async def sync_audience_data(
     rely on the global daily cap only (Issue 260).
     """
     if not creator.channel_id:
+        # Its sibling sync_video_analytics logs the identical condition; without
+        # a matching line here the Beat task stamps last_analytics_refreshed_at
+        # and logs "Refreshed analytics" while AudienceActivity/Demographics
+        # stay permanently empty.
+        logger.warning("Creator %s has no channel_id; skipping audience data", creator.id)
         return
 
     budget_creator_id = creator.id if charge_sub_budget else None

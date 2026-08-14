@@ -19,9 +19,12 @@ export interface SetupStep {
 export interface CurrentUser {
   channel_title?: string | null
   email?: string | null
-  analysis_mode?: AnalysisMode
   onboarding_state?: string
   can_publish?: boolean
+  // YouTube connection state. Google expires Testing-mode refresh tokens after
+  // 7 days, so this drives the weekly reconnect prompt (YouTubeConnectionCard).
+  youtube_connected?: boolean
+  youtube_expires_at?: string | null
   setup?: SetupStep | null
 }
 

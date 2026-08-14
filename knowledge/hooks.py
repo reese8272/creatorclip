@@ -85,17 +85,26 @@ def compute_retention_drop(
     creator_curves: list[list[tuple[float, float]]],
     window_s: int = HOOK_WINDOW_S,
     threshold: float = DROP_THRESHOLD,
-) -> tuple[float | None, float | None]:
+) -> tuple[float | None, float | None, bool]:
     """Find the earliest second where this video's retention falls >threshold below the creator median.
 
     video_curves: [(timestamp_s, audience_watch_ratio)] for the target video
     creator_curves: list of curves (same format) for other creator videos
 
-    Returns (drop_timestamp_s, retention_at_drop) or (None, None) if no significant drop.
+    Returns ``(drop_timestamp_s, retention_at_drop, baseline_available)``.
+
+    ``baseline_available`` is the third element because a bare ``(None, None)``
+    conflates two very different outcomes, and the caller reported the wrong one:
+    "we compared this video against your other videos and found no significant
+    drop" versus "there was nothing to compare against". A creator with exactly
+    one measured video got the first message — rendered in success-green in the
+    UI — when no comparison had run at all. Only ``baseline_available=True`` with
+    a ``None`` timestamp means the hook actually held up.
+
     The creator median baseline is computed at each second using linear interpolation.
     """
     if not video_curves or not creator_curves:
-        return None, None
+        return None, None, False
 
     grid = np.arange(0.0, window_s + 1.0, 1.0)
 
@@ -113,21 +122,25 @@ def compute_retention_drop(
 
     video_interp = _interp_curve(video_curves)
     if video_interp is None:
-        return None, None
+        # Too few in-window points on the target video to interpolate — no
+        # comparison happened, so this is not "the hook held up".
+        return None, None, False
 
     creator_interps = [interp for c in creator_curves if (interp := _interp_curve(c)) is not None]
     if not creator_interps:
-        return None, None
+        return None, None, False
 
     creator_median = np.median(creator_interps, axis=0)
     diff = creator_median - video_interp
     drop_indices = np.where(diff > threshold)[0]
 
     if len(drop_indices) == 0:
-        return None, None
+        # The one honest "no significant drop": a real baseline existed and the
+        # video was measured against it.
+        return None, None, True
 
     idx = int(drop_indices[0])
-    return float(grid[idx]), float(video_interp[idx])
+    return float(grid[idx]), float(video_interp[idx]), True
 
 
 def parse_hook_report(raw_json: str) -> dict:
@@ -168,6 +181,7 @@ async def analyze_hook(
     creator_median_at_drop: float | None,
     transcript_excerpt: str,
     task_id: str,
+    baseline_available: bool = True,
 ) -> tuple[str, dict]:
     """Call Claude with web_search; stream tokens to the SSE consumer.
 
@@ -176,7 +190,10 @@ async def analyze_hook(
     pass usage to ``billing.ledger.increment_usage``.
     Raises on network / API errors so the Celery task can retry.
     """
-    dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
+    # None when there is no brief. This builder assembles its own DNA block
+    # inline (no cache marker — see the Issue-135 note below), so it omits the
+    # block itself rather than calling dna_system_block.
+    dna_text = dna_brief[:_DNA_BRIEF_MAX_CHARS] if dna_brief else None
 
     if retention_drop_at_s is not None:
         drop_info = (
@@ -185,8 +202,19 @@ async def analyze_hook(
             f"creator median at {(creator_median_at_drop or 0):.1%} "
             f"({(((creator_median_at_drop or 0) - (retention_at_drop or 0)) * 100):.1f}pp below median)."
         )
-    else:
+    elif baseline_available:
         drop_info = "No significant retention drop detected in the first 30 seconds."
+    else:
+        # There was no comparable baseline — typically a creator with only one
+        # measured video. Saying "no drop detected" here asserts the result of a
+        # comparison that never ran, and the UI paints that string success-green.
+        drop_info = (
+            "No retention baseline was available for this channel, so this video's "
+            "first 30 seconds could NOT be compared against the creator's other "
+            "videos. Do not state or imply that the hook performed well or that no "
+            "drop occurred — say plainly that there is not yet enough data to "
+            "compare, and base any advice only on the transcript itself."
+        )
 
     # Audit fix (Issue-135 audit): cache_control breakpoint removed. The
     # static instructions + DNA brief ≈ 900 tokens, which is below Haiku
@@ -196,10 +224,7 @@ async def analyze_hook(
     # the missed cache is also low-frequency — leaving uncached is correct.
     system: list[dict] = [
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        {
-            "type": "text",
-            "text": f"CREATOR DNA PROFILE:\n{dna_text}",
-        },
+        *([{"type": "text", "text": f"CREATOR DNA PROFILE:\n{dna_text}"}] if dna_text else []),
         # Block 3: per-video COMPUTED data only. The transcript excerpt is
         # untrusted creator content and travels in the user turn (Issue 352).
         {

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { StageStepper } from '@/components/dashboard/StageStepper'
 import { SOURCE_NEEDED_HELP, STATUS_VARIANT } from '@/components/dashboard/videoStatus'
 import { useStageStream } from '@/hooks/useStageStream'
-import type { AnalysisMode, IngestStatus, Video } from '@/types'
+import type { IngestStatus, Video } from '@/types'
 import { videoMetaLine } from '@/lib/videoMeta'
 import { PosterThumb } from '@/components/media/PosterThumb'
 import { VideoTitleCell } from '@/components/dashboard/VideoTitleCell'
@@ -79,12 +79,10 @@ function SourceExpiryHint({ video }: { video: Video }) {
 function VideoRow({
   video,
   clipInfo,
-  analysisMode,
   archivedView = false,
 }: {
   video: Video
   clipInfo: ClipInfo | undefined
-  analysisMode: AnalysisMode
   archivedView?: boolean
 }) {
   const queryClient = useQueryClient()
@@ -218,7 +216,6 @@ function VideoRow({
             <ActionCell
               video={video}
               clipInfo={clipInfo}
-              analysisMode={analysisMode}
               busy={busy}
               label={label}
               onQueue={() =>
@@ -277,7 +274,6 @@ function ClipsCell({ video, clipInfo }: { video: Video; clipInfo: ClipInfo | und
 function ActionCell({
   video,
   clipInfo,
-  analysisMode,
   busy,
   label,
   onQueue,
@@ -285,7 +281,6 @@ function ActionCell({
 }: {
   video: Video
   clipInfo: ClipInfo | undefined
-  analysisMode: AnalysisMode
   busy: boolean
   label: string | null
   onQueue: () => void
@@ -315,7 +310,10 @@ function ActionCell({
   if (video.ingest_status === 'pending') {
     return (
       <Button
-        variant={analysisMode === 'auto' ? 'secondary' : 'primary'}
+        // Was `analysisMode === 'auto' ? 'secondary' : 'primary'`. analysis_mode
+        // was never returned by /auth/me, so the fallback always won and this
+        // was always 'secondary'; the prop is gone with the dead intake radio.
+        variant="secondary"
         size="sm"
         disabled={busy}
         onClick={onQueue}
@@ -404,12 +402,10 @@ function ActionCell({
 export function VideoTable({
   videos,
   clipInfoByVideo,
-  analysisMode,
   archivedView = false,
 }: {
   videos: Video[]
   clipInfoByVideo: Record<string, ClipInfo>
-  analysisMode: AnalysisMode
   // Issue 446 — rows fetched via /videos?archived=true: actions become
   // Restore / Delete permanently, and no SSE slots are held.
   archivedView?: boolean
@@ -435,7 +431,6 @@ export function VideoTable({
               key={v.id}
               video={v}
               clipInfo={clipInfoByVideo[v.id]}
-              analysisMode={analysisMode}
               archivedView={archivedView}
             />
           ))}

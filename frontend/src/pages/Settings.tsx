@@ -6,7 +6,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { BrandKitSection } from '@/components/profile/BrandKitSection'
 import { IdentitySection } from '@/components/profile/IdentitySection'
-import { IntakeModeSection } from '@/components/profile/IntakeModeSection'
 import { PublishingSection } from '@/components/profile/PublishingSection'
 import { ApiKeysSection } from '@/components/profile/ApiKeysSection'
 import { AccountDeletion } from '@/components/profile/AccountDeletion'
@@ -144,13 +143,11 @@ export function Settings() {
         {/* Captions & rendering — functional (brand kit). */}
         <BrandKitSection />
 
-        {/* Captions — design previews not yet wired to render. */}
+        {/* Captions — design previews not yet wired to render.
+            A "Position — Where captions sit in frame" preview sat here until
+            2026-08-14, advertising as "Soon" a control BrandKitSection already
+            ships and persists (Issue 427), ~100px above on this same page. */}
         <SettingsCard title="Captions — more">
-          <ComingSoonRow
-            label="Position"
-            description="Where captions sit in frame"
-            mock={<SegmentedMock options={['Top', 'Center', 'Lower third']} active={1} />}
-          />
           <ComingSoonRow
             label="Highlight color"
             description="Active-word emphasis"
@@ -198,8 +195,14 @@ export function Settings() {
           />
         </SettingsCard>
 
-        {/* Workflow — intake is functional. */}
-        <IntakeModeSection initialMode={user?.analysis_mode ?? 'auto'} />
+        {/* Workflow — the "Video intake: Auto / Selective / Manual" radio was
+            removed 2026-08-14 (owner call). Creator.analysis_mode had ZERO
+            consumers anywhere in the backend — link/upload never read it — so
+            the control changed nothing while its copy told the creator when
+            their minutes would be spent. /auth/me never returned the field
+            either, so it could not even display what had been saved. The column
+            and PATCH /creators/me/analysis-mode remain for when intake modes are
+            actually implemented; re-add the section then. */}
 
         {/* Email & notification consent — functional (Issue 245). */}
         <NotificationPreferencesSection />

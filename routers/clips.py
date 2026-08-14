@@ -2367,18 +2367,28 @@ async def get_clip_caption_hooks(
     from billing.ledger import record_llm_usage
     from dna.profile import get_active as _get_active_dna
     from knowledge.clip_captions import generate_clip_caption_hooks
-    from knowledge.util import extract_transcript_text
+    from knowledge.util import extract_transcript_window
 
     await check_positive_balance(creator.id, session)
 
     # Fetch clip with isolation check.
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
 
-    # Fetch opening transcript hook for the clip's parent video.
+    # Issue 414 applied here too (2026-08-14): ground the overlay text in the
+    # CLIP'S OWN window, not the video's opening. This read
+    # extract_transcript_text(..., 800) — the whole video joined and truncated to
+    # the first ~60 seconds — while the variable was named `clip_hook`, the
+    # docstring said "the clip's opening transcript hook", and
+    # knowledge/clip_captions.py documents its budget as "Opening hook only —
+    # first ~30 seconds". So every clip on a video got overlay text written about
+    # minute 0: a rank-8 clip at 42:00 was captioned from the intro.
     transcript = await session.scalar(
         select(Transcript).where(Transcript.video_id == clip.video_id)
     )
-    clip_hook = extract_transcript_text(transcript.segments_jsonb if transcript else None, 800)
+    window_start = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    clip_hook = extract_transcript_window(
+        transcript.segments_jsonb if transcript else None, window_start, clip.end_s
+    )
 
     dna = await _get_active_dna(session, creator.id)
     dna_brief = dna.brief_text if dna else None
@@ -2468,19 +2478,23 @@ async def get_clip_explanation(
     from billing.ledger import record_llm_usage
     from dna.profile import get_active as _get_active_dna
     from knowledge.clip_explain import generate_clip_explanation
-    from knowledge.util import extract_transcript_text
+    from knowledge.util import extract_transcript_window
 
     await check_positive_balance(creator.id, session)
 
     # Fetch clip with isolation check.
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
 
-    # Fetch transcript.
+    # Issue 414 applied here too (2026-08-14): explain THIS clip using THIS
+    # clip's words. This read extract_transcript_text(..., 1200) — the whole
+    # video truncated to its opening — so the model was asked "why was this
+    # moment selected?" while being shown a different moment entirely.
     transcript = await session.scalar(
         select(Transcript).where(Transcript.video_id == clip.video_id)
     )
-    clip_transcript = extract_transcript_text(
-        transcript.segments_jsonb if transcript else None, 1200
+    window_start = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    clip_transcript = extract_transcript_window(
+        transcript.segments_jsonb if transcript else None, window_start, clip.end_s
     )
 
     dna = await _get_active_dna(session, creator.id)
@@ -2488,8 +2502,11 @@ async def get_clip_explanation(
     channel_title = creator.channel_title or "Your Channel"
 
     # Pull principle + score from signals_jsonb (populated by the clip engine).
+    # No default: the prompt labels this "Principle cited by engine", so falling
+    # back to a literal made the model cite a principle the engine never chose.
+    # None lets the builder omit the claim instead of manufacturing one.
     signals = clip.signals_jsonb or {}
-    clip_principle = signals.get("principle", "Audience-fit over generic virality")
+    clip_principle = signals.get("principle")
     clip_score = clip.score
 
     try:

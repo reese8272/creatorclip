@@ -18,7 +18,13 @@ Results stream via stream_message (with a pause_turn continuation loop for
 multi-round web_search — Issue 350) and are returned as a JSON string for the
 caller to parse and emit as an SSE result event.
 
-The honesty disclaimer is always appended by Python — never left to the LLM.
+Honesty disclaimer: this module returns a bare list of candidates, so the
+disclaimer is rendered client-side by the TitleOptimizer component rather than
+appended here. A module-level `_DISCLAIMER` constant used to sit below, unused,
+while this line claimed Python appended it — deleted 2026-08-14. Any non-UI
+consumer of this endpoint therefore receives no disclaimer; see
+docs/OFF_COURSE_BUGS.md. Contrast knowledge/clip_titles.py, which returns a
+dict and does carry the disclaimer through grounding_disclaimer().
 """
 
 import json
@@ -51,10 +57,6 @@ TITLE_MAX_CHARS = 100  # YouTube hard limit
 _GENERATE_N = 10
 SURFACE_N = 5
 
-_DISCLAIMER = (
-    "These title suggestions are estimates grounded in your channel data and "
-    "current search trends. AutoClip cannot guarantee specific CTR or view outcomes."
-)
 
 # Static block — never contains per-creator data. The "neutral" CTR band is
 # defined here to avoid label drift.
@@ -127,13 +129,16 @@ def _build_request(
     Per-video trusted context is in the uncached block 3; untrusted content
     (video title, transcript, stated identity) travels in the user turn.
     """
-    dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
+    dna_text = dna_brief[:_DNA_BRIEF_MAX_CHARS] if dna_brief else None
+    # None when there is no brief — the block is OMITTED rather than filled
+    # with a placeholder the static instructions then tell the model to cite.
+    dna_block = dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text)
 
     system: list[dict] = [
         # Block 1: static instructions.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
         # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
-        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
+        *([dna_block] if dna_block else []),
         # Block 3: per-video factual context — no creator free-text.
         {"type": "text", "text": f"CHANNEL: {channel_title}"},
     ]
