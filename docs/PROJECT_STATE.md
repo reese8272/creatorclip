@@ -53,8 +53,26 @@ returned nothing. A new gate row now sits ahead of it. The standing lesson from 
 applies verbatim — **a green intermediate layer is not a working feature**, and neither a passing
 suite nor a success log line is evidence that a feature does its job.
 
-**Next:** deploy, then run one real sync on prod and fill in that row's evidence blank. Nothing else
-in the beta is worth verifying until catalog rows, metrics, and a non-zero data gate exist.
+**Deployed and verified live (2026-08-14).** Shipped as `1221fb8` via staging → main; both the
+staging gate and the prod smoke passed, and the fixed `fields` spec was read back out of the running
+app and worker containers before any test. One real sync through the actual HTTP endpoint (session
+cookie minted as `llm_harness.py` does, so auth/rate-limit/enqueue were exercised — not a direct
+Celery call), task `12430bde`:
+
+| | before | after |
+|---|---|---|
+| `origin=catalog` videos | 0 | **21** (10 long / 15 Shorts) |
+| `video_metrics` with `engagement_rate` | 0 | **21** |
+| retention-curve points | 0 | **2100** |
+| `GET /creators/me/data-gate` | `0/0, ready:false` | **`6 long / 15 shorts, ready:true`** |
+
+The worker log now reads `discovered 21 new video(s)` then `metrics written for 21 of 25 attempted`
+— the 4 misses being the upload-origin videos with no `youtube_video_id`, which the honest counter
+declines to claim. The old counter would have reported 25.
+
+**Next:** #28 is unblocked — a friend can now connect, sync, and get a populated library. The
+remaining Stage-A work is the operator track (secrets escrow #255, PG backups #256/257, the exposed
+Anthropic key rotation) and Issue 445's three-pile triage UI, which strangers hit on first upload.
 
 ---
 
