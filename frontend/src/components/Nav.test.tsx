@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { Nav } from './Nav'
 import type { Balance, CurrentUser } from '@/types'
 
-const user: CurrentUser = { channel_title: 'Test Channel', email: 'x@y.z', analysis_mode: 'auto' }
+const user: CurrentUser = { channel_title: 'Test Channel', email: 'x@y.z' }
 const balance: Balance = { minutes_balance: 42, low_balance: false }
 
 function renderNav() {

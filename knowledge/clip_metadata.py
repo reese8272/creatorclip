@@ -153,12 +153,15 @@ def _build_request(
     already extracted from the clip's own span. Window text is untrusted and
     wrapped per clip inside the user turn.
     """
-    dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
+    dna_text = dna_brief[:_DNA_BRIEF_MAX_CHARS] if dna_brief else None
+    # None when there is no brief — the block is OMITTED rather than filled
+    # with a placeholder the static instructions then tell the model to cite.
+    dna_block = dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text)
 
     system: list[dict] = [
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
         # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
-        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
+        *([dna_block] if dna_block else []),
     ]
 
     parts: list[str] = []

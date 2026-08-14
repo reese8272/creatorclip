@@ -222,7 +222,6 @@ export function Dashboard() {
               <VideoTable
                 videos={videos}
                 clipInfoByVideo={clipInfoByVideo}
-                analysisMode={user?.analysis_mode ?? 'auto'}
                 archivedView={showArchived}
               />
             </div>

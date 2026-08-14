@@ -167,6 +167,14 @@ class ThumbnailConceptsQueuedOut(BaseModel):
 @router.get(
     "/me/thumbnail-patterns",
     response_model=ThumbnailPatternsOut,
+    # This GET fires a billed Claude multimodal vision call over up to 10 images
+    # (knowledge/thumbnails.py analyze_thumbnail_patterns). It was the only billed
+    # LLM route in the app with neither dependency: flipping the llm_generation
+    # kill switch during an incident did not stop it, and a creator past their
+    # spend cap was not blocked. The 24h Redis cache and 10/hour limit bound it,
+    # but the single-flight lock is fail-open on Redis error, so a degraded Redis
+    # fans out concurrent vision calls with no way to intervene.
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)

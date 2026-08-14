@@ -384,3 +384,89 @@ async def test_publish_gate_records_failed_row_and_raises(
     assert pub.status == PublishStatus.failed
     assert pub.error == "youtube_publish_disabled"
     session.commit.assert_awaited_once()
+
+
+# ── Structural: every billed LLM route carries BOTH gates ─────────────────────
+
+
+def test_every_billed_llm_route_declares_flag_and_budget_dependencies() -> None:
+    """A billed LLM route with no kill switch cannot be stopped during an incident.
+
+    Two routes shipped without either dependency until 2026-08-14:
+    ``GET /creators/me/thumbnail-patterns`` (a Claude multimodal vision call over
+    up to 10 images) and ``POST /creators/me/dna/build`` (a Sonnet brief call).
+    Flipping ``llm_generation`` did not stop them and a creator past their spend
+    cap was not blocked.
+
+    This is enumerated rather than case-by-case so a NEW billed route fails here
+    instead of being discovered in an incident. Add to ``_BILLED_LLM_ROUTES``
+    when you add a route that spends LLM tokens.
+    """
+
+    from fastapi.routing import APIRoute
+
+    from main import app
+
+    # (path, method) pairs that spend LLM tokens on the creator's behalf.
+    _BILLED_LLM_ROUTES = {
+        ("/creators/me/videos/{video_id}/titles", "POST"),
+        ("/creators/me/videos/{video_id}/hook-analysis", "POST"),
+        ("/creators/me/videos/{video_id}/chapters", "POST"),
+        ("/creators/me/videos/{video_id}/thumbnail-concepts", "POST"),
+        ("/creators/me/thumbnail-patterns", "GET"),
+        ("/creators/me/dna/build", "POST"),
+        ("/creators/me/insights/analyze-performer", "POST"),
+        ("/clips/{clip_id}/title-suggestions", "POST"),
+        ("/clips/{clip_id}/caption-hooks", "POST"),
+        ("/clips/{clip_id}/explanation", "POST"),
+    }
+
+    # FastAPI >= 0.13x defers `include_router` into `_IncludedRouter` objects, so
+    # `app.routes` holds almost no APIRoute instances and a naive walk finds
+    # nothing. That is how `tests/test_response_models.py`'s equivalent guard went
+    # VACUOUS (docs/OFF_COURSE_BUGS.md, 2026-08-04) — it iterated zero routes and
+    # passed. This resolver handles both shapes, and the `unknown` assertion below
+    # turns "found nothing" into a loud failure rather than a silent pass.
+    def _collect(router, out: dict) -> None:
+        for r in getattr(router, "routes", []) or []:
+            if isinstance(r, APIRoute):
+                for method in r.methods or set():
+                    out[(r.path, method)] = r.dependant
+            elif type(r).__name__ == "_IncludedRouter":
+                # Effective contexts carry the PREFIXED path plus the merged
+                # dependant — i.e. what actually serves the request.
+                ctxs = r.effective_route_contexts
+                ctxs = ctxs() if callable(ctxs) else ctxs
+                for ctx in ctxs:
+                    for method in ctx.methods or set():
+                        out[(ctx.path, method)] = ctx.dependant
+                _collect(getattr(r, "original_router", None), out)
+            else:
+                _collect(r, out)
+
+    by_key: dict = {}
+    _collect(app.router, by_key)
+
+    missing: list[str] = []
+    unknown: list[str] = []
+    for key in sorted(_BILLED_LLM_ROUTES):
+        dependant = by_key.get(key)
+        if dependant is None:
+            # The route was renamed or removed — fail loudly rather than let the
+            # guard silently stop covering it (a vacuous-pass failure mode).
+            unknown.append(f"{key[1]} {key[0]}")
+            continue
+        names = {getattr(d.call, "__name__", "") for d in dependant.dependencies}
+        # require_flag names its closure require_flag_<key> (see flags.py), so we
+        # can assert the route is behind the LLM switch specifically rather than
+        # merely behind *some* flag.
+        has_flag = "require_flag_llm_generation" in names
+        has_budget = "require_budget" in names
+        if not (has_flag and has_budget):
+            missing.append(f"{key[1]} {key[0]} (deps seen: {sorted(names)})")
+
+    assert not unknown, f"billed-LLM route(s) not found — update the list: {unknown}"
+    assert not missing, (
+        "billed LLM route(s) missing require_flag('llm_generation') and/or "
+        f"require_budget: {missing}"
+    )

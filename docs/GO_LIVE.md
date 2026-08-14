@@ -69,15 +69,17 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Is migration safety enforced (Squawk, timeouts, expand/contract, rollback runbook)? | None | build | GREEN | #270, #294; `docs/MIGRATIONS.md` |
 | Do deploys verify the critical journey and tag every promotion? | None | build | GREEN | #295, #297 |
 | Are all external APIs provisioned with `/health` green? | None — verified | build | GREEN (2026-07-29) | #25: `doctor.py --full` on the VM = **30 ok / 0 fail** (Anthropic, Voyage, Deepgram, R2, Stripe all live-verified), `/health` all-ok, key-leak grep over 30d app+worker logs = 0 hits; LLM E2E nightly green daily |
+| Can a new user upload a real-world file at all? | Run the three #395 acceptance drills on prod | operator | **CODE-GREEN** | #395 — **added to this ledger 2026-08-13; it was a flagged BETA BLOCKER that had never been a row here** (`docs/issues.md:1105`). Built + deployed + partially live-verified 2026-08-05 (commit `6150754`): first real multipart upload = 273 MB in 58 s vs a 40-min proxy crawl, and bucket CORS set via `scripts/r2_set_cors.py` (echo verified). It matters because `UPLOAD_MAX_MB = 500` while a 20-min 1080p OBS recording is routinely 1–3 GB — this breaks the *first thing a new user does*. **Three drills remain, and only one of them has its own checkbox** — the reload-resume debt is buried inside a *checked* box at `docs/issues.md:1162` and the session-expiry drill is named only in the status line, so all three are promoted here: (a) >2 GB file end to end — evidence: ________ · (b) reload mid-upload → resume without re-sending parts (note the "ghost file" re-select path, DECISIONS 2026-08-05) — evidence: ________ · (c) 60-min JWT expires mid-upload → pause → re-login → resume — evidence: ________ |
 | Are the W1/W2 staging-verify residuals exercised? | None — all three legs executed green | staging-verify | GREEN (2026-08-13) | `.github/workflows/staging-drills.yml`. **Evidence:** run [31727428785](https://github.com/reese8272/creatorclip/actions/runs/31727428785) — `flags-flip: re-enabled -> 202`, `spend-trip: manual reset restored the flag`, and `rate-limit: 20 cheap 404 probes then 429 at request #21 (binding limit=20)`. That last line is the point: the leg previously passed **vacuously** (an already-spent quota made the first probe 429, so `first_429 == 0` and the guard degenerated to `all([]) == True`), and now proves #228's actual property — 429 arrives *only after* the quota, not merely at some point. Four defects had to be fixed to get an honest run: the vacuous assertion (#105), a per-drill event loop vs. the loop-bound Redis singleton (#106), asserting the daily 60 instead of the binding 20/hour burst (#107), and the real culprit — `spend-trip` leaking the 1 h spend cool-down, whose `require_budget` 429 masqueraded as a rate-limit trip and even made a later `flags-flip` log `re-enabled -> 429. PASS` (#108, +#109 clean-start) |
-| Has the full pipeline run end-to-end on prod with real friends for 48h? | Execute the #28 beta smoke + friend onboarding — the Stage-A capstone | operator | OPEN | #28 (blocked by #24/#25/#26) |
+| Does connecting a YouTube channel actually import it? | Deploy the fix, run one real sync, confirm catalog rows + metrics + a non-zero data gate | build → operator | **OPEN — NEW BLOCKER, found 2026-08-14** | **The catalog sync imported nothing for ANY creator between 2026-06-24 and 2026-08-14.** `_FIELDS_PLAYLIST_ITEMS` omitted `snippet/resourceId/kind` while `list_channel_videos` filtered items on exactly that key; a `fields` spec returns only the properties it names, so every item was dropped and `sync_video_catalog` returned early. HTTP 200, no error, `"Synced N video(s)"` in the worker log. **Proven live** from inside the prod app container against the owner's channel: with the filter, `resourceId` keys are `['videoId']` and 0 of 5 items survive; without it, `['kind','videoId']` and 5 of 5 survive. Corroborated in the prod DB — every `origin=catalog` row was created 2026-06-01/02, zero in the seven weeks since. Fixed on `fix/catalog-sync-and-grounding-honesty` with a contract test that feeds each fixture through the real `fields` spec before parsing (the old fixture hand-wrote `kind`, and nothing referenced it). **This gates #28**: a friend who connects, syncs, and sees 0 videos cannot exercise the pipeline at all. Evidence of a real sync: ________ |
+| Has the full pipeline run end-to-end on prod with real friends for 48h? | **BLOCKED on the catalog-sync row above** — invite stands, but a friend cannot complete the journey until the fix ships | operator | **OPEN (blocked 2026-08-14)** | #28. Unblocked: #24/#25/#26 are GREEN and billing cleared 2026-08-14, so this is now the **sole remaining hard blocker** for the friend beta. ⚠️ The invite is not the gate — the criterion is the *full pipeline exercised on prod over 48 h*, so the friend must actually upload and review, not just sign in. Two things to warn him about up front so they don't read as breakage: (a) the **"Google hasn't verified this app"** interstitial at consent, which is expected while #29 is unsubmitted; (b) in Testing publishing status Google issues **refresh tokens that expire after 7 days**, so he must re-connect YouTube weekly and any background analytics refresh will fail on day 8 ([Google docs](https://developers.google.com/identity/protocols/oauth2#expiration)) — this is independent of user count and is the real reason #29 matters, not the 100-user cap. Result + date: ________ |
 
 ### Observability & Cost
 
 | Gate (question) | Action item | Owner | Status today | Evidence / signal |
 |---|---|---|---|---|
 | Are logs/metrics/traces + error tracking live? | Verify Grafana Cloud + Sentry ingest on the live SaaS side | operator | CODE-GREEN | #326 (code + VM wiring shipped; external verify pending) |
-| Is there an independent status page + uptime monitoring? | Better Stack account, monitors, footer link (+ Cloudflare Health Check per `docs/DEPLOYMENT.md`) | operator | OPEN — **deferred for the invite-only beta (owner call 2026-07-31)** | #282. ⚠️ **Correction 2026-07-31:** the Jul 28→29 ~31h downtime was an **intentional owner poweroff to save cost**, NOT a silent failure. The earlier "gap PROVEN in production / beta-critical" framing was wrong and is retracted. Still true: `health-check.yml`'s schedule silently died 2026-06-17 and nobody noticed. At invite-only scale (owner + ~3 friends who will simply text him) paging has little value; revisit when users won't tell you directly, or before Stage B. |
+| Is there an independent status page + uptime monitoring? | Better Stack account, monitors, footer link (+ Cloudflare Health Check per `docs/DEPLOYMENT.md`) | operator | OPEN — **deferred for the friend beta; REQUIRED again for a stranger audience (2026-08-13)** | #282. ⚠️ **Correction 2026-07-31:** the Jul 28→29 ~31h downtime was an **intentional owner poweroff to save cost**, NOT a silent failure. The earlier "gap PROVEN in production / beta-critical" framing was wrong and is retracted. Still true: `health-check.yml`'s schedule silently died 2026-06-17 and nobody noticed. **⚠️ Re-opened 2026-08-13:** the 2026-07-31 deferral was scoped to "owner + ~3 friends who will simply text him". #282's own re-open criteria are *"(a) users are people who won't contact you directly, (b) you start charging someone who isn't a friend, or (c) Stage B"* — a non-friend audience trips all three, so this is a **blocker for that audience** and only ever was deferred for the friend beta. Two constraints when building it: Bot Fight Mode is ON, so any external monitor must be verified against it (`docs/EDGE_SECURITY.md:44-46`), and it needs a documented maintenance-mute step so an intentional poweroff does not page falsely. Self-hosted Uptime Kuma was **rejected** — the status page must not die with the host it reports on. |
 | Will we hear about cost blowouts (billing alert + LLM-cost rule)? | DO billing alert + one Grafana rule over `llm_cost_usd_total` after #326 activation | operator | OPEN | #291 (counter shipped); `docs/dashboards/llm-cost-panel.json` |
 | Is unit-economics review in place (COGS runbook + R2 gauges)? | Eyeball the R2 Metrics tab after #326 activation | operator | CODE-GREEN | #292, #293 (price book fixed; gauges shipped) |
 
@@ -86,17 +88,31 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Gate (question) | Action item | Owner | Status today | Evidence / signal |
 |---|---|---|---|---|
 | Does no surface promise virality; is every score estimate-framed? | None — structural test runs in every suite | build | GREEN | `tests/test_compliance_no_virality.py` + `tests/test_static.py` pins; FitBadge tiers (#192) |
-| Is billing wired for the beta (minute packs, verified webhooks, reconciliation)? | **Issue 453 fix must land, then a REAL purchase must settle on prod** | build | **RED** (was GREEN — reverted 2026-08-12) | Issue 453: `HTTPXClient(allow_sync_methods=False)` made every sync Stripe call raise from 2026-05-31 to 2026-08-12. Prod log shows 0 `billing checkout_session` lines in 168 h and `reconcile_stripe_ledger` raising every beat. The prior GREEN rested on `doctor.py --full` (2026-07-29), which probes Stripe with a raw `httpx.get` and never exercises our client — see `docs/OFF_COURSE_BUGS.md` 2026-08-12. **No gate returns to GREEN here on code alone; it needs a settled purchase.** |
+| Is billing wired for the beta (minute packs, verified webhooks, reconciliation)? | None — a real purchase credited minutes through the webhook | build | **GREEN (2026-08-14)** | **Proven end to end by a real live purchase**, which is the only thing that could close this row. Prod log, one `request_id=48801afa…`: `billing checkout_session pack=starter` → `event=billing_webhook_received` → `billing grant creator=eb9af967… minutes=200 reason=purchase` → `event=billing_webhook_processed pack_id=starter`. **`billing_webhook_received` had never once appeared in this app's history before 2026-08-14.** The grant came through the webhook itself, *not* the `reconcile_stripe_ledger` fallback — which is exactly the distinction this row demanded. **It took four stacked defects to get here, each hidden by the one before it:** (1) Issue 453 — `HTTPXClient(allow_sync_methods=False)` made every sync Stripe call raise for 10 weeks, so no session was ever created; (2) Issue 485a — Cloudflare's **OWASP Core Ruleset** blocked Stripe's webhook POSTs at the edge (Stripe received a Cloudflare block page; Ray `a2acda78fc1e5509`), invisible until (1) was fixed and deliveries actually began; (3) Issue 485b — the endpoint registered in Stripe was `/webhooks/stripe` while the app serves `/billing/webhook`, a 404 that would have bitten the instant the edge block lifted; (4) Issue 486 — account branding, non-blocking, still open. Fixes: `RequestsClient`; the `stripe-webhook-skip-waf` managed-rules exception (`docs/EDGE_SECURITY.md` Rule 2); the endpoint URL corrected in place so the signing secret survived. *Standing lesson, now twice-proven on this row: the prior GREEN rested on `doctor.py --full`, which probed Stripe with a raw `httpx.get` and never exercised our client, and `POST /billing/checkout` returned a clean 200 while the customer received nothing. **A green intermediate layer is not a working feature.*** |
 
-**Stage A totals:** 33 gates — **18 GREEN · 4 CODE-GREEN · 10 OPEN · 1 RED** (recounted from the
-rows themselves 2026-08-13; the previous line said 32/15/6/10/1 and had drifted). Changed
-2026-08-13: #284 flags-flip and #290 spend-trip went CODE-GREEN → GREEN, and the W1/W2
+**Stage A totals:** 34 gates — **19 GREEN · 5 CODE-GREEN · 10 OPEN · 0 RED** (recounted from the
+rows themselves 2026-08-14). **Changed 2026-08-14: billing went RED → GREEN — the last RED on the
+board is cleared.** A real purchase credited 200 minutes through the webhook path after four
+stacked defects were unwound (transport → Cloudflare OWASP edge block → wrong endpoint URL); see
+that row for the evidence. Changed 2026-08-13 (second pass): **#395 was added as a row** — it was
+a flagged BETA BLOCKER that had never appeared in this ledger at all, which is why the gate count
+rose by one rather than a status changing. Changed 2026-08-13 (first pass): #284 flags-flip and
+#290 spend-trip went CODE-GREEN → GREEN, and the W1/W2
 staging-verify residuals row went OPEN → GREEN, all on staging-drills run 31727428785.
 Earlier: 2026-08-12 billing flipped GREEN → RED on Issue 453, a 10-week total checkout
 outage; 2026-08-11 #26 flipped GREEN with live evidence; 2026-07-29 #24 + #25. The honest
-distance-to-beta number is **15 gates not fully green**, and the last hard blocker for
-inviting the first friends is still **#28 (friend smoke)** — with billing's RED (a real
-purchase settling) the thing that must clear before #28 is worth running.
+distance-to-beta number is **15 gates not fully green**.
+
+⚠️ **Corrected 2026-08-14 (second pass).** This paragraph said the last hard blocker was "**#28
+(friend smoke)** alone … Nothing else gates it." That was wrong, and wrong in the way this ledger
+keeps being wrong: it counted gates that had been *checked* rather than behaviour that had been
+*exercised*. The YouTube catalog sync had imported nothing for any creator since 2026-06-24 — a
+successful-looking HTTP 200 with a "Synced N video(s)" log line over a dead feature — so #28 could
+not have passed regardless of the invite. A friend would connect, sync, and see 0 videos and 0
+Shorts. The new row above is the actual blocker; #28 sits behind it. **The standing lesson from the
+billing row applies verbatim here: a green intermediate layer is not a working feature.** Neither a
+passing test suite nor a success log line is evidence that a feature does its job — only the
+feature's own output is.
 
 ⚠️ **Correction 2026-08-11.** This paragraph previously named #282 uptime monitoring as a
 blocker "which the 2026-07-29 31-hour silent outage proved beta-critical." That contradicted
@@ -113,9 +129,9 @@ Everything in Stage A, plus:
 
 | Gate (question) | Action item | Owner | Status today | Evidence / signal |
 |---|---|---|---|---|
-| Has Google verified the OAuth app (Testing → In production)? | Submit the READ-ONLY scope set; keep the `youtube.upload` submission separate (#194-gated, needs the YouTube API compliance audit) | operator | OPEN | #29 (1–4 week external review) |
+| Has Google verified the OAuth app (Testing → In production)? | Submit the READ-ONLY scope set; keep the `youtube.upload` submission separate (#194-gated, needs the YouTube API compliance audit) | operator | OPEN | #29 (1–4 week external review). ⚠️ **The 100-user cap is NOT why this matters** — that framing has caused this gate to be dismissed at least once. The binding constraint is that **Testing publishing status issues refresh tokens that expire in 7 days** ([Google docs](https://developers.google.com/identity/protocols/oauth2#expiration)); the only exemption is apps requesting *just* name/email/profile, and AutoClip requests `youtube.readonly` + `yt-analytics.readonly`. It is **independent of user count** — one user or ninety-nine, every user re-connects YouTube weekly and every background analytics/DNA refresh fails on day 8, which breaks the channel-knowledge loop the product exists for. Secondary: users see the **"Google hasn't verified this app"** warning at consent. Tolerable for a friend beta; not for anyone else. |
 | Does the deployment hold under the beta load profile? | Run the four staging Locust scenarios; consume pass/fail here | staging-verify | OPEN | #261; `docs/assessment/REPORT.md` verdict condition ("fresh Locust run confirms axis A/B") |
-| Is every migration proven reversible in CI? | Build the downgrade CI check | build | OPEN | #296 |
+| Is every migration proven reversible in CI? | None — verified in code 2026-08-13 | build | **GREEN (2026-08-13)** | #296. **This row read OPEN until 2026-08-13 and was stale.** Issue 296's own status is `DONE (2026-07-03, W3)` and the machinery is present and readable: `.github/workflows/ci.yml` `migration-lint` performs the ONLINE round-trip — `pg_dump --schema-only` at head → `alembic downgrade $DOWN` → `upgrade head` → second dump → byte-diff, failing the PR with *"Schema did not round-trip"* (`ci.yml:365-406`) — and `:408` "Detect no-op / irreversible downgrades (Issue 296)" runs `scripts/check_downgrades.py` against `alembic/DOWNGRADE_EXCEPTIONS` (stale allowlist entries also fail). Both of #296's ACs are therefore satisfied. Local dry-run round-tripped 34 revisions byte-identical. |
 | Are SLOs defined with burn-rate alerts? | Define SLOs + first alerts (dropped from the beta scope per the #282 rescope) | build | OPEN | #236 |
 | Has the key-rotation runbook been executed end-to-end? | Run `scripts/rotate_token_key.py` on staging; confirm tokens still decrypt | operator | OPEN | #30 AC; runbook written GREEN (`docs/RUNBOOKS.md`) |
 | Does a final security review pass (no PII/token in logs; deletion tested on prod)? | Log sweep + prod `DELETE /auth/me` exercise + isolation confirm | operator | OPEN | #30 AC (deletion first exercised in #28) |
@@ -127,7 +143,163 @@ Everything in Stage A, plus:
 PgBouncer/pool sizing (#58/#259, #262, #263) — descoped for v1 per DECISIONS 2026-06-26;
 revisit only if growth outpaces the beta topology.
 
-**Stage B totals:** 9 additional gates — **0 GREEN · 9 OPEN**.
+---
+
+## Stage A→B execution plan — the master runthrough (added 2026-08-13)
+
+**Read this first: there is no "Stage A½."** Inviting users who are *not* personal friends is
+**Stage B**, not a widened Stage A. The reason is not the 100-user cap — it is that **in Testing
+mode Google expires every tester's OAuth connection after 7 days** (`docs/ACCESS.md:51-54`), so each
+user must re-click "Connect YouTube" weekly *and* be manually whitelisted first. No stranger
+tolerates that. **Issue #29 (Google OAuth verification, 1–4 week external review) is therefore a
+hard blocker for this audience**, and it is the only item on this page with a clock you cannot
+compress. Start it on day 0 and let it bake while everything else proceeds.
+
+This section is the ordered working checklist. Every row cites the runbook that owns the procedure —
+it deliberately does **not** restate steps, so there is exactly one copy of each. Fill the evidence
+blank as you go; a row is done only when its blank is filled. Statuses above stay the record.
+
+### Track 1 — Start the external clock (day 0, ~2h, then unattended)
+
+- [ ] **Confirm the OAuth publishing status in the console** and record it here: ________.
+      *Why first:* the docs disagree. `docs/DECISIONS.md:12687` says "In production / 1-of-100";
+      `docs/GO_LIVE.md:50` and `docs/ACCESS.md:45` (both live-verified 2026-08-11) say **Testing**.
+      The DECISIONS mention is a parenthetical aside inside a *pricing* entry, so the live-verified
+      sources very likely win — but every #29 sequencing decision depends on the real value, and
+      Google caps *unverified* apps at 100 users in **either** mode, so the number cannot
+      disambiguate it. Open Google Auth Platform → Audience and look.
+- [ ] **Confirm ≥2 test users are configured** (the residual carried inside the GREEN #26 row at
+      `:50` — never actually verified). If it is still only the owner, add someone before #28.
+      Count: ________
+- [ ] **Submit #29 with the READ-ONLY scope set only** — `openid`, `userinfo.email`,
+      `userinfo.profile`, `youtube.readonly`, `yt-analytics.readonly` (`youtube/oauth.py:46-51`).
+      **Do NOT include `youtube.upload`**: it drags in the heavier YouTube API compliance audit and
+      can block or massively delay verification (#194 keeps it a separate, later submission).
+      Per-scope written justification required. The public-homepage requirement is already satisfied
+      (`main.py:index()` serves `static/landing.html`, Issue 376(a)). Submitted: ________
+- [ ] Verify the app name reads **AutoClip** everywhere Google will look (app, ToS, privacy policy)
+      — Google's review checks that consistency. Runbook drift fixed 2026-08-13.
+
+### Track 2 — Clear the billing RED (~30 min; everything else is downstream)
+
+- [x] **Buy the smallest minute pack on prod for real** — done 2026-08-13. Session creation and
+      payment both succeeded (`cs_live_a119Bph…`, paid, $18.00, pack `starter`); Issue 453's outage
+      is confirmed fixed.
+- [x] **Fix the Cloudflare edge block (#485a)** — done 2026-08-14. The OWASP Core Ruleset was
+      rejecting Stripe's POSTs before they reached the app. `stripe-webhook-skip-waf` managed-rules
+      exception deployed; expression + rationale in `docs/EDGE_SECURITY.md` Rule 2.
+- [x] **Fix the webhook URL (#485b)** — done 2026-08-14. Endpoint edited in place to
+      `https://autoclip.studio/billing/webhook`; signing secret unchanged, so `STRIPE_WEBHOOK_SECRET`
+      needed no update.
+- [x] **A purchase credits minutes through the webhook itself** — done 2026-08-14, 200 minutes
+      granted under `request_id=48801afa…`. **This row is GREEN.**
+- [ ] **#486 — separate Stripe account for AutoClip** (owner decision 2026-08-13). Required before
+      non-friends pay: Checkout currently shows another product's branding *and* a personal name
+      (`branding_settings.display_name = "Reese Ludwick"`) on the card-entry page. Done: ________
+      > ⚠️ Stripe transport stays `RequestsClient`. **Never** revert to `HTTPXClient` — two stacked
+      > defects, 10-week total checkout outage (`billing/stripe_client.py`, DECISIONS 2026-08-12).
+
+### Track 3 — The DR floor, before any stranger's data exists
+
+Strictly ordered by consequence (`docs/runbooks/255-258-dr-durability.md:6`).
+
+- [ ] **1. Secrets escrow (#255) — do this FIRST.** `TOKEN_ENCRYPTION_KEY`, `JWT_SECRET_KEY`, and a
+      snapshot of `/opt/autoclip/.env` to **two independent legs** (password manager **and** GCP
+      Secret Manager). → `docs/RUNBOOKS.md:578-589`. *Without it a perfect Postgres restore yields
+      useless ciphertext — every user's OAuth tokens, unrecoverable. It is the prerequisite that
+      makes every other backup worth having.* Never store these inside the backup they protect.
+      Done: ________
+- [ ] **2. Rotate the exposed Anthropic key.** → `docs/SECRETS.md:219-222`: new key in console →
+      VM `.env` → `doctor.py --full` green → **then** revoke the old one. Done: ________
+- [ ] **3. Nightly PG backups (#256/#257).** Create `creatorclip-backups`; set `BACKUP_R2_BUCKET` +
+      `BACKUP_ENCRYPTION_KEY`; install cron `7 3 * * * cd /opt/autoclip && ./scripts/backup_pg.sh`.
+      → `docs/RUNBOOKS.md:590-606`. Done: ________
+- [ ] **4. Run the restore drill.** → `docs/RUNBOOKS.md:641-648`. **`python3
+      scripts/reapply_erasures.py` afterwards is mandatory**, not optional — it is what keeps a
+      restore from resurrecting data a user asked to be erased. RTO recorded: ________
+- [ ] **5. R2 Object Lock (#258).** Compliance mode ≥14d — **not** Governance, which is
+      admin-overridable and therefore not tamper-proof — plus per-prefix lifecycle.
+      → `docs/RUNBOOKS.md:596-601`. Reconcile the windows against right-to-erasure (#254), which
+      also closes that CODE-GREEN row. Done: ________
+- [ ] **6. Redis durability (#288).** cron `27 3 * * * ./scripts/backup_redis.sh`; then the restart
+      drill at `docs/RUNBOOKS.md:711-714`. *Staging Redis is intentionally ephemeral — do not "fix"
+      it.* Done: ________
+- [ ] **7. Cloudflare edge rate limit (#286).** `preauth-rate-limit`, 10 req/min per IP, Managed
+      Challenge. → `docs/EDGE_SECURITY.md:26-79`. Keep `/health` **out** of the expression. The
+      verify loop must show the challenge **and** `docker compose logs app` showing no request
+      flood — that is what proves the block happened at the edge rather than in the app.
+      Done: ________
+
+### Track 4 — The fresh-upload verification session (the linchpin)
+
+*One session, designed so a single upload clears the maximum number of pending acceptance criteria.
+Nearly everything still unchecked across L26–L29 is of the form "upload one real video and check N
+things at once."*
+
+- [ ] **Pre-flight — do not skip:** `python3.12 scripts/r2_set_cors.py https://autoclip.studio`.
+      The `ExposeHeaders ETag` is load-bearing: **without it multipart completes stall at 100%**
+      (DECISIONS 2026-08-05). Run it before any drill or you will spend the session debugging a
+      phantom. Then flip `OVERLAY_BAND_DETECT_ENABLED=true` and `CAMERA_REGION_DETECT_ENABLED=true`.
+- [ ] **The three #395 upload drills** — see the #395 row above for why all three are listed
+      here rather than just the one that has a checkbox in `issues.md`.
+- [ ] **Clip audit on the output.** `scripts/clip_audit.py` (loudness + true peak — note `peak=true`
+      was only added 2026-08-10, so every audit before that silently reported no peak data at all),
+      plus frame-extraction spot-checks. Clears in one pass: **427** caption-on-face
+      (`docs/issues.md:1944`), **430** camera region (`:1993`), **448** overlay band (`:2825`),
+      **444** triage idempotency (`:2644`), **437** (`:2201`), **466** backfill drill (`:3510`),
+      **467** worker-path render (`:3540`), **478** full-resolution re-freeze (`:3817`).
+- [ ] **Then look at the clips as a creator, not an auditor.** Would you post these? *No gate on
+      this page covers that judgment, and it is the actual product question.* The eval harness
+      proves window **geometry** — it has never proven a clip is good. Verdict: ________
+
+### Track 5 — One consolidated fix wave
+
+*Sequencing decision (DECISIONS 2026-08-13): triage what Track 4 surfaces **together with** the
+known-open defects, then fix once. Rationale — every previous live upload surfaced defects the
+backlog had not predicted (first → Issues 427–430; second → 448, 449, 450), so fixing blind ahead of
+the upload risks fixing the wrong things.*
+
+- [ ] **Issue 484 — the meaning-inverting cold open.** The highest-impact known clip defect, and
+      until 2026-08-13 it was open, unfiled and unowned. See `docs/issues.md` § 484.
+- [ ] **Issue 441 residual** — hedge opens (`"Like,"`, `"maybe"`) and the fragment class survived
+      Issue 449's fix (`docs/issues.md:2487`). Folded into 484.
+- [ ] **Issue 450** — reframe landing on the wrong person. Issue 440's motion criteria passed on a
+      shot of the wrong speaker, and *"this audit graded 440 green on the numbers alone and missed
+      it"* (`docs/issues.md:2414`) — a standing warning about trusting numeric criteria over pixels.
+- [ ] Every fix ships an eval fixture, ratcheting `SCENARIO_FLOOR` above 31.
+
+### Track 6 — Issue 445, the three-pile triage UI
+
+- [ ] **Build it** (owner call 2026-08-13). It is **genuinely unbuilt** — 6 unchecked ACs at
+      `docs/issues.md:2672-2683` — despite an earlier handoff claiming the L27 triage UI had
+      shipped. Strangers hit the review queue on their first upload, and today reviewed state does
+      not survive a reload and the Dashboard badge counts the wrong thing
+      (`pages/Dashboard.tsx:108`). Run a real CHECK phase first: four design questions are still
+      open in the issue body (`docs/issues.md:2663-2670`).
+
+### Track 7 — Gates the friend beta deferred that a stranger audience re-opens
+
+- [ ] **#282 status page** — re-opened; see its row above for the criteria it now trips.
+- [ ] **#326** — create the Grafana Cloud + Sentry projects and set the two GitHub secrets. Code and
+      VM wiring already ship. This **unblocks #291**, which is otherwise hard-gated behind it.
+- [ ] **#291 cost alerts** — DO billing alert + one Grafana rule over `llm_cost_usd_total`; the
+      panel JSON already exists at `docs/dashboards/llm-cost-panel.json`.
+- [ ] **#236 SLOs** — minimum viable for this audience: one 5xx-rate alert + one Celery-failure
+      alert. The full SLO set remains Stage-B scope.
+- [ ] **Key-rotation dry run** (#30 AC) — `scripts/rotate_token_key.py` on staging, keys passed via
+      **env, never argv** (argv is visible in `ps` on the shared VM and persists in shell history).
+      → `docs/RUNBOOKS.md:138-229`. Once strangers' tokens are in the DB an untested rotation path
+      is a real liability. Done: ________
+- [ ] **`MAILING_ADDRESS`** (#246) — now **required**, where it was optional for friends: lifecycle
+      email to non-friends is commercial mail under CAN-SPAM. It prints in every footer and becomes
+      public, so use a PO box or CMRA mailbox. Until set, all lifecycle email stays correctly
+      **skipped** (`config.py:752`).
+- [ ] **Final security review** (#30 AC) — log sweep for PII/token, prod `DELETE /auth/me` exercise,
+      per-creator isolation confirm, `curl /docs` → 404, `ALLOWED_ORIGINS` re-verified (#24 re-run).
+- [ ] **Sign off** the Stage B row in the table at the bottom of this file.
+
+**Stage B totals:** 9 additional gates — **1 GREEN · 8 OPEN** (#296 corrected from a stale OPEN to
+GREEN on 2026-08-13 — the CI machinery was already shipped and readable; see its row).
 
 ---
 
@@ -177,5 +349,8 @@ implicitly by executing the #24→#25→#26→#28 chain.
 | Stage A — private beta | _pending_ | Reese | _____ |
 | Stage B — public launch (#30) | _pending_ | Reese | _____ |
 
-*Last reconciled: 2026-07-02 (Issue #303). Update a row's status only with evidence, and
-date the change.*
+*Last reconciled: 2026-08-13 — added the missing #395 row, corrected the stale #296 OPEN to GREEN,
+re-opened #282 for a non-friend audience, and added the "Stage A→B execution plan" section. Rows
+were also updated 2026-08-11, -12 and -13 (the previous "2026-07-02" line predated all of those and
+understated how current the ledger was). Update a row's status only with evidence, and date the
+change.*

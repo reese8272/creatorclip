@@ -483,7 +483,80 @@ def test_analytics_refresh_iterates_creators():
 
             mock_sync_vid.assert_called_once()
             mock_sync_aud.assert_called_once()
-            session.commit.assert_called_once()
+            # Commits are now incremental (catalog, audience, then the timestamp)
+            # rather than one commit wrapping the whole creator. This assertion
+            # used to be `assert_called_once`, which pinned exactly the defect it
+            # looked like a guard against: with a single commit, a creator whose
+            # catalog outran its sub-budget rolled back every video it had already
+            # fetched and never reached sync_audience_data at all.
+            assert session.commit.await_count >= 3
+
+    asyncio.run(run())
+
+
+def test_analytics_refresh_keeps_partial_progress_when_sub_budget_exhausts():
+    """A mid-loop sub-budget exhaustion must not discard the whole creator's run.
+
+    Regression guard for the starvation loop: audience data is fetched BEFORE the
+    per-video walk (so a large channel still gets it), work committed before the
+    exhaustion survives the rollback, and last_analytics_refreshed_at is stamped
+    so the creator rotates off the head of the NULLS FIRST queue instead of
+    blocking every creator behind it on the next run.
+    """
+    from worker.tasks import _refresh_youtube_analytics_async
+    from youtube.quota import QuotaSubBudgetExhaustedError
+
+    creator = MagicMock()
+    creator.id = uuid.uuid4()
+
+    creators_result = MagicMock()
+    creators_result.scalars.return_value = [creator]
+
+    videos_result = MagicMock()
+    videos_result.scalars.return_value = [MagicMock(), MagicMock()]
+
+    advisory_lock_result = MagicMock()
+    advisory_lock_result.scalar_one = MagicMock(return_value=True)
+
+    async def run():
+        with (
+            patch("db.AdminSessionLocal") as mock_ctx,
+            patch(
+                "youtube.oauth.get_valid_access_token", new_callable=AsyncMock, return_value="tok"
+            ),
+            patch("youtube.analytics.sync_video_catalog", new_callable=AsyncMock),
+            patch("youtube.analytics.sync_audience_data", new_callable=AsyncMock) as mock_sync_aud,
+            patch(
+                "youtube.analytics.sync_video_analytics",
+                new_callable=AsyncMock,
+                side_effect=QuotaSubBudgetExhaustedError("spent"),
+            ),
+            patch("worker.tasks.remaining", new_callable=AsyncMock, return_value=5000),
+        ):
+            session = AsyncMock()
+            session.execute = AsyncMock(
+                side_effect=[
+                    advisory_lock_result,
+                    creators_result,
+                    videos_result,
+                    MagicMock(),  # the stamping UPDATE on the exhaustion path
+                    MagicMock(),  # advisory unlock
+                ]
+            )
+            session.commit = AsyncMock()
+            session.rollback = AsyncMock()
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await _refresh_youtube_analytics_async()
+
+            # Audience data ran despite the video loop blowing up right after it.
+            mock_sync_aud.assert_awaited_once()
+            # Rolled back the in-flight video (the second rollback is the
+            # advisory-lock teardown in `finally`), then still committed the stamp
+            # — the catalog commit, the audience commit, and the stamp commit.
+            assert session.rollback.await_count >= 1
+            assert session.commit.await_count >= 3
 
     asyncio.run(run())
 

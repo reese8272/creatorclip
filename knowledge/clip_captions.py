@@ -29,6 +29,7 @@ from knowledge.util import (
     UNTRUSTED_CONTENT_POLICY,
     dna_system_block,
     extract_json_block,
+    grounding_disclaimer,
     has_1h_cache_marker,
     wrap_untrusted,
 )
@@ -121,13 +122,16 @@ def _build_request(
     requires a populated DNA brief. Clip hook is JSON-wrapped in the user turn to
     prevent prompt-injection break-out. (Issues 323 / 218 / 315 / 352)
     """
-    dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
+    dna_text = dna_brief[:_DNA_BRIEF_MAX_CHARS] if dna_brief else None
+    # None when there is no brief — the block is OMITTED rather than filled
+    # with a placeholder the static instructions then tell the model to cite.
+    dna_block = dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text)
 
     system: list[dict] = [
         # Block 1: static instructions — byte-identical across all calls.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
         # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
-        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
+        *([dna_block] if dna_block else []),
         # Block 3: per-clip factual label — uncached.
         {"type": "text", "text": f"CHANNEL: {channel_title}"},
     ]
@@ -142,7 +146,7 @@ def _build_request(
     return system, messages
 
 
-def _parse_result(raw_json: str) -> dict:
+def _parse_result(raw_json: str, *, is_grounded: bool = True) -> dict:
     """Parse and validate the structured JSON response.
 
     Returns a dict with ``options`` (list of up to SURFACE_N items) and
@@ -169,7 +173,7 @@ def _parse_result(raw_json: str) -> dict:
 
     return {
         "options": options[:SURFACE_N],
-        "disclaimer": DISCLAIMER,
+        "disclaimer": grounding_disclaimer(DISCLAIMER, is_grounded=is_grounded),
     }
 
 
@@ -244,5 +248,5 @@ async def generate_clip_caption_hooks(
     )
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
-    result = _parse_result(raw)
+    result = _parse_result(raw, is_grounded=bool(dna_brief))
     return result, usage_dict

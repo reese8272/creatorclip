@@ -63,12 +63,19 @@ def _session_for(*, data_gate=None, video_count=0):
                 r.scalar_one.return_value = (
                     data_gate["long"] if calls["n"] == 1 else data_gate["short"]
                 )
+                # /auth/me also reads the YoutubeToken row off a result of this
+                # shape (youtube_connected / youtube_expires_at, 2026-08-14).
+                # Without this a bare MagicMock made `token.expires_at.isoformat()`
+                # return a MagicMock and FastAPI rejected the response. None is a
+                # valid state — these tests exercise the setup-step resolver.
+                r.scalar_one_or_none.return_value = None
                 return r
 
             session.execute = _execute
         else:
             result = MagicMock()
             result.scalar_one.return_value = video_count
+            result.scalar_one_or_none.return_value = None
             session.execute = AsyncMock(return_value=result)
         yield session
 

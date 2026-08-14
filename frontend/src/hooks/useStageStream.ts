@@ -97,7 +97,6 @@ export function useStageStream(
       if (staleTimerRef.current) clearTimeout(staleTimerRef.current)
     }
     // url encodes both videoId and ingestStatus — correct dep set.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url])
 
   return state

@@ -29,9 +29,10 @@ def test_compute_retention_drop_detects_drop() -> None:
         [(float(t), 0.80) for t in range(0, 31, 5)],
         [(float(t), 0.82) for t in range(0, 31, 5)],
     ]
-    drop_at, ratio_at = compute_retention_drop(video_curve, creator_curves)
+    drop_at, ratio_at, baseline = compute_retention_drop(video_curve, creator_curves)
     assert drop_at is not None
     assert ratio_at is not None
+    assert baseline is True
     assert 5.0 <= drop_at <= 12.0  # interpolation lands somewhere in the descent
     assert ratio_at < 0.75  # below the creator's steady median
 
@@ -43,24 +44,30 @@ def test_compute_retention_drop_no_significant_drop() -> None:
         [(float(t), 0.80 - t * 0.002) for t in range(0, 31, 5)],
         [(float(t), 0.81 - t * 0.002) for t in range(0, 31, 5)],
     ]
-    drop_at, ratio_at = compute_retention_drop(curve, creator_curves)
+    drop_at, ratio_at, baseline = compute_retention_drop(curve, creator_curves)
     assert drop_at is None
     assert ratio_at is None
+    # A real baseline existed and the video was measured against it — this is
+    # the ONLY case that may be reported to the creator as "no significant drop".
+    assert baseline is True
 
 
 def test_compute_retention_drop_empty_inputs() -> None:
-    assert compute_retention_drop([], []) == (None, None)
-    assert compute_retention_drop([(5.0, 0.8)], []) == (None, None)
-    assert compute_retention_drop([], [[(5.0, 0.8)]]) == (None, None)
+    # baseline_available is False throughout: no comparison was possible, which
+    # must never be reported as "no drop detected".
+    assert compute_retention_drop([], []) == (None, None, False)
+    assert compute_retention_drop([(5.0, 0.8)], []) == (None, None, False)
+    assert compute_retention_drop([], [[(5.0, 0.8)]]) == (None, None, False)
 
 
 def test_compute_retention_drop_insufficient_video_points() -> None:
     """Single video curve point — not enough to interpolate."""
-    drop_at, _ = compute_retention_drop(
+    drop_at, _, baseline = compute_retention_drop(
         [(5.0, 0.6)],
         [[(t, 0.85) for t in range(0, 31, 3)]],
     )
     assert drop_at is None
+    assert baseline is False  # could not interpolate the target video
 
 
 # ── Unit: parse_hook_report ────────────────────────────────────────────────────
@@ -295,11 +302,52 @@ async def test_analyze_hook_no_drop_path() -> None:
         )
 
     system_blocks = fake_stream.call_args.kwargs["system"]
-    assert "No significant retention drop" in system_blocks[2]["text"]
-    assert "No DNA profile" in system_blocks[1]["text"]
+    joined = "\n".join(b["text"] for b in system_blocks)
+    assert "No significant retention drop" in joined
+    # With no DNA brief the block is OMITTED, not filled with a placeholder.
+    # This assertion previously read `assert "No DNA profile" in
+    # system_blocks[1]["text"]` — it pinned the defect in place: the prompt told
+    # the model there was no profile while the static instructions above it still
+    # said "You will receive: the creator's DNA brief".
+    assert not any("CREATOR DNA PROFILE" in b["text"] for b in system_blocks)
+    assert "No DNA profile" not in joined
     # Issue 352: the transcript (and its fallback) lives in the user turn now.
     user_content = fake_stream.call_args.kwargs["messages"][0]["content"]
     assert "No transcript available" in user_content
+
+
+async def test_analyze_hook_distinguishes_no_baseline_from_no_drop() -> None:
+    """A missing baseline must never be reported as "no drop detected".
+
+    Regression guard: compute_retention_drop returns (None, None, False) for a
+    creator with only one measured video, and the prompt used to say "No
+    significant retention drop detected in the first 30 seconds" — which the UI
+    renders in success-green. That asserts the outcome of a comparison that never
+    ran.
+    """
+    from knowledge.hooks import analyze_hook
+
+    fake_stream = AsyncMock(
+        return_value=(
+            _stream_msg("end_turn", "{}"),
+            {"input_tokens": 10, "output_tokens": 5, "cache_read": 0, "cache_creation": 0},
+        )
+    )
+    with patch("worker.anthropic_stream.stream_message", fake_stream):
+        await analyze_hook(
+            channel_title="Channel",
+            dna_brief=None,
+            retention_drop_at_s=None,
+            retention_at_drop=None,
+            creator_median_at_drop=None,
+            transcript_excerpt="",
+            task_id="t-3",
+            baseline_available=False,
+        )
+
+    joined = "\n".join(b["text"] for b in fake_stream.call_args.kwargs["system"])
+    assert "No significant retention drop" not in joined
+    assert "could NOT be compared" in joined
 
 
 async def test_analyze_hook_pause_turn_loop_continues_on_web_search() -> None:
@@ -426,8 +474,8 @@ def test_compute_retention_drop_uses_custom_threshold() -> None:
         [(float(t), 0.81) for t in range(0, 31, 5)],
     ]
     # Default threshold (0.10) would NOT trigger; loose threshold does.
-    drop_default, _ = compute_retention_drop(video_curve, creator_curves)
-    drop_loose, _ = compute_retention_drop(video_curve, creator_curves, threshold=0.03)
+    drop_default, _, _ = compute_retention_drop(video_curve, creator_curves)
+    drop_loose, _, _ = compute_retention_drop(video_curve, creator_curves, threshold=0.03)
     assert drop_default is None
     assert drop_loose is not None
 
@@ -436,7 +484,7 @@ def test_compute_retention_drop_first_point_after_zero() -> None:
     """Curves that start past second 0 get prepended with (0, 1.0) implicit start."""
     video_curve = [(5.0, 0.5), (10.0, 0.4), (15.0, 0.3)]
     creator_curves = [[(5.0, 0.9), (10.0, 0.88), (15.0, 0.87)]]
-    drop_at, _ = compute_retention_drop(video_curve, creator_curves)
+    drop_at, _, _ = compute_retention_drop(video_curve, creator_curves)
     assert drop_at is not None  # large diff at second 5 (0.9 - 0.5 = 0.4 > 0.10)
 
 

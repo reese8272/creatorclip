@@ -27,6 +27,7 @@ from knowledge.util import (
     UNTRUSTED_CONTENT_POLICY,
     dna_system_block,
     extract_json_block,
+    grounding_disclaimer,
     has_1h_cache_marker,
     wrap_untrusted,
 )
@@ -149,13 +150,18 @@ def _build_request(
     The clip transcript is in the user turn, JSON-wrapped via wrap_untrusted to
     prevent prompt-injection break-out (OWASP LLM01; Anthropic guide 2026-06-23).
     """
-    dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
+    dna_text = dna_brief[:_DNA_BRIEF_MAX_CHARS] if dna_brief else None
+    # None when there is no brief — the block is OMITTED, not filled with a
+    # "No DNA profile available yet." placeholder under instructions that tell
+    # the model to rank for THIS channel. Callers key the disclaimer off the
+    # same value so the two cannot disagree.
+    dna_block = dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text)
 
     system: list[dict] = [
         # Block 1: static instructions — never contains per-creator data.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
         # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
-        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
+        *([dna_block] if dna_block else []),
         # Block 3: per-clip factual context — uncached; changes every call.
         {"type": "text", "text": f"CHANNEL: {channel_title}"},
     ]
@@ -171,8 +177,11 @@ def _build_request(
     return system, messages
 
 
-def _parse_result(raw_json: str) -> dict:
+def _parse_result(raw_json: str, *, is_grounded: bool = True) -> dict:
     """Parse and validate the structured JSON response.
+
+    ``is_grounded`` selects the disclaimer: without a DNA brief the output is
+    not grounded in the creator's channel data and must not say that it is.
 
     Returns a dict with ``titles`` (list, up to SURFACE_TITLES_N) and
     ``hook_rewrites`` (list, 1–2 items). Raises ValueError on malformed JSON or
@@ -218,7 +227,7 @@ def _parse_result(raw_json: str) -> dict:
     return {
         "titles": titles[:SURFACE_TITLES_N],
         "hook_rewrites": hook_rewrites,
-        "disclaimer": DISCLAIMER,
+        "disclaimer": grounding_disclaimer(DISCLAIMER, is_grounded=is_grounded),
     }
 
 
@@ -294,5 +303,5 @@ async def generate_clip_title_suggestions(
     warn_if_truncated(settings.ANTHROPIC_MODEL_CLIP_TITLES, getattr(response, "stop_reason", None))
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
-    result = _parse_result(raw)
+    result = _parse_result(raw, is_grounded=bool(dna_brief))
     return result, usage_dict

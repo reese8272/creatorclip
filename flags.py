@@ -173,4 +173,11 @@ def require_flag(key: str) -> Callable[[], Awaitable[None]]:
                 detail={"code": f"{key}_disabled", "message": block_message(key)},
             )
 
+    # Name the closure after the flag it gates. Every instance was called
+    # "_gate", which made a route's dependency list unreadable in tracebacks and
+    # left structural tests unable to tell WHICH flag a route is behind — the
+    # check that two billed LLM routes had no kill switch at all could not be
+    # written until this carried the flag name.
+    _gate.__name__ = f"require_flag_{key}"
+    _gate.__qualname__ = _gate.__name__
     return _gate

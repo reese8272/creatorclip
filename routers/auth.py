@@ -55,6 +55,15 @@ class AuthMeOut(BaseModel):
     email: str | None
     onboarding_state: str
     can_publish: bool = False  # youtube.upload granted (Issue 194)
+    # YouTube connection state (2026-08-14). While the Google OAuth app is in
+    # Testing publishing status, Google expires every refresh token after 7 days
+    # (docs/GO_LIVE.md, Issue #29), so EVERY user reconnects weekly. The app had
+    # no way to show that: `reauth_required` notifications linked to /app/profile,
+    # which is read-only and has no reconnect control, and nothing surfaced that
+    # a token was about to die. These two fields let the UI say so and offer the
+    # fix before a background refresh fails.
+    youtube_connected: bool = False
+    youtube_expires_at: str | None = None
     # 2026-06-08 — nested aggregate so auth.js can stash window.__SETUP__
     # on every page load. Replaces the old polling of /data-gate + /dna
     # + /videos to infer the next-step CTA.
@@ -409,6 +418,10 @@ async def me(
         "email": creator.email,
         "onboarding_state": creator.onboarding_state.value,
         "can_publish": has_publish_scope(token.scope if token else None),
+        # A missing YoutubeToken row is the revoked/expired state: the refresh
+        # tick deletes the row once Google rejects the grant.
+        "youtube_connected": token is not None,
+        "youtube_expires_at": token.expires_at.isoformat() if token else None,
         "setup": setup,
     }
 
