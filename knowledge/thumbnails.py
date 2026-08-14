@@ -18,6 +18,7 @@ Design decisions (logged in docs/DECISIONS.md 2026-06-07):
 
 import json
 import logging
+from typing import TypeGuard
 
 import httpx
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
@@ -49,10 +50,9 @@ PATTERNS_CACHE_TTL = 86400  # 24 hours
 _THUMBNAIL_URL_TEMPLATE = "https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 _DNA_BRIEF_MAX_CHARS = 3000
 
-_DISCLAIMER = (
-    "These thumbnail concepts are estimates grounded in your channel's visual patterns "
-    "and current niche trends. AutoClip cannot guarantee specific CTR outcomes."
-)
+# NOTE: a `_DISCLAIMER` constant sat here, unused, until 2026-08-14.
+# parse_concepts() returns a bare list, so the disclaimer is rendered
+# client-side by ThumbnailConcepts rather than appended in Python.
 
 _SYSTEM_INSTRUCTIONS = f"""\
 {UNTRUSTED_CONTENT_POLICY}
@@ -88,7 +88,9 @@ After searching, generate 5 thumbnail concepts. Return ONLY a valid JSON object:
 RULES:
   - Rank concepts 1-5 from highest to lowest predicted fit for THIS channel
   - Each concept must be concretely actionable — a designer can execute it directly
-  - based_on_pattern must reference the channel's actual observed patterns, not generic advice
+  - based_on_pattern must reference the channel's actual observed patterns, not generic
+    advice — UNLESS the CHANNEL THUMBNAIL PATTERNS block says none were observed, in
+    which case say so plainly there and never invent a pattern
   - Return valid JSON ONLY — no preamble, no explanation outside the JSON object"""
 
 
@@ -105,6 +107,25 @@ def _empty_patterns() -> dict:
         "composition_pattern": "unknown",
         "channel_thumbnail_signature": "Insufficient data to identify patterns.",
     }
+
+
+def _has_observed_patterns(patterns: dict | None) -> TypeGuard[dict]:
+    """True when the thumbnail vision pass actually ran for this channel.
+
+    Returns a ``TypeGuard`` rather than a plain ``bool`` so the caller's
+    ``if observed:`` branch narrows ``patterns`` to ``dict`` — the six
+    ``patterns.get(...)`` reads inside it are then checked, not assumed.
+
+
+    ``None`` is the explicit "we never looked" signal and is what callers pass
+    when there is no confirmed DNA or its top videos no longer resolve. Inferring
+    this from the dict's contents was tried and rejected: a real analysis that
+    populated only ``channel_thumbnail_signature`` would have been discarded as a
+    non-observation, and the placeholder's own signature is prose rather than
+    ``"unknown"``, so no field is reliably diagnostic. The caller knows; it should
+    say so rather than leave the prompt builder guessing.
+    """
+    return patterns is not None
 
 
 async def analyze_thumbnail_patterns(
@@ -210,7 +231,7 @@ def _extract_transcript_hook(segments_jsonb: dict | None, max_chars: int = 500) 
 def _build_concepts_request(
     channel_title: str,
     dna_brief: str | None,
-    patterns: dict,
+    patterns: dict | None,
     transcript_hook: str,
     stated_identity: str | None,
 ) -> tuple:
@@ -223,23 +244,49 @@ def _build_concepts_request(
     Per-video patterns and trusted context are in the uncached block 3; untrusted
     content (transcript hook, stated identity) travels in the user turn.
     """
-    dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
+    dna_text = dna_brief[:_DNA_BRIEF_MAX_CHARS] if dna_brief else None
+    # None when there is no brief — the block is OMITTED rather than filled
+    # with a placeholder the static instructions then tell the model to cite.
+    dna_block = dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text)
 
-    pattern_lines = [
-        f"Face in thumbnail: {patterns.get('face_present', 'unknown')}",
-        f"Dominant emotions: {', '.join(patterns.get('dominant_emotions', [])) or 'unknown'}",
-        f"Text overlay style: {patterns.get('text_overlay_style', 'unknown')}",
-        f"Typical colors: {patterns.get('typical_colors', 'unknown')}",
-        f"Composition: {patterns.get('composition_pattern', 'unknown')}",
-        f"Channel thumbnail signature: {patterns.get('channel_thumbnail_signature', 'unknown')}",
-    ]
-    pattern_text = "\n".join(pattern_lines)
+    # An all-"unknown" patterns dict means the vision pass never ran — there was
+    # no confirmed DNA, or its top_video_ids no longer resolve to live rows (the
+    # live state whenever a DNA profile outlives the videos it was built from).
+    # The read endpoint GET /me/thumbnail-patterns returns 400 for exactly these
+    # conditions; the generation task used to substitute the placeholder dict and
+    # feed it to the model as fact, under a rule demanding that `based_on_pattern`
+    # "reference the channel's actual observed patterns, not generic advice". The
+    # model duly invented one, and the UI rendered it as "Based on: {pattern}" —
+    # a fabricated citation of channel data that was never observed.
+    # Called inline, not via a local: TypeGuard narrows `patterns` to dict only
+    # when the call IS the condition.
+    if _has_observed_patterns(patterns):
+        pattern_lines = [
+            f"Face in thumbnail: {patterns.get('face_present', 'unknown')}",
+            f"Dominant emotions: {', '.join(patterns.get('dominant_emotions', [])) or 'unknown'}",
+            f"Text overlay style: {patterns.get('text_overlay_style', 'unknown')}",
+            f"Typical colors: {patterns.get('typical_colors', 'unknown')}",
+            f"Composition: {patterns.get('composition_pattern', 'unknown')}",
+            f"Channel thumbnail signature: "
+            f"{patterns.get('channel_thumbnail_signature', 'unknown')}",
+        ]
+        pattern_text = "\n".join(pattern_lines)
+    else:
+        pattern_text = (
+            "NONE OBSERVED. This channel's existing thumbnails have not been analyzed "
+            "(no confirmed Creator DNA, or its top videos are no longer available). "
+            "You therefore have NO observed patterns for this channel. Do not invent "
+            "any. For every concept, set based_on_pattern to a plain statement that no "
+            "channel pattern was available and the concept follows general best "
+            "practice for the niche instead, and keep predicted_ctr_rationale free of "
+            "any claim about this channel's past thumbnails."
+        )
 
     system: list[dict] = [
         # Block 1: static instructions.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
         # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
-        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
+        *([dna_block] if dna_block else []),
         # Block 3: per-video factual context — no creator free-text.
         {
             "type": "text",
@@ -319,7 +366,7 @@ def parse_concepts(raw_json: str) -> list[dict]:
 async def generate_thumbnail_concepts(
     channel_title: str,
     dna_brief: str | None,
-    patterns: dict,
+    patterns: dict | None,
     transcript_hook: str,
     stated_identity: str | None,
     task_id: str,

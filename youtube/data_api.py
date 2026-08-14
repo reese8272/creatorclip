@@ -43,9 +43,16 @@ _MAX_RESULTS = 50
 # only the keys we persist. This cuts bandwidth/parse cost (Google cites 50-80%
 # smaller payloads); it does NOT reduce quota units (those are fixed per method
 # server-side — the quota lever is the ETag 304 path + batching). (Issue 260)
-_FIELDS_PLAYLIST_ITEMS = (
-    "nextPageToken,items(snippet(resourceId/videoId,title,description,publishedAt))"
-)
+#
+# ⚠️ A `fields` spec returns ONLY the properties it names — anything unnamed is
+# absent from the response, not null. So every key path a parser dereferences
+# MUST appear here. Omitting `resourceId/kind` while `list_channel_videos` still
+# filtered on it silently emptied every catalog sync for ~7 weeks (2026-06-24 →
+# 2026-08-14): zero errors, HTTP 200, "Synced N video(s)" in the log, and not one
+# creator imported a single video. `tests/test_data_api.py` now feeds each
+# fixture through the real spec before parsing, so spec/parser drift fails CI.
+# https://developers.google.com/youtube/v3/getting-started (partial responses)
+_FIELDS_PLAYLIST_ITEMS = "nextPageToken,items(snippet(resourceId(kind,videoId),title,publishedAt))"
 _FIELDS_VIDEOS_CONTENT_DETAILS = "items(id,contentDetails/duration)"
 _FIELDS_VIDEOS_STATISTICS = "items(id,statistics/viewCount)"
 
@@ -284,6 +291,7 @@ async def list_channel_videos(
     """Return all video IDs + metadata from the uploads playlist (paginated)."""
     playlist_id = await get_uploads_playlist_id(access_token, creator_id=creator_id)
     results: list[dict] = []
+    seen = 0  # raw playlistItems entries, before the kind filter below
     page_token: str | None = None
 
     while True:
@@ -305,6 +313,7 @@ async def list_channel_videos(
             etag_cache=True,
         )
         for item in data.get("items", []):
+            seen += 1
             snippet = item.get("snippet", {})
             resource_id = snippet.get("resourceId", {})
             if resource_id.get("kind") == "youtube#video":
@@ -320,15 +329,14 @@ async def list_channel_videos(
                             snippet.get("title"), settings.MAX_INGESTED_TITLE_CHARS
                         ),
                         "published_at": snippet.get("publishedAt"),
-                        # Issue 227: description is NOT stored on the Video model and is
-                        # not currently persisted anywhere — but the YouTube playlistItems
-                        # snippet always includes it. Clamp at the ingest boundary now so
-                        # that if description storage is added later the guard is already
-                        # in place and cannot be forgotten (defensive / future-proofing).
-                        # Callers that don't need the description can ignore this key.
-                        "description": clamp_ingest_field(
-                            snippet.get("description"), settings.MAX_INGESTED_DESC_CHARS
-                        ),
+                        # `description` was read here until 2026-08-14 and clamped as
+                        # "defensive / future-proofing", on a comment asserting the
+                        # snippet "always includes it" — but _FIELDS_PLAYLIST_ITEMS
+                        # never requested it, so the clamp only ever guarded None and
+                        # no caller consumed the key. If description storage is added
+                        # later, add `description` to the spec and the
+                        # MAX_INGESTED_DESC_CHARS clamp back together — the contract
+                        # test will fail if only one of the two lands.
                     }
                 )
 
@@ -336,6 +344,18 @@ async def list_channel_videos(
         if not page_token:
             break
 
+    # The signature of the 2026-06-24 outage: the API returned items and the
+    # parse kept none of them. That is never a real channel state — an empty
+    # uploads playlist yields seen == 0 — so it means the response shape and the
+    # filter above have drifted apart. Log it loudly; callers only see [] and
+    # cannot tell "no uploads" from "we dropped everything".
+    if seen and not results:
+        logger.error(
+            "list_channel_videos: parsed 0 of %d playlistItems for playlist %s — the "
+            "response shape does not match the parser (check _FIELDS_PLAYLIST_ITEMS)",
+            seen,
+            playlist_id,
+        )
     return results
 
 

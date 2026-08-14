@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -190,12 +191,18 @@ async def _get_channel_dna(creator_id: uuid.UUID, session: AsyncSession, _inp: d
     dna = await get_active(session, creator_id)
     if dna is None or not dna.brief_text:
         return {"available": False, "message": "No confirmed DNA profile yet."}
+    # built_at / age_days are surfaced so the assistant can qualify a stale brief
+    # ("as of 19 June") instead of presenting a months-old snapshot as current
+    # fact. Nothing in the codebase checked DNA age before 2026-08-14.
+    built_at = dna.created_at
     return {
         "available": True,
         "version": dna.version,
         "brief": dna.brief_text,
         "patterns": dna.patterns_jsonb,
         "optimal_clip_length_s": dna.optimal_clip_len_s,
+        "built_at": built_at.isoformat() if built_at else None,
+        "age_days": (datetime.now(UTC) - built_at).days if built_at else None,
     }
 
 
@@ -461,7 +468,7 @@ async def _suggest_clip_titles(creator_id: uuid.UUID, session: AsyncSession, inp
     """
     from dna.profile import get_active as _get_active_dna
     from knowledge.clip_titles import generate_clip_title_suggestions
-    from knowledge.util import extract_transcript_text
+    from knowledge.util import extract_transcript_window
     from models import Creator, Transcript
 
     raw_id = (inp.get("clip_id") or "").strip()
@@ -480,12 +487,17 @@ async def _suggest_clip_titles(creator_id: uuid.UUID, session: AsyncSession, inp
     if clip is None:
         return {"available": False, "message": "Clip not found in your catalog."}
 
-    # Fetch transcript for the clip's parent video.
+    # Issue 414 applied here too (2026-08-14): the chat tool delegates to the same
+    # generator as POST /clips/{id}/title-suggestions, but passed the WHOLE video
+    # transcript truncated to 1500 chars — so asking the assistant to title a
+    # specific clip produced titles about the video's opening, silently bypassing
+    # the per-clip windowing the REST route already does.
     transcript = await session.scalar(
         select(Transcript).where(Transcript.video_id == clip.video_id)
     )
-    clip_transcript = extract_transcript_text(
-        transcript.segments_jsonb if transcript else None, 1500
+    window_start = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    clip_transcript = extract_transcript_window(
+        transcript.segments_jsonb if transcript else None, window_start, clip.end_s
     )
 
     # Fetch creator for channel_title.

@@ -4,7 +4,56 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-12/13 (latest) — Beta close-out W0–W5: all five build waves DONE
+## 2026-08-14 (latest) — Catalog-sync outage, grounding honesty, and the weekly reconnect (Issues 489–495)
+
+Started from three owner-reported symptoms — "sync intake says 0 shorts and 0 videos", "why do I
+have to reconnect YouTube every 7 days", "why can't I generate titles and hooks" — and they resolved
+to one root cause plus a class of related defects.
+
+**The root cause (Issue 489, SEV0).** The YouTube catalog sync imported nothing for ANY creator
+between 2026-06-24 and 2026-08-14. `_FIELDS_PLAYLIST_ITEMS` omitted `snippet/resourceId/kind` while
+`list_channel_videos` filtered on exactly that key; a `fields` spec returns only the properties it
+names, so every item was dropped and `sync_video_catalog` returned early — HTTP 200, no error,
+`"Synced N video(s)"` in the log. Proven live from inside the prod app container (0 of 5 items
+survive with the filter, 5 of 5 without) and corroborated in the prod DB (every `origin=catalog` row
+created 2026-06-01/02, none since).
+
+**Everything downstream was a symptom of it**: data gate stuck at 0/0, DNA frozen at v13 (2026-06-19)
+whose `top_video_ids` point at wiped rows, zero retention curves so the Hook Analyzer is permanently
+`no_data`, and per-clip titles generated against a stale or absent brief.
+
+**Two mechanisms let it hide for seven weeks, and both are now closed.** The fixture
+`yt_playlist_items.json` hand-wrote a response shape the real request cannot produce and **nothing
+referenced it**; and `fetched` counted loop iterations rather than persisted rows, so the success
+message was an unverified claim. The new contract test feeds each fixture through the REAL `fields`
+spec before parsing, and was verified to fail on the pre-fix spec with exactly the production
+symptom (`[] == ['video_long_1','video_short_1']`).
+
+**Also shipped:** Beat-refresh rollback scope and queue starvation (490); the grounding-honesty pass
+across seven prompt builders plus thumbnail pattern fabrication, hook "no baseline" vs "no drop", and
+ungrounded persisted insights (491, see DECISIONS 2026-08-14); per-clip transcript windowing applied
+to the three siblings Issue 414 missed (492); an in-app YouTube reconnect where the `reauth_required`
+notification actually points, plus DNA age surfacing (493); kill switch + spend gate on two billed
+LLM routes that had neither (494). Deferred items are enumerated in Issue 495.
+
+**Verification.** Backend 3166 passed / 4 pre-existing failures (`test_response_models`,
+`test_scoring_goldens` — both logged in OFF_COURSE_BUGS, both reproduce on a stashed baseline).
+Frontend 683 passed, typecheck and `eslint --max-warnings=0` clean. Layer 0: ruff, mypy, bandit,
+freshness ok; `pip_audit` red at 77 pre-existing dependency CVEs (logged, `requirements.txt`
+untouched by this branch).
+
+**GO_LIVE correction.** The ledger claimed #28 (friend smoke) was the sole remaining hard blocker
+and "nothing else gates it". That was wrong: #28 could not have passed while a friend's first sync
+returned nothing. A new gate row now sits ahead of it. The standing lesson from the billing row
+applies verbatim — **a green intermediate layer is not a working feature**, and neither a passing
+suite nor a success log line is evidence that a feature does its job.
+
+**Next:** deploy, then run one real sync on prod and fill in that row's evidence blank. Nothing else
+in the beta is worth verifying until catalog rows, metrics, and a non-zero data gate exist.
+
+---
+
+## 2026-08-12/13 — Beta close-out W0–W5: all five build waves DONE
 
 The full beta close-out plan (7 waves, L29 + open tail + drills + billing proof, with a concrete
 back-testing spine) was approved and started. W0–W5 so far:

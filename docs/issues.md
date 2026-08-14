@@ -4331,4 +4331,137 @@ user-facing legal surface for the personal address.
 - [ ] The existing structural doc tests still pass (`tests/test_static.py` pins these pages)
 - [ ] No personal email address remains in any user-facing surface — grep clean
 
-- Next free issue number: **489**.
+---
+
+### 489 — Catalog sync imported nothing for 7 weeks (`fields=` / `kind` contract drift) — DONE 2026-08-14
+
+**SEV0 — the single defect behind "sync says 0 videos and 0 Shorts".**
+
+`youtube/data_api.py` requested `snippet(resourceId/videoId,title,publishedAt)` while
+`list_channel_videos` filtered items on `resource_id.get("kind") == "youtube#video"`. A Google
+`fields` spec returns ONLY the properties it names, so `kind` was absent, every item was dropped,
+and `sync_video_catalog` hit its `if not playlist_items: return` guard. HTTP 200, no exception,
+`"Synced N video(s)"` in the worker log. Introduced by `38317eb` (Issue 260, 2026-06-24).
+
+**Proven live** inside the prod app container against `UCNU5Tnt0xp7YtHNPgxDrSIw`: with the filter,
+`resourceId` keys are `['videoId']`, 0 of 5 items survive; without it, `['kind','videoId']`, 5 of 5
+survive. Prod DB corroborates: every `origin=catalog` row created 2026-06-01/02, zero since.
+
+**Why nothing caught it — the part worth keeping.** `tests/fixtures/yt_playlist_items.json`
+hand-writes `"kind": "youtube#video"`, a shape the real request cannot produce, and **nothing
+referenced the fixture at all**; the only playlistItems test asserted merely that a `fields` key was
+sent. Meanwhile `fetched` counted loop iterations, not persisted rows, and
+`sync_video_analytics` returns early and silently in three distinct cases.
+
+**Acceptance**
+- [x] `resourceId/kind` requested; unread `description` dropped from spec and parser together
+- [x] Contract test applies the REAL `_FIELDS_*` spec to each fixture before parsing — verified to
+      FAIL on the pre-fix spec with `[] == ['video_long_1','video_short_1']`, the production symptom
+- [x] `list_channel_videos` logs loudly when it parses 0 of N items (the outage's exact signature)
+- [x] `sync_video_analytics` returns whether metrics were WRITTEN; `sync_video_catalog` returns rows
+      added; worker reports both instead of iteration counts
+- [ ] **Live verification on prod: one real sync produces catalog rows + metrics + a non-zero data
+      gate.** Evidence: ________
+
+### 490 — Beat analytics refresh discarded a whole run and starved the queue — DONE 2026-08-14
+
+Catalog sync, every video's analytics, audience data and the `last_analytics_refreshed_at` stamp all
+sat under ONE `session.commit()`. A `QuotaSubBudgetExhaustedError` mid-loop rolled back everything
+already fetched, never reached `sync_audience_data` (so `AudienceActivity`/`Demographics` stayed
+permanently empty for any large channel — silently disabling `optimal_upload_gap_h`, upload_intel,
+and the chat audience tool), and left the timestamp NULL — which the `NULLS FIRST` ordering then
+used to pin that creator to the head of the queue on every subsequent run.
+
+**Acceptance**
+- [x] Audience data fetched BEFORE the per-video loop
+- [x] Commits per batch; sub-budget exhaustion costs at most the in-flight video
+- [x] Partial progress stamps the timestamp (via explicit UPDATE — rollback expires ORM instances
+      regardless of `expire_on_commit=False`) so the creator rotates off the queue head
+- [x] Videos selected stalest-first (`VideoMetrics.fetched_at NULLS FIRST`) so each run advances the
+      frontier instead of redoing the front of the list
+- [x] Regression test asserts audience data still runs when the video loop raises
+
+### 491 — LLM surfaces claimed channel grounding they did not have — DONE 2026-08-14
+
+Seven prompt builders injected `"No DNA profile available yet."` as a `CREATOR DNA PROFILE:` block
+under instructions commanding the model to cite channel patterns, then appended "grounded in your
+channel data" unconditionally. See `docs/DECISIONS.md` 2026-08-14 for the full rationale.
+
+**Acceptance**
+- [x] `dna_system_block` returns `dict | None`; all seven builders omit the block when absent
+- [x] `grounding_disclaimer()` keys the disclaimer off the same signal so they cannot drift
+- [x] Thumbnail task passes `patterns=None` instead of an all-`unknown` dict; prompt says no patterns
+      were observed and forbids inventing one (it was fabricating `based_on_pattern`, rendered in the
+      UI as "Based on: …")
+- [x] `compute_retention_drop` returns `baseline_available`; "nothing to compare against" is no
+      longer reported as "no significant retention drop" (which the UI paints success-green)
+- [x] `analyze-performer` refuses to invent figures with no metrics, and no longer persists an
+      ungrounded insight under `dna_version=NULL` that nothing invalidates
+- [x] Dead `_DISCLAIMER` constants removed; false "always appended by Python" docstring corrected
+- [x] `tests/test_grounding_honesty.py` guards it structurally — verified to fail on the pre-fix code
+
+### 492 — Clip LLM calls described the wrong part of the video — DONE 2026-08-14
+
+Issue 414 fixed per-clip transcript windowing for title-suggestions but was never applied to its
+three siblings: caption-hooks, explanation, and the chat `suggest_clip_titles` tool all passed the
+WHOLE video transcript truncated to its opening. A rank-8 clip at 42:00 got overlay text and an
+explanation written about minute 0.
+
+**Acceptance**
+- [x] All three use `extract_transcript_window(segments, setup_start_s ?? start_s, end_s)`
+- [x] `clip_explain` no longer defaults `clip_principle` to a literal that the prompt then labels
+      "Principle cited by engine"
+- [x] Source-level guard over all four call sites, plus a behavioural test
+
+### 493 — In-app YouTube reconnect (the weekly Testing-mode expiry) — DONE 2026-08-14
+
+`reauth_required` notifications and their email both linked to `/app/profile`, which is read-only
+and had no reconnect control; Settings only offers the separate `youtube.upload` grant. Since Google
+expires Testing-mode refresh tokens every 7 days, this dead end was the most frequently hit recovery
+path in the beta. Does not replace **#29** — verification is the only real fix — but stops the
+weekly expiry from stranding the user.
+
+**Acceptance**
+- [x] `/auth/me` returns `youtube_connected` + `youtube_expires_at`
+- [x] `YouTubeConnectionCard` on Profile: connected / expiring / disconnected, with a reconnect
+      action, and a neutral state while `/auth/me` is in flight (so a red "Disconnected" does not
+      flash on every page load)
+- [x] Sets expectations up front — an unexplained weekly prompt reads as breakage
+- [x] DNA age badge on `DnaCard` past 30 days; `get_channel_dna` chat tool exposes `built_at`/
+      `age_days` so the assistant can qualify a stale brief
+
+### 494 — Two billed LLM routes had no kill switch or spend gate — DONE 2026-08-14
+
+`GET /creators/me/thumbnail-patterns` (a Claude multimodal vision call over 10 images) and
+`POST /creators/me/dna/build` (a Sonnet call) carried neither `require_flag("llm_generation")` nor
+`require_budget`. Flipping the kill switch during an incident did not stop them and a creator past
+their spend cap was not blocked.
+
+**Acceptance**
+- [x] Both routes carry both dependencies
+- [x] `require_flag` names its closure `require_flag_<key>` (every instance was `_gate`, which made
+      dependency lists unreadable and blocked a structural assertion)
+- [x] `tests/test_flags.py` enumerates every billed LLM route and asserts both gates; a renamed or
+      removed route fails loudly rather than silently dropping out of coverage
+
+### 495 — Deferred from the 2026-08-14 pass (triage before Stage B)
+
+Found and verified during the audit; deliberately NOT built, per the owner's
+"correctness + honesty + reconnect" scope call.
+
+- [ ] Brand-kit fields cannot be cleared: `routers/creators.py` skips `null`, returns 200, and the
+      UI prints "Brand kit saved." while the value is unchanged
+- [ ] `captions_enabled` toggle is persisted but no renderer reads it (`render.py` gates on
+      `subtitle`) — the `style_preset["background"]` shape again
+- [ ] `Profile.tsx` "Shorts published" / "Clip ratings" are hardcoded `"—"`; the data exists
+- [ ] Data export (`routers/export.py`) is fully built and has NO UI — GDPR Art. 15/20 relevant
+- [ ] `is_rewatch_spike` is never written, so DNA retention spikes and the Issue-127 signal arm are
+      permanently inert; `captions_available` likewise never written but exposed via API as `false`
+- [ ] `push_enabled` accepted and stored, never read
+- [ ] `_upsert_style_field` writes any client-supplied key into the style JSONB with no allowlist
+- [ ] `AskSurfaceTabs` links to bare `/analysis`, whose four tools are gated on `?video_id=` — the
+      same dead end the nav entry was removed for (its own comment says so)
+
+---
+
+- Next free issue number: **496**.

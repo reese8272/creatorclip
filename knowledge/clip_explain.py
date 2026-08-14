@@ -32,6 +32,7 @@ from knowledge.util import (
     UNTRUSTED_CONTENT_POLICY,
     dna_system_block,
     extract_json_block,
+    grounding_disclaimer,
     has_1h_cache_marker,
     wrap_untrusted,
 )
@@ -132,7 +133,7 @@ Rules:
 def _build_request(
     channel_title: str,
     dna_brief: str | None,
-    clip_principle: str,
+    clip_principle: str | None,
     clip_score: float | None,
     clip_start_s: float,
     clip_end_s: float,
@@ -145,7 +146,10 @@ def _build_request(
     requires a populated DNA brief. Clip transcript is JSON-wrapped in the user
     turn to prevent prompt-injection break-out. (Issues 325 / 218 / 315 / 352)
     """
-    dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
+    dna_text = dna_brief[:_DNA_BRIEF_MAX_CHARS] if dna_brief else None
+    # None when there is no brief — the block is OMITTED rather than filled
+    # with a placeholder the static instructions then tell the model to cite.
+    dna_block = dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text)
 
     score_text = f"{clip_score:.2f}" if clip_score is not None else "not scored"
     timing_text = (
@@ -156,7 +160,7 @@ def _build_request(
         # Block 1: static instructions + principle list — never contains creator data.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
         # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
-        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
+        *([dna_block] if dna_block else []),
         # Block 3: per-clip factual context — uncached.
         {
             "type": "text",
@@ -180,7 +184,7 @@ def _build_request(
     return system, messages
 
 
-def _parse_result(raw_json: str) -> dict:
+def _parse_result(raw_json: str, *, is_grounded: bool = True) -> dict:
     """Parse and validate the structured JSON response.
 
     Verifies that ``cited_principle`` is one of the canonical VALID_PRINCIPLES.
@@ -204,14 +208,14 @@ def _parse_result(raw_json: str) -> dict:
     return {
         "explanation": explanation,
         "cited_principle": cited,
-        "disclaimer": DISCLAIMER,
+        "disclaimer": grounding_disclaimer(DISCLAIMER, is_grounded=is_grounded),
     }
 
 
 async def generate_clip_explanation(
     channel_title: str,
     dna_brief: str | None,
-    clip_principle: str,
+    clip_principle: str | None,
     clip_score: float | None,
     clip_start_s: float,
     clip_end_s: float,
@@ -229,7 +233,9 @@ async def generate_clip_explanation(
     Args:
         channel_title: The creator's YouTube channel name.
         dna_brief: The creator's plain-language DNA brief, or None.
-        clip_principle: The principle name the clip-engine cited for this clip.
+        clip_principle: The principle name the clip-engine cited, or None when
+            signals_jsonb carries none. None renders as "not specified" rather
+            than a hardcoded principle the engine never actually chose.
         clip_score: The clip's fit score (0–1), or None if not scored.
         clip_start_s: Clip start time in seconds.
         clip_end_s: Clip end time in seconds.
@@ -296,5 +302,5 @@ async def generate_clip_explanation(
     warn_if_truncated(settings.ANTHROPIC_MODEL_CLIP_EXPLAIN, getattr(response, "stop_reason", None))
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
-    result = _parse_result(raw)
+    result = _parse_result(raw, is_grounded=bool(dna_brief))
     return result, usage_dict

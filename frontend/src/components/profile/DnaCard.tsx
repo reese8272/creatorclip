@@ -13,6 +13,11 @@ import { ICON_SIZE } from '@/components/ui/iconSizes'
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 
+// A DNA profile older than this is flagged for a rebuild. It is a nudge, not a
+// gate: the brief keeps being used, because silently downgrading a creator's
+// product overnight would be worse than an honest "this is getting old" badge.
+const DNA_STALE_AFTER_DAYS = 30
+
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-default bg-bg px-3 py-2">
@@ -55,6 +60,8 @@ export function DnaCard({
   identity: Identity | null
   niches: NicheOption[]
 }) {
+  // Captured once at mount — see the ageDays note below.
+  const [now] = useState(() => Date.now())
   const [profile, setProfile] = useState<DnaProfile | null>(null)
   const [styleNotes, setStyleNotes] = useState<StyleNotes | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -117,6 +124,19 @@ export function DnaCard({
     profile && identity?.created_at
       ? new Date(profile.created_at) >= new Date(identity.created_at)
       : null
+
+  // Age of the profile itself. The badge above compares DNA against the
+  // creator's own identity TEXT, which is a different axis entirely — a profile
+  // can read "Synced" while being months old and built from videos that no
+  // longer exist. Nothing in the app checked DNA age before 2026-08-14, so a
+  // stale brief was fed to every generator indefinitely with no signal.
+  // `now` is captured once via the useState initializer rather than read during
+  // render: Date.now() in the render path is impure (react-hooks/purity), and a
+  // "days old" badge does not need to tick.
+  const ageDays = profile
+    ? Math.floor((now - new Date(profile.created_at).getTime()) / 86_400_000)
+    : null
+  const isStale = ageDays !== null && ageDays >= DNA_STALE_AFTER_DAYS
   // Backend DnaStatus is draft | confirmed | superseded (models.py). "confirmed"
   // is the activated state → read-only snapshot; "draft" is the pre-confirmation
   // onboarding hand-off → keep Confirm & activate.
@@ -128,6 +148,11 @@ export function DnaCard({
       {syncState !== null && (
         <Badge variant={syncState ? 'success' : 'warning'}>
           {syncState ? 'Synced' : 'Out of sync'}
+        </Badge>
+      )}
+      {isStale && (
+        <Badge variant="warning" title={`Built ${ageDays} days ago — rebuild to use your latest videos`}>
+          {ageDays}d old
         </Badge>
       )}
       <Badge variant={isActive ? 'success' : 'muted'}>{profile.status}</Badge>

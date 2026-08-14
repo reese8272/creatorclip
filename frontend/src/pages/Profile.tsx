@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { DnaCard } from '@/components/profile/DnaCard'
+import { YouTubeConnectionCard } from '@/components/profile/YouTubeConnectionCard'
 import { AnalyticsPanel } from '@/components/dashboard/AnalyticsPanel'
 import { Button } from '@/components/ui/button'
 import type {
@@ -109,6 +110,11 @@ export function Profile() {
         <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
           {/* Main: DNA snapshot + saved analyses (read-only; editing lives in Settings) */}
           <div className="flex flex-col gap-6">
+            {/* The `reauth_required` notification and its email both link here
+                (worker/tasks.py, notify/copy.py). Until 2026-08-14 this page had
+                no reconnect control, so the weekly Testing-mode token expiry
+                dead-ended the creator. */}
+            <YouTubeConnectionCard />
             <DnaCard identity={identity} niches={niches} />
             <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
               <div className="flex items-center justify-between border-b border-default px-[18px] py-4">

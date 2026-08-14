@@ -63,7 +63,6 @@ function renderTable(
         <VideoTable
           videos={videos}
           clipInfoByVideo={clipInfoByVideo}
-          analysisMode="auto"
           archivedView={archivedView}
         />
       </MemoryRouter>

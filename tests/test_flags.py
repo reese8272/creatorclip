@@ -384,3 +384,77 @@ async def test_publish_gate_records_failed_row_and_raises(
     assert pub.status == PublishStatus.failed
     assert pub.error == "youtube_publish_disabled"
     session.commit.assert_awaited_once()
+
+
+# ── Structural: every billed LLM route carries BOTH gates ─────────────────────
+
+
+def test_every_billed_llm_route_declares_flag_and_budget_dependencies() -> None:
+    """A billed LLM route with no kill switch cannot be stopped during an incident.
+
+    Two routes shipped without either dependency until 2026-08-14:
+    ``GET /creators/me/thumbnail-patterns`` (a Claude multimodal vision call over
+    up to 10 images) and ``POST /creators/me/dna/build`` (a Sonnet brief call).
+    Flipping ``llm_generation`` did not stop them and a creator past their spend
+    cap was not blocked.
+
+    This is enumerated rather than case-by-case so a NEW billed route fails here
+    instead of being discovered in an incident. Add to ``_BILLED_LLM_ROUTES``
+    when you add a route that spends LLM tokens.
+    """
+
+    from fastapi.routing import APIRoute
+
+    from main import app
+
+    # (path, method) pairs that spend LLM tokens on the creator's behalf.
+    _BILLED_LLM_ROUTES = {
+        ("/creators/me/videos/{video_id}/titles", "POST"),
+        ("/creators/me/videos/{video_id}/hook-analysis", "POST"),
+        ("/creators/me/videos/{video_id}/chapters", "POST"),
+        ("/creators/me/videos/{video_id}/thumbnail-concepts", "POST"),
+        ("/creators/me/thumbnail-patterns", "GET"),
+        ("/creators/me/dna/build", "POST"),
+        ("/creators/me/insights/analyze-performer", "POST"),
+        ("/clips/{clip_id}/title-suggestions", "POST"),
+        ("/clips/{clip_id}/caption-hooks", "POST"),
+        ("/clips/{clip_id}/explanation", "POST"),
+    }
+
+    def _walk(router) -> list:
+        out = []
+        for r in getattr(router, "routes", []):
+            if isinstance(r, APIRoute):
+                out.append(r)
+            else:
+                out.extend(_walk(r))
+        return out
+
+    by_key = {}
+    for route in _walk(app.router):
+        for method in route.methods or set():
+            by_key[(route.path, method)] = route
+
+    missing: list[str] = []
+    unknown: list[str] = []
+    for key in sorted(_BILLED_LLM_ROUTES):
+        route = by_key.get(key)
+        if route is None:
+            # The route was renamed or removed — fail loudly rather than let the
+            # guard silently stop covering it (a vacuous-pass failure mode).
+            unknown.append(f"{key[1]} {key[0]}")
+            continue
+        names = {getattr(d.call, "__name__", "") for d in route.dependant.dependencies}
+        # require_flag names its closure require_flag_<key> (see flags.py), so we
+        # can assert the route is behind the LLM switch specifically rather than
+        # merely behind *some* flag.
+        has_flag = "require_flag_llm_generation" in names
+        has_budget = "require_budget" in names
+        if not (has_flag and has_budget):
+            missing.append(f"{key[1]} {key[0]} (deps seen: {sorted(names)})")
+
+    assert not unknown, f"billed-LLM route(s) not found — update the list: {unknown}"
+    assert not missing, (
+        "billed LLM route(s) missing require_flag('llm_generation') and/or "
+        f"require_budget: {missing}"
+    )

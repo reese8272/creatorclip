@@ -231,6 +231,17 @@ async def _try_advisory_lock(session: Any, lock_key: str) -> bool:
 
 _KEYSET_BATCH_SIZE = 500
 
+# Beat analytics refresh (_refresh_youtube_analytics_async). The per-creator
+# sub-budget (YOUTUBE_QUOTA_PER_CREATOR_REFRESH_UNITS, 300) at ~2 units per video
+# stops the loop near 145 videos, so the per-run limit only has to exceed that —
+# the budget is the real cap, and the limit just bounds the query. The commit
+# interval bounds how much fetched work an exhausted budget can discard: it was
+# effectively the whole run before 2026-08-14, which is why a large channel
+# persisted nothing, never reached audience data, and kept a NULL refresh
+# timestamp that pinned it to the head of the NULLS FIRST queue every run.
+_REFRESH_VIDEOS_PER_RUN = 400
+_REFRESH_COMMIT_EVERY = 25
+
 
 async def _keyset_batches(
     session: Any,
@@ -4821,8 +4832,16 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                 # 300-unit/day allowance mid-onboarding. charge_sub_budget=False keeps
                 # only the global daily cap in force on this path (Issue 260).
                 await _emit("step", label="fetch_uploads", stage="catalog_sync")
-                await sync_video_catalog(session, creator, access_token, charge_sub_budget=False)
+                discovered = await sync_video_catalog(
+                    session, creator, access_token, charge_sub_budget=False
+                )
                 await session.commit()
+                logger.info(
+                    "sync_channel_catalog: creator %s discovered %d new video(s) from the "
+                    "uploads playlist",
+                    cid,
+                    discovered,
+                )
 
                 # Phase 2 — fetch metrics for any video that doesn't have them yet.
                 # Capped to DNA_LONGS_CAP most-recent longs + DNA_SHORTS_CAP most-recent
@@ -4874,14 +4893,23 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                 total = len(unmeasured)
                 await _emit("step", label="sync_metrics_start", stage="catalog_sync", total=total)
 
+                # `fetched` counts videos whose metrics were actually WRITTEN, not
+                # loop iterations. sync_video_analytics returns False on all three
+                # of its silent no-op paths (no channel_id, no youtube_video_id,
+                # empty Analytics report); counting the call instead of the write
+                # is what let a creator with 4 unmeasured upload-origin videos see
+                # "Synced 4 new video(s)" on two consecutive runs while
+                # video_metrics stayed empty and the gate stayed at 0/0.
                 fetched = 0
+                attempted = 0
                 for i, video in enumerate(unmeasured, 1):
                     try:
                         # Interactive path — global cap only, no sub-budget (Issue 260).
-                        await sync_video_analytics(
+                        attempted += 1
+                        if await sync_video_analytics(
                             session, video, creator, access_token, charge_sub_budget=False
-                        )
-                        fetched += 1
+                        ):
+                            fetched += 1
                         await _emit(
                             "step",
                             label="sync_metrics",
@@ -4918,15 +4946,20 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                         )
                 await session.commit()
                 logger.info(
-                    "sync_channel_catalog: creator %s synced (metrics fetched for %d new video(s))",
+                    "sync_channel_catalog: creator %s synced — %d new video(s) discovered, "
+                    "metrics written for %d of %d attempted",
                     cid,
+                    discovered,
                     fetched,
+                    attempted,
                 )
                 await _emit(
                     "done",
                     stage="catalog_sync",
-                    message=f"Synced {fetched} new video(s).",
+                    message=f"Synced {discovered} new video(s); metrics for {fetched}.",
                     fetched=fetched,
+                    discovered=discovered,
+                    attempted=attempted,
                 )
             finally:
                 await _rollback_then_unlock(session, lock_key)
@@ -4944,7 +4977,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
 
 
 async def _refresh_youtube_analytics_async() -> None:
-    from sqlalchemy import delete, select
+    from sqlalchemy import delete, select, update
 
     from youtube.analytics import sync_audience_data, sync_video_analytics, sync_video_catalog
     from youtube.oauth import get_valid_access_token
@@ -4988,32 +5021,79 @@ async def _refresh_youtube_analytics_async() -> None:
                     # per-video analytics — otherwise newly published videos stay
                     # invisible to the pipeline until the next deploy. (Issue 87)
                     await sync_video_catalog(session, creator, access_token)
+                    await session.commit()
 
-                    # Keyset-paginated: one large channel must not load its whole
-                    # catalog into worker memory at once (Issue 352 Batch F).
-                    async for video_batch in _keyset_batches(
-                        session,
-                        select(Video).where(Video.creator_id == creator.id),
-                        Video.id,
-                    ):
-                        for video in video_batch:
-                            await sync_video_analytics(session, video, creator, access_token)
-
+                    # Channel-level audience data runs BEFORE the per-video loop.
+                    # It is two cheap calls, and it used to sit after an unbounded
+                    # loop — so any creator large enough to exhaust its sub-budget
+                    # mid-loop never reached it, leaving AudienceActivity and
+                    # Demographics permanently empty. That silently disabled
+                    # optimal_upload_gap_h in the DNA build, upload_intel's
+                    # data_available, and the chat audience tool.
                     await sync_audience_data(session, creator, access_token)
+                    await session.commit()
+
+                    # Stalest-first, bounded. Previously this walked EVERY video in
+                    # primary-key order under a single commit, so a creator whose
+                    # catalog outran the 300-unit sub-budget rolled back the entire
+                    # run's work, re-fetched the same leading videos next time, and —
+                    # because last_analytics_refreshed_at stayed NULL — sat at the
+                    # head of the NULLS FIRST queue forever, starving everyone
+                    # behind it. Ordering by fetched_at NULLS FIRST means each run
+                    # advances the frontier instead of redoing the front of the list.
+                    # The limit only has to exceed what the sub-budget can fund
+                    # (~145 videos at 2 units each); the budget is the real cap.
+                    stalest_first = (
+                        select(Video)
+                        .outerjoin(VideoMetrics, VideoMetrics.video_id == Video.id)
+                        .where(Video.creator_id == creator.id)
+                        .order_by(VideoMetrics.fetched_at.asc().nulls_first(), Video.id)
+                        .limit(_REFRESH_VIDEOS_PER_RUN)
+                    )
+                    measured = 0
+                    for video in (await session.execute(stalest_first)).scalars():
+                        await sync_video_analytics(session, video, creator, access_token)
+                        measured += 1
+                        # Commit per video: an exhausted sub-budget mid-loop must
+                        # cost at most the in-flight video, never the whole run.
+                        if measured % _REFRESH_COMMIT_EVERY == 0:
+                            await session.commit()
+
                     creator.last_analytics_refreshed_at = datetime.now(UTC)
                     await session.commit()
-                    logger.info("Refreshed analytics for creator %s", creator.id)
+                    logger.info(
+                        "Refreshed analytics for creator %s (%d video(s) measured)",
+                        creator.id,
+                        measured,
+                    )
                 except QuotaSubBudgetExhaustedError:
                     # One creator hit its per-day refresh sub-budget — skip it but
                     # keep serving the rest of the fan-out (Issue 260). This except
                     # MUST precede the global QuotaExhaustedError arm because the
                     # sub-budget error subclasses it; otherwise the `break` below
                     # would swallow the per-creator case and stop the whole run.
+                    #
+                    # Roll back only the in-flight video, then STAMP and commit.
+                    # Stamping partial progress is what breaks the starvation loop:
+                    # without it this creator keeps a NULL timestamp, returns to the
+                    # head of the queue on every run, and blocks the fan-out behind
+                    # it indefinitely.
+                    await session.rollback()
                     logger.warning(
-                        "Creator %s hit its daily refresh sub-budget — skipping, others continue",
+                        "Creator %s hit its daily refresh sub-budget — partial progress "
+                        "kept, resuming from the stalest videos next run",
                         creator.id,
                     )
-                    await session.rollback()
+                    # Explicit UPDATE, not `creator.last_analytics_refreshed_at = ...`:
+                    # rollback expires every instance in the session regardless of
+                    # expire_on_commit=False, so touching the ORM attribute here
+                    # would trigger a lazy refresh on an async session.
+                    await session.execute(
+                        update(Creator)
+                        .where(Creator.id == creator.id)
+                        .values(last_analytics_refreshed_at=datetime.now(UTC))
+                    )
+                    await session.commit()
                     continue
                 except QuotaExhaustedError:
                     logger.warning(
@@ -5969,14 +6049,21 @@ async def _generate_thumbnail_concepts_async(
                 logger.warning("_thumbnail_concepts_async: Redis cache write failed: %s", exc)
 
         if patterns is None:
-            patterns = {
-                "face_present": "unknown",
-                "dominant_emotions": [],
-                "text_overlay_style": "unknown",
-                "typical_colors": "unknown",
-                "composition_pattern": "unknown",
-                "channel_thumbnail_signature": "Insufficient data.",
-            }
+            # No confirmed DNA, no resolvable top videos, or the vision pass was
+            # skipped. `patterns` STAYS None — that is the signal knowledge.thumbnails
+            # uses to tell the model plainly that no patterns were observed. It used
+            # to be replaced here with an all-"unknown" dict, which the prompt then
+            # presented as observed fact under a rule demanding the model cite real
+            # channel patterns; the model invented one and the UI rendered it as
+            # "Based on: {pattern}".
+            logger.info(
+                "_thumbnail_concepts_async: no observed thumbnail patterns for creator %s "
+                "(top_ids=%d resolved=%d) — generating on general best practice, and the "
+                "prompt says so",
+                creator_id,
+                len(top_ids),
+                len(youtube_ids),
+            )
 
         await aemit(job_id, "step", label="generating_concepts", stage="thumbnail_concepts")
 
@@ -6145,8 +6232,13 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
 
         await aemit(job_id, "step", label="analyzing_hook", stage="hook_analysis")
 
-        # Compute retention drop (pure Python)
-        drop_at_s, retention_at_drop = compute_retention_drop(video_curves, creator_curves)
+        # Compute retention drop (pure Python). baseline_available distinguishes
+        # "compared, no drop" from "nothing to compare against" — reporting the
+        # former for the latter told creators with one measured video that their
+        # hook was fine, in success-green, without any comparison having run.
+        drop_at_s, retention_at_drop, baseline_available = compute_retention_drop(
+            video_curves, creator_curves
+        )
 
         # Compute creator median at the drop point for the prompt
         creator_median_at_drop: float | None = None
@@ -6172,6 +6264,7 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
             creator_median_at_drop=creator_median_at_drop,
             transcript_excerpt=transcript_excerpt,
             task_id=job_id,
+            baseline_available=baseline_available,
         )
 
         from billing.ledger import record_llm_usage

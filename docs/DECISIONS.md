@@ -5,7 +5,55 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-14 (latest) — Descope the separate Stripe account; bill everything under Ludwick Solutions LLC
+## 2026-08-14 (latest) — LLM surfaces omit the DNA block and swap the disclaimer when ungrounded, rather than injecting a placeholder
+
+**Decision — when a creator has no Creator DNA profile, prompt builders OMIT the DNA system block
+entirely and Python appends a non-personalized disclaimer.** They no longer inject the string
+`"No DNA profile available yet."` as a `CREATOR DNA PROFILE:` block, and no longer append
+"grounded in your channel data" to output that isn't.
+
+**Why this diverges.** Seven builders shared the line
+`dna_text = (dna_brief or "No DNA profile available yet.")` and passed it to `dna_system_block`,
+which dutifully emitted the placeholder into the system prompt — directly beneath static
+instructions commanding the model to rank "for THIS channel" and make `based_on_pattern`
+"reference the channel's actual observed patterns, not generic advice". Nothing branched on the
+placeholder. So the model was told to cite channel data, handed a string saying there is none, and
+produced ranked, rationale-bearing, CTR-signalled output anyway — to which Python unconditionally
+appended a channel-grounding claim. Against the north star ("the only AI editor that truly knows
+your channel") that is an honesty defect, not just a correctness one.
+
+**Alternatives considered.** (a) Hard-refuse when ungrounded, as `improvement/brief.py` already
+does — rejected because a brand-new creator would meet a wall of dead buttons before their first
+sync completes. (b) Leave the placeholder and fix only the disclaimer — rejected because the prompt
+itself would still instruct the model to cite patterns it does not have.
+
+**Precedent followed, not invented.** `analysis/video_context.py:322` already omitted the DNA block
+rather than substituting a placeholder, and `clip_engine/scoring.py:358` already branched to a
+cold-start annotation with honest reasoning text and no LLM call. This generalises the posture the
+codebase had in two places to the seven that lacked it.
+
+**Prompt-cache impact: none, verified.** The `cache_control {ttl:"1h"}` marker was already
+floor-gated in `knowledge/util.py` on the measured static+DNA prefix clearing Sonnet 4.6's
+1024-token minimum. An omitted block leaves the prefix below that floor, so no marker is written —
+which is the desired outcome, since a 1h cache WRITE bills at 2× base input. The DNA block is
+per-creator, so there is no cross-creator prefix to preserve. Confirmed against Anthropic's
+prompt-caching docs (prefix-match semantics, per-model minimum cacheable prefix).
+
+**Mechanism.** `dna_system_block(static, dna_text)` now returns `dict | None`; a new
+`grounding_disclaimer(grounded_text, *, is_grounded)` selects the disclaimer from the SAME signal,
+so the prompt and the claim cannot drift apart. `tests/test_grounding_honesty.py` iterates the
+builders structurally, so a new generator that reintroduces the placeholder fails without anyone
+remembering to add a case.
+
+**Related, same date:** the thumbnail task now passes `patterns=None` (rather than an all-`unknown`
+dict) when the vision pass never ran, and the prompt says so explicitly instead of demanding the
+model cite patterns it was never shown; `compute_retention_drop` returns a third element,
+`baseline_available`, so "nothing to compare against" is no longer reported as "no significant
+retention drop detected" (which the UI paints success-green).
+
+---
+
+## 2026-08-14 — Descope the separate Stripe account; bill everything under Ludwick Solutions LLC
 
 **Decision — reverse the 2026-08-13 call to stand up a dedicated AutoClip Stripe account. Rebrand
 the existing account to the parent legal entity instead.** Issue 486 is closed by a different fix

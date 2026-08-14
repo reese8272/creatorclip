@@ -534,7 +534,16 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
     }
 
 
-@router.post("/me/dna/build", status_code=202, response_model=BuildQueuedOut)
+@router.post(
+    "/me/dna/build",
+    status_code=202,
+    response_model=BuildQueuedOut,
+    # The DNA build fires a Sonnet call via dna/brief.py, so it belongs behind the
+    # same kill switch and spend gate as every other LLM route. It was missing
+    # both, which meant the llm_generation flag could not stop a DNA rebuild and a
+    # creator past their spend cap could still trigger one.
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
+)
 @limiter.limit("120/minute", key_func=creator_key)
 async def build_dna(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Queue a DNA build for the current creator. Returns a Celery task_id.
