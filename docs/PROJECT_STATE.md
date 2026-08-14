@@ -36,11 +36,16 @@ to the three siblings Issue 414 missed (492); an in-app YouTube reconnect where 
 notification actually points, plus DNA age surfacing (493); kill switch + spend gate on two billed
 LLM routes that had neither (494). Deferred items are enumerated in Issue 495.
 
-**Verification.** Backend 3166 passed / 4 pre-existing failures (`test_response_models`,
-`test_scoring_goldens` — both logged in OFF_COURSE_BUGS, both reproduce on a stashed baseline).
-Frontend 683 passed, typecheck and `eslint --max-warnings=0` clean. Layer 0: ruff, mypy, bandit,
-freshness ok; `pip_audit` red at 77 pre-existing dependency CVEs (logged, `requirements.txt`
-untouched by this branch).
+**Verification.** Under the project `.venv` (the pinned dependency set): **backend 3170 passed, 0
+failed**; Layer 0 all green (ruff, mypy 0, bandit 0, pip-audit 0, freshness). Frontend 683 passed,
+typecheck and `eslint --max-warnings=0` clean.
+
+⚠️ An earlier pass of this session reported "4 pre-existing failures" and "77 pip-audit CVEs". Both
+were **wrong** — artifacts of running the suite and Layer 0 under the system interpreter
+(`fastapi 0.115.4` vs the pinned `0.137.1`; a `mypy` that could not load the pydantic plugin and so
+reported a vacuous `ok 0`). The two OFF_COURSE_BUGS rows filed on that bad data have been removed
+and replaced with the environment trap itself. Run tooling via `.venv/bin/python` or
+`scripts/ci_local.sh`.
 
 **GO_LIVE correction.** The ledger claimed #28 (friend smoke) was the sole remaining hard blocker
 and "nothing else gates it". That was wrong: #28 could not have passed while a friend's first sync

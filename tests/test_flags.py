@@ -421,30 +421,42 @@ def test_every_billed_llm_route_declares_flag_and_budget_dependencies() -> None:
         ("/clips/{clip_id}/explanation", "POST"),
     }
 
-    def _walk(router) -> list:
-        out = []
-        for r in getattr(router, "routes", []):
+    # FastAPI >= 0.13x defers `include_router` into `_IncludedRouter` objects, so
+    # `app.routes` holds almost no APIRoute instances and a naive walk finds
+    # nothing. That is how `tests/test_response_models.py`'s equivalent guard went
+    # VACUOUS (docs/OFF_COURSE_BUGS.md, 2026-08-04) — it iterated zero routes and
+    # passed. This resolver handles both shapes, and the `unknown` assertion below
+    # turns "found nothing" into a loud failure rather than a silent pass.
+    def _collect(router, out: dict) -> None:
+        for r in getattr(router, "routes", []) or []:
             if isinstance(r, APIRoute):
-                out.append(r)
+                for method in r.methods or set():
+                    out[(r.path, method)] = r.dependant
+            elif type(r).__name__ == "_IncludedRouter":
+                # Effective contexts carry the PREFIXED path plus the merged
+                # dependant — i.e. what actually serves the request.
+                ctxs = r.effective_route_contexts
+                ctxs = ctxs() if callable(ctxs) else ctxs
+                for ctx in ctxs:
+                    for method in ctx.methods or set():
+                        out[(ctx.path, method)] = ctx.dependant
+                _collect(getattr(r, "original_router", None), out)
             else:
-                out.extend(_walk(r))
-        return out
+                _collect(r, out)
 
-    by_key = {}
-    for route in _walk(app.router):
-        for method in route.methods or set():
-            by_key[(route.path, method)] = route
+    by_key: dict = {}
+    _collect(app.router, by_key)
 
     missing: list[str] = []
     unknown: list[str] = []
     for key in sorted(_BILLED_LLM_ROUTES):
-        route = by_key.get(key)
-        if route is None:
+        dependant = by_key.get(key)
+        if dependant is None:
             # The route was renamed or removed — fail loudly rather than let the
             # guard silently stop covering it (a vacuous-pass failure mode).
             unknown.append(f"{key[1]} {key[0]}")
             continue
-        names = {getattr(d.call, "__name__", "") for d in route.dependant.dependencies}
+        names = {getattr(d.call, "__name__", "") for d in dependant.dependencies}
         # require_flag names its closure require_flag_<key> (see flags.py), so we
         # can assert the route is behind the LLM switch specifically rather than
         # merely behind *some* flag.
