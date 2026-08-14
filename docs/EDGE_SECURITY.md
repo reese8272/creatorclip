@@ -39,12 +39,55 @@ a challenge stops bots without locking out a creator behind CGNAT.
 **Normal-use headroom check:** a legitimate login = 2–3 `/auth/*` hits (login → callback).
 10/min per IP is ~3 full login flows per minute per IP — generous for humans, hostile to loops.
 
+## Rule 2 (WAF managed-rules exception) — Stripe webhook delivery
+
+**Deployed 2026-08-14. This rule is load-bearing for revenue: without it, no purchase can ever
+credit minutes.** See Issue 485.
+
+| Field | Value |
+|---|---|
+| Name | `stripe-webhook-skip-waf` |
+| Type | Managed-rules **exception** (Security rules → Create → Managed rules) |
+| Expression | `(http.request.uri.path eq "/billing/webhook" and ip.src in {3.18.12.63 3.130.192.231 13.235.14.237 13.235.122.149 18.211.135.69 35.154.171.200 52.15.183.38 54.88.130.119 54.88.130.237 54.187.174.169 54.187.205.235 54.187.216.72 35.157.207.129 3.69.109.8 3.120.168.93})` |
+| Action | **Skip all remaining rules** (WAF managed rulesets) |
+| Placement | **First** — an exception must sit above the managed ruleset's `Execute` rule or it does nothing |
+| Logging | `Log matching requests` ON |
+
+**Why this is safe despite being a WAF skip.** The endpoint authenticates by **Stripe signature**
+(`construct_webhook_event`, `routers/billing.py`), which is cryptographic and independent of the
+edge. The IP list is only a scoping narrowing, not the security boundary. Skipping signature-verified
+traffic from the vendor's own published IPs on one exact path costs nothing.
+
+**What it fixes.** Cloudflare's **OWASP Core Ruleset** was blocking Stripe's webhook POSTs outright
+— Stripe received a Cloudflare "Sorry, you have been blocked" page (Ray `a2acda78fc1e5509`, source
+`54.187.205.235`, which is on Stripe's published webhook list). The payload contains nothing
+malicious; this is the well-documented OWASP *anomaly-score* false positive on Stripe webhook JSON
+(same failure Troy Hunt documented on Have I Been Pwned, resolved the same way — a path+IP
+exception). Do **not** try to "fix" the payload or lower the paranoia level globally.
+
+⚠️ **Bot Fight Mode was NOT the cause, despite being the intuitive suspect** (see below). Verified
+via Security Events → the blocking service was the OWASP Core Ruleset. Worth stating because it
+changes the fix entirely: managed rulesets run on the Ruleset Engine and **can** be skipped, whereas
+Bot Fight Mode cannot (see the note below). Chasing Bot Fight Mode first is a dead end.
+
+**Maintenance.** Stripe gives **7 days' notice** before changing webhook IPs via the
+[api-announce list](https://groups.google.com/a/lists.stripe.com/g/api-announce). Re-check the list
+at <https://docs.stripe.com/ips> (or `https://stripe.com/files/ips/ips_webhooks.txt`) at least
+twice a year, and after any unexplained webhook failure.
+
 ## Pre-existing edge settings (do not regress)
 
 - **Bot Fight Mode: ON** (Issue 144). It 403'd GitHub-hosted health checks once already —
   uptime probing uses **Cloudflare Health Checks** (edge-originated, exempt). Any new external
   monitor (e.g. Better Stack, Issue 282) must be verified against Bot Fight Mode before
   trusting its alerts, and `/health` must stay OUT of the rate-limit rule expression.
+  ⚠️ **Bot Fight Mode cannot be skipped by a WAF custom rule or exception** — it does not run on
+  the Ruleset Engine, so `Skip`/`Bypass`/`Allow` have no effect on it
+  ([Cloudflare docs](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/)). On the
+  Free plan the only lever that exempts traffic from it is an **IP Access Rule** (Bot Fight Mode
+  cannot trigger when one matches first); Super Bot Fight Mode (Pro) does support Skip. Remember
+  this before designing any future allowlist against it — Rule 2 above works only because its
+  target is a *managed ruleset*, not Bot Fight Mode.
 - **Tunnel ingress**: hostname → `app:8000` mapping lives in the Zero Trust dashboard
   (`docs/ACCESS.md`).
 

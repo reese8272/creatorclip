@@ -4091,10 +4091,39 @@ these survived it and belong with this work because they share the same boundary
 
 ### Issue 485: the Stripe webhook URL points at a 404 — no purchase has ever credited minutes
 
-- [ ] **Status:** open · **Size:** S · filed 2026-08-13 (live defect, found by the first real
-      purchase on prod) · **Lane:** L28 · **BETA BLOCKER**
+- [x] **Status:** **DONE 2026-08-14** · **Size:** S · filed 2026-08-13 (live defect, found by the
+      first real purchase on prod) · **Lane:** L28 · was **BETA BLOCKER**
 
 **Severity: SEV1 — every completed purchase takes the customer's money and grants nothing.**
+
+> ### ⚠️ Root cause was TWO defects, and the one filed first was the lesser one
+>
+> This issue was originally filed naming the wrong-URL 404 as the root cause. That was
+> **incomplete**: the operative blocker was at the Cloudflare edge, and the 404 sat behind it.
+>
+> **485a — Cloudflare's OWASP Core Ruleset blocked Stripe's POSTs before they reached the app.**
+> Stripe's delivery attempt received a Cloudflare *"Sorry, you have been blocked"* page (Ray
+> `a2acda78fc1e5509`) from source `54.187.205.235` — an address on
+> [Stripe's published webhook IP list](https://docs.stripe.com/ips). Confirmed in Security Events,
+> which named the OWASP Core Ruleset as the acting service. The payload is not malicious; this is
+> the documented OWASP **anomaly-score** false positive on Stripe webhook JSON — the same failure
+> Troy Hunt documented on Have I Been Pwned, resolved the same way.
+> **Fix:** `stripe-webhook-skip-waf` managed-rules exception, path + Stripe-IP scoped, Skip all
+> remaining rules, placed First. Recorded in `docs/EDGE_SECURITY.md` **Rule 2**.
+>
+> *A trap worth recording:* Bot Fight Mode is the intuitive suspect (it is ON, and
+> `docs/EDGE_SECURITY.md` already noted it 403'd GitHub health checks). It was **not** the cause —
+> and had it been, the fix above would not have worked, because Bot Fight Mode does not run on the
+> Ruleset Engine and **cannot** be skipped by a WAF rule on the Free plan. Read Security Events
+> before designing the fix.
+>
+> **485b — the endpoint URL 404**, described below, was real and would have bitten the instant the
+> edge block lifted. Fixed by editing the endpoint in place (preserving the signing secret).
+>
+> **Verified 2026-08-14:** a real purchase logged `billing checkout_session` →
+> `billing_webhook_received` → `billing grant … minutes=200 reason=purchase` →
+> `billing_webhook_processed`, all under `request_id=48801afa…`. `billing_webhook_received` had
+> never appeared in this app's history before that moment. `docs/GO_LIVE.md` billing row is GREEN.
 
 **What happened.** The owner bought the `starter` pack on prod on 2026-08-13. Stripe session
 `cs_live_a119Bph…` came back `status=complete`, `payment_status=paid`, `amount_total=1800`. The
@@ -4131,16 +4160,22 @@ VM — turning a 404 into `billing_webhook_rejected reason=bad_signature`, i.e. 
 outcome with a different error.
 
 **Acceptance**
-- [ ] The registered endpoint URL is `https://autoclip.studio/billing/webhook`
-- [ ] `STRIPE_WEBHOOK_SECRET` on the VM still matches that endpoint's signing secret (confirm by a
-      real delivery, not by inspection)
-- [ ] A fresh live purchase logs `billing_webhook_received` → `billing_webhook_processed` and
-      credits minutes **without** waiting for the reconcile sweep
-- [ ] The 2026-08-13 `starter` purchase is credited (via reconcile or the fixed webhook), verified
-      against the balance
-- [ ] A test asserts the served webhook path matches the value documented for the Stripe endpoint,
-      so a future route-prefix change cannot silently re-break delivery
-- [ ] `docs/GO_LIVE.md` billing row updated with the evidence
+- [x] Stripe's webhook IPs can reach `/billing/webhook` through the Cloudflare edge —
+      `stripe-webhook-skip-waf` exception deployed 2026-08-14 (`docs/EDGE_SECURITY.md` Rule 2)
+- [x] The registered endpoint URL is `https://autoclip.studio/billing/webhook`
+- [x] `STRIPE_WEBHOOK_SECRET` on the VM still matches that endpoint's signing secret — confirmed by
+      a real signed delivery being accepted, not by inspection (the endpoint was edited in place
+      rather than recreated, so the secret never rotated)
+- [x] A fresh live purchase logs `billing_webhook_received` → `billing_webhook_processed` and
+      credits minutes **without** waiting for the reconcile sweep — 2026-08-14, 200 minutes,
+      `request_id=48801afa…`
+- [x] `docs/GO_LIVE.md` billing row updated with the evidence → **GREEN**
+- [ ] **Follow-up, not blocking:** a test asserts the served webhook path matches the URL registered
+      with Stripe, so a future router-prefix change cannot silently re-break delivery. Tracked as
+      **Issue 487**.
+- [ ] **Follow-up, not blocking:** confirm the 2026-08-13 `starter` purchase (the one that was
+      blocked) also credited — it should have been swept up by `reconcile_stripe_ledger`, and
+      confirming it closes an otherwise-unverified Issue 205 acceptance criterion.
 
 ---
 
@@ -4183,4 +4218,34 @@ and bookkeeping uncommingled.
       note in `docs/DECISIONS.md` whether any further migration is needed
 - [ ] `docs/SECRETS.md` updated for the new key origin
 
-- Next free issue number: **487**.
+---
+
+### Issue 487: pin the Stripe webhook path so a router change cannot silently kill revenue
+
+- [ ] **Status:** open · **Size:** S · filed 2026-08-14 (follow-up to #485) · **Lane:** L28
+
+**Severity: SEV3 — cheap insurance on a path that has already failed silently once.**
+
+Issue 485 cost a 100%-silent revenue outage partly because the URL registered in Stripe
+(`/webhooks/stripe`) and the URL the app serves (`/billing/webhook`) drifted apart with nothing
+watching. The served path is assembled from two places — `APIRouter(prefix="/billing")` at
+`routers/billing.py:26` and `@router.post("/webhook")` at `:220` — so a future prefix change would
+move the endpoint with no test failing and no error anywhere. The failure mode is invisible: Stripe
+retries into a 404 and the app logs nothing at all.
+
+**Approach.** A unit test that reads the **app's own route table** (`app.routes`) and asserts the
+Stripe webhook path equals a single documented constant, rather than hardcoding the string twice.
+Same shape as the existing CI-config pins. Cheap, no network, no Stripe dependency.
+
+Consider also asserting the path in `docs/EDGE_SECURITY.md` Rule 2's expression matches — the WAF
+exception is scoped to the literal path, so a route change silently breaks the edge exception too,
+re-creating the *other* half of #485.
+
+**Acceptance**
+- [ ] A test resolves the webhook route from the FastAPI app's route table and asserts it equals the
+      documented path
+- [ ] The test names #485 in a comment so the next reader knows why it exists
+- [ ] Failing the test names the remediation (update the Stripe endpoint URL **and** the
+      `docs/EDGE_SECURITY.md` Rule 2 expression), not just "paths differ"
+
+- Next free issue number: **488**.

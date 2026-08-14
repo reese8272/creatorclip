@@ -87,10 +87,13 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Gate (question) | Action item | Owner | Status today | Evidence / signal |
 |---|---|---|---|---|
 | Does no surface promise virality; is every score estimate-framed? | None — structural test runs in every suite | build | GREEN | `tests/test_compliance_no_virality.py` + `tests/test_static.py` pins; FitBadge tiers (#192) |
-| Is billing wired for the beta (minute packs, verified webhooks, reconciliation)? | **Fix #485 (webhook URL 404), then a purchase must credit minutes without the reconcile sweep** | build | **RED** (was GREEN — reverted 2026-08-12; first real purchase attempted 2026-08-13) | Issue 453: `HTTPXClient(allow_sync_methods=False)` made every sync Stripe call raise from 2026-05-31 to 2026-08-12. The prior GREEN rested on `doctor.py --full` (2026-07-29), which probed Stripe with a raw `httpx.get` and never exercised our client — see `docs/OFF_COURSE_BUGS.md` 2026-08-12. **UPDATE 2026-08-13 — the first real purchase was made, and it proved half the path and broke on the other half.** ✅ Session creation works: `cs_live_a119Bph…` returned `status=complete`, `payment_status=paid`, `amount_total=1800`, and the app logged `billing checkout_session pack=starter` — **Issue 453's 10-week outage is genuinely fixed.** ❌ Minutes did not credit: the webhook endpoint registered in Stripe is `/webhooks/stripe` (**404**) while the app serves `/billing/webhook` (`routers/billing.py:26` + `:220`), so `billing_webhook_received` never logged — Stripe never delivered rather than being rejected. Filed as **#485** (SEV1). `reconcile_stripe_ledger` will grant it idempotently within 24 h (`worker/schedule.py:88`), and it is deliberately being left to the scheduled beat so Issue 205's reconciliation path gets proven on real data. Also filed **#486** — one Stripe account serves AutoClip *and* another product, so Checkout shows the wrong branding on the card-entry page; owner chose a separate account (2026-08-13). **This row stays RED until a purchase credits minutes via the webhook itself, not via the reconcile fallback.** *Standing lesson: `POST /billing/checkout` returned a clean 200 while the customer received nothing — the layer under test passing is not the feature working.* |
+| Is billing wired for the beta (minute packs, verified webhooks, reconciliation)? | None — a real purchase credited minutes through the webhook | build | **GREEN (2026-08-14)** | **Proven end to end by a real live purchase**, which is the only thing that could close this row. Prod log, one `request_id=48801afa…`: `billing checkout_session pack=starter` → `event=billing_webhook_received` → `billing grant creator=eb9af967… minutes=200 reason=purchase` → `event=billing_webhook_processed pack_id=starter`. **`billing_webhook_received` had never once appeared in this app's history before 2026-08-14.** The grant came through the webhook itself, *not* the `reconcile_stripe_ledger` fallback — which is exactly the distinction this row demanded. **It took four stacked defects to get here, each hidden by the one before it:** (1) Issue 453 — `HTTPXClient(allow_sync_methods=False)` made every sync Stripe call raise for 10 weeks, so no session was ever created; (2) Issue 485a — Cloudflare's **OWASP Core Ruleset** blocked Stripe's webhook POSTs at the edge (Stripe received a Cloudflare block page; Ray `a2acda78fc1e5509`), invisible until (1) was fixed and deliveries actually began; (3) Issue 485b — the endpoint registered in Stripe was `/webhooks/stripe` while the app serves `/billing/webhook`, a 404 that would have bitten the instant the edge block lifted; (4) Issue 486 — account branding, non-blocking, still open. Fixes: `RequestsClient`; the `stripe-webhook-skip-waf` managed-rules exception (`docs/EDGE_SECURITY.md` Rule 2); the endpoint URL corrected in place so the signing secret survived. *Standing lesson, now twice-proven on this row: the prior GREEN rested on `doctor.py --full`, which probed Stripe with a raw `httpx.get` and never exercised our client, and `POST /billing/checkout` returned a clean 200 while the customer received nothing. **A green intermediate layer is not a working feature.*** |
 
-**Stage A totals:** 34 gates — **18 GREEN · 5 CODE-GREEN · 10 OPEN · 1 RED** (recounted from the
-rows themselves 2026-08-13). Changed 2026-08-13 (second pass): **#395 was added as a row** — it was
+**Stage A totals:** 34 gates — **19 GREEN · 5 CODE-GREEN · 10 OPEN · 0 RED** (recounted from the
+rows themselves 2026-08-14). **Changed 2026-08-14: billing went RED → GREEN — the last RED on the
+board is cleared.** A real purchase credited 200 minutes through the webhook path after four
+stacked defects were unwound (transport → Cloudflare OWASP edge block → wrong endpoint URL); see
+that row for the evidence. Changed 2026-08-13 (second pass): **#395 was added as a row** — it was
 a flagged BETA BLOCKER that had never appeared in this ledger at all, which is why the gate count
 rose by one rather than a status changing. Changed 2026-08-13 (first pass): #284 flags-flip and
 #290 spend-trip went CODE-GREEN → GREEN, and the W1/W2
@@ -98,8 +101,8 @@ staging-verify residuals row went OPEN → GREEN, all on staging-drills run 3172
 Earlier: 2026-08-12 billing flipped GREEN → RED on Issue 453, a 10-week total checkout
 outage; 2026-08-11 #26 flipped GREEN with live evidence; 2026-07-29 #24 + #25. The honest
 distance-to-beta number is **15 gates not fully green**, and the last hard blocker for
-inviting the first friends is still **#28 (friend smoke)** — with billing's RED (a real
-purchase settling) the thing that must clear before #28 is worth running.
+inviting the first friends is now **#28 (friend smoke)** alone — billing cleared 2026-08-14,
+so #28 is finally worth running. Nothing else gates it.
 
 ⚠️ **Correction 2026-08-11.** This paragraph previously named #282 uptime monitoring as a
 blocker "which the 2026-07-29 31-hour silent outage proved beta-critical." That contradicted
@@ -172,17 +175,17 @@ blank as you go; a row is done only when its blank is filled. Statuses above sta
 - [x] **Buy the smallest minute pack on prod for real** — done 2026-08-13. Session creation and
       payment both succeeded (`cs_live_a119Bph…`, paid, $18.00, pack `starter`); Issue 453's outage
       is confirmed fixed.
-- [ ] **Fix #485 — the webhook URL 404.** Stripe delivers `checkout.session.completed` to
-      `/webhooks/stripe`, which does not exist; the app serves `/billing/webhook`. **Edit the
-      existing endpoint's URL — do not create a new one**, or the new signing secret will no longer
-      match `STRIPE_WEBHOOK_SECRET` and a 404 becomes a `bad_signature` rejection. Done: ________
-- [ ] **Confirm the 2026-08-13 purchase credited** via the daily `reconcile_stripe_ledger` beat —
-      which also closes an otherwise-unverified Issue 205 acceptance criterion. Balance: ________
-- [ ] **Then a fresh purchase must credit minutes through the webhook itself**, not the reconcile
-      fallback. That is what turns this row GREEN. Evidence: ________
+- [x] **Fix the Cloudflare edge block (#485a)** — done 2026-08-14. The OWASP Core Ruleset was
+      rejecting Stripe's POSTs before they reached the app. `stripe-webhook-skip-waf` managed-rules
+      exception deployed; expression + rationale in `docs/EDGE_SECURITY.md` Rule 2.
+- [x] **Fix the webhook URL (#485b)** — done 2026-08-14. Endpoint edited in place to
+      `https://autoclip.studio/billing/webhook`; signing secret unchanged, so `STRIPE_WEBHOOK_SECRET`
+      needed no update.
+- [x] **A purchase credits minutes through the webhook itself** — done 2026-08-14, 200 minutes
+      granted under `request_id=48801afa…`. **This row is GREEN.**
 - [ ] **#486 — separate Stripe account for AutoClip** (owner decision 2026-08-13). Required before
-      non-friends pay: Checkout currently shows another product's branding on the card-entry page.
-      Done: ________
+      non-friends pay: Checkout currently shows another product's branding *and* a personal name
+      (`branding_settings.display_name = "Reese Ludwick"`) on the card-entry page. Done: ________
       > ⚠️ Stripe transport stays `RequestsClient`. **Never** revert to `HTTPXClient` — two stacked
       > defects, 10-week total checkout outage (`billing/stripe_client.py`, DECISIONS 2026-08-12).
 
