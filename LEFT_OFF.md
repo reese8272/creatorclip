@@ -1,184 +1,155 @@
-# LEFT_OFF.md — CreatorClip Session Handoff
+# LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-13 · **Branch:** `main` @ `592893f` · working tree **clean**, 0 open PRs.
-**Prod:** `https://autoclip.studio`, alembic **`0062 (head)`** — deploy for `592893f` succeeded 17:56 UTC.
-**Remote branches: `main` + `staging` only, and `main == staging == 592893f`.**
-**⚠️ `main` and `staging` are now BRANCH-PROTECTED** (8 required checks, linear history, no
-force-push/deletion). Direct pushes to `main` are rejected — **open a PR for everything.**
+**Last updated:** 2026-08-14 · **Branch:** `docs/catalog-sync-live-evidence` @ `2db1798`
+**Working tree:** 2 modified files, both the OWNER's in-flight work, deliberately not committed by
+the last session — `static/privacy.html` + `tests/test_static.py` (LLC-rebrand sweep, Issue 488).
+**Prod:** `https://autoclip.studio`, deployed at `1221fb8` (2026-08-14 17:39 UTC, staging gate →
+prod, both green). **Open PR:** **#115** (`docs/catalog-sync-live-evidence` → `staging`), 13/13 CI
+green, **ready to merge**.
 
-> Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source
-> of truth. Numbers here are copied from those docs; if they disagree, the docs win.
+> ⚠️ `main` and `staging` are BRANCH-PROTECTED (8 required checks, linear history). Direct pushes to
+> `main` are rejected — **everything goes through a PR**, and the documented path is
+> `feature → staging → main`. Merging to `main` triggers a production deploy.
+
+> Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of
+> truth. If a number here disagrees with `docs/GO_LIVE.md`, **the doc wins**.
 
 ---
 
 ## CURRENT FOCUS
 
-**Nothing is in flight.** This checkpoint was a *CI-integrity and branch-reconciliation* session, and
-it is fully closed: every PR merged, deployed, and verified. The next session starts from a clean
-board and picks the next product lane.
+**The friend beta (#28).** The last hard *code* blocker was found, fixed, deployed and live-verified
+on 2026-08-14. What remains is almost entirely an **operator checklist** — things only the owner can
+do in a browser/console — plus one genuinely unbuilt UI (Issue 445).
 
 ### → NEXT ACTION
 
-1. **Decide the repo visibility question** (30 seconds, no code). The repo is **public**. Going
-   private on the free plan **silently removes the branch protection just applied** — that is the
-   literal 403 recorded in Issue 145: *"Upgrade to GitHub Pro or make this repository public."*
-   Private also re-meters Actions minutes (public = unlimited; free private = 2,000/mo, and ~12 CI
-   jobs per PR is 25–35 billed minutes). Verified safe either way: no secret was ever committed,
-   `.gitignore` covers `.env`/`*.pem`/`*.key`, `docs/SECRETS.md` holds only format placeholders, and
-   no self-hosted-runner workflow triggers on `pull_request`. **Recommendation: if the clip engine
-   being publicly readable bothers you, go private AND buy Pro (~$4/mo); otherwise stay public.**
-2. **Clear the two beta blockers, in this order** — see *BETA LOOSE ENDS* below:
-   - **Billing RED** — buy the smallest minute pack on prod for real; minutes must credit.
-     Everything else in Stage A is downstream of this.
-   - **#28 friend smoke** — the Stage-A capstone; only worth running once billing settles.
-3. **Then pick the next lane from `docs/issues.md`** (next free issue number: **484**). The audit
-   lane L29 is closed; what remains is mostly *live-verification* checkboxes, not code — see
-   *WHAT'S LEFT IN issues.md*.
-
----
-
-## WHAT THIS CHECKPOINT DID (2026-08-13, PRs #99–#110)
-
-**In relation to `docs/issues.md`: nothing here maps to a numbered issue.** This work was CI/tooling
-integrity, discovered while reconciling branches. It is deliberately **not** filed as issues — every
-item is already fixed and merged; the PRs are the record. Do not go looking for issue numbers.
-
-### Part 1 — Branch reconciliation (the original ask)
-- **Six `fix/issue-*` branches were already fully absorbed into `main`**, squash-merged via the
-  integration branches (PRs #92, #93). Squash-merge rewrites history, so they never became ancestors
-  and survived the auto-delete. Verified **line-by-line** that every addition had landed; every
-  residual difference was `main` being *ahead* (render-env floor raised 3→7, `origin_s` refactored
-  into `clip_origin_s()`, PR #94's harness fix). **All six deleted. Do not resurrect them.**
-- `main`'s tip was **gated for the first time** — full 12-job CI dispatch, all green.
-- `staging` fast-forwarded to `main`; they are now equal and expected to stay that way.
-
-### Part 2 — Five CI defects, all the same shape
-Every one was **a gate reporting green while not testing what it claimed.**
-
-| PR | Defect | Why it mattered |
-|---|---|---|
-| #99 | `ci_local.sh` ran `pytest -m "not integration"`; a CLI `-m` **replaces** `pytest.ini`'s `addopts` instead of intersecting | Pre-push hook re-selected `render_env`/`llm_live`/`transcription_live` and failed on every dev box; `--no-verify` hid it |
-| #100 | The drills' `-m scripts.drills` invocation was unpinned and `drills.py` had no `sys.path` guard | `scripts/flags.py` shadows root `flags.py`; the only defence was a docstring |
-| #101 | `eval/clip-quality` posted to `context.sha` — the **merge** commit, not the PR head | Issue 265 built it *specifically* so protection could require it, and it never could. **Requiring it before this fix would have deadlocked every PR** |
-| #102 | flags-flip drill raced the app's 30 s flag TTL cache | GO_LIVE Stage-A evidence for #284; could only ever have passed by luck |
-| #105–#109 | rate-limit drill asserted `all([])` → `True` | See Part 4 — it was hiding a real bug |
-
-### Part 3 — Branch protection enabled
-`main` + `staging`: 8 required checks, `strict`, linear history, no force-push/deletion,
-`enforce_admins: false`. The Issue-145 blocker ("needs GitHub Pro on a private repo") evaporated when
-the repo went public. **#101 had to land first** or every PR would have hung on *"Waiting for status
-to be reported."*
-
-### Part 4 — The rate-limit drill, and what it was hiding
-The vacuous assertion wasn't just a weak test — it was **masking a real cross-drill bug**.
-`drill_spend_trip` deliberately breaches the spend cap; `record_spend` sets a cool-down key with a
-**1-hour TTL**; `require_budget` then 429s **every budget-guarded route** — but the cleanup deleted
-four keys and *not* that one. That 429 is indistinguishable from a rate-limit trip at the HTTP layer,
-which is why it read as a rate-limit problem for three rounds. It also made an earlier run log
-`flags-flip: re-enabled -> 429. PASS`, because #102's predicate accepted "not 503" as success.
-
-Took five PRs: #105 (the vacuous assertion) → #106 (per-drill `asyncio.run` vs the loop-bound Redis
-singleton) → #107 (**my error** — asserted the daily 60 instead of the binding `20/hour` burst, which
-would have failed a *healthy* stack) → #108 (the actual cool-down leak) → #109 (suite clean-start).
-
-### Part 5 — Docs + scorecard brought in line
-- `GO_LIVE.md`: **#284 and #290 CODE-GREEN → GREEN**, and the W1/W2 staging-verify residuals row
-  **OPEN → GREEN**, all on drills run `31727428785`. Stage-A totals recounted from the rows
-  (the stated tally had drifted).
-- `BRANCHING.md` / `PROJECT_STATE.md`: the "needs GitHub Pro" claim corrected.
-- `OFF_COURSE_BUGS.md`: rate-limit entry OPEN → ✅ FIXED.
-- Root causes logged as **ISSUE-2026-08-13-01/-02** in `~/.claude/ISSUES_LOG.md`.
+1. **Merge PR #115** (`gh pr merge 115 --merge`), then open `staging → main` and merge that. It
+   records the catalog-sync live evidence and flips that gate GREEN. 13/13 checks already pass.
+   *Merging to `main` deploys — this one is docs-only, so it is a no-op deploy, but it will still
+   run the full pipeline.*
+2. **Decide what to do with the 2 uncommitted files** in the working tree. They are the owner's
+   LLC-rebrand edits (`CreatorClip` → `AutoClip` in `privacy.html`, plus a `test_static.py` guard
+   that no retired brand name survives on any legal page). They were deliberately kept out of every
+   commit this session. They belong with **Issue 488**.
+3. **Work the operator track below** — that is now the critical path to the beta, not code.
 
 ---
 
 ## WHAT WORKS NOW (verified — do not re-investigate)
 
-- **`main` @ `592893f` is green on all 12 CI jobs and deployed to prod.** `main == staging`.
-- **The staging drills genuinely pass** (run `31727428785`), with substantive output on every leg:
-  ```
-  flags-flip: re-enabled -> 202. PASS
-  spend-trip: manual reset restored the flag. PASS
-  rate-limit: 20 cheap 404 probes then 429 at request #21 (binding limit=20). PASS
-  ```
-  That third line is the one that used to be a lie.
-- **The pre-push hook works and is installed** — `.githooks/pre-push` with `core.hooksPath` set (look
-  there, **not** `.git/hooks/`, which is why an older note said it was missing). It runs ruff, mypy,
-  bandit, vitest, the frontend build and the unit lane; it cannot run the Docker-only gates.
-- **Coverage gates really do run** (Issue 479's fix holds): `coverage ok 84.8`, `module_coverage ok`
-  with real per-module rates vs floors, `diff_cover ok`.
-- **Lane L29 (Issues 456–482) is built and merged** — PRs #85–#98, including all five SEV1s.
-- **Security posture of the public repo is verified** — see NEXT ACTION 1.
+### The catalog-sync outage is fixed and PROVEN on prod
+
+`_FIELDS_PLAYLIST_ITEMS` requested `snippet(resourceId/videoId,…)` while `list_channel_videos`
+filtered items on `resource_id.get("kind") == "youtube#video"`. A Google `fields` spec returns **only
+the properties it names**, so `kind` was absent, every item was dropped, and `sync_video_catalog`
+returned early — HTTP 200, no exception, `"Synced N video(s)"` in the log. **No creator imported a
+single video between 2026-06-24 (`38317eb`, Issue 260) and 2026-08-14.**
+
+Live result on prod, creator `eb9af967-…`, task `12430bde`, driven through the **real HTTP endpoint**
+(`POST /creators/me/catalog/sync` with a minted session cookie, not a Celery shortcut):
+
+| | before | after |
+|---|---|---|
+| `origin=catalog` videos | 0 | **21** (10 long / 15 Shorts) |
+| `video_metrics` with `engagement_rate` | 0 | **21** |
+| retention-curve points | 0 | **2100** |
+| `GET /creators/me/data-gate` | `0/0 ready:false` | **`6 long / 15 shorts, ready:true`** |
+
+### Also shipped and green in the same release (`1221fb8`)
+
+- **Issue 490** — Beat refresh committed once per creator, so a mid-loop sub-budget exhaustion rolled
+  back the whole run, never reached `sync_audience_data`, and left a NULL timestamp that the
+  `NULLS FIRST` ordering used to pin big channels to the queue head forever. Now: audience data
+  first, incremental commits, stalest-first ordering, stamp on partial progress.
+- **Issue 491** — seven prompt builders injected `"No DNA profile available yet."` under
+  instructions telling the model to cite channel patterns, then appended "grounded in your channel
+  data" unconditionally. Now the block is **omitted** and `grounding_disclaimer()` keys the claim off
+  the same signal. Thumbnail concepts no longer fabricate `based_on_pattern`; hook analysis
+  distinguishes "no baseline" from "no drop"; `analyze-performer` won't invent figures or cache an
+  ungrounded row under `dna_version=NULL`.
+- **Issue 492** — caption-hooks, explanation and the chat `suggest_clip_titles` tool all passed the
+  **whole video's opening** instead of the clip's own window (Issue 414 was never applied to them).
+- **Issue 493** — in-app YouTube reconnect on Profile, where the weekly `reauth_required`
+  notification had been pointing at a page with no reconnect control. `/auth/me` now returns
+  `youtube_connected` + `youtube_expires_at`.
+- **Issue 494** — `GET /me/thumbnail-patterns` (billed multimodal vision call) and
+  `POST /me/dna/build` had **neither** `require_flag` nor `require_budget`.
+
+Full detail: `docs/issues.md` §489–495, `docs/DECISIONS.md` 2026-08-14, `docs/PROJECT_STATE.md`.
 
 ---
 
-## BETA LOOSE ENDS (Stage A — `docs/GO_LIVE.md` is canonical)
+## ⛳ WHAT IS LEFT TO COMPLETE THE BETA
 
-**Stage A: 33 gates — 18 GREEN · 4 CODE-GREEN · 10 OPEN · 1 RED.** The beta is in good shape; the
-honest framing is that what remains is almost entirely **operator actions and live proof, not code.**
+`docs/GO_LIVE.md` is the canonical scorecard — **read it, don't trust this summary**. As of
+2026-08-14: **Stage A = 35 gates · 20 GREEN · 5 CODE-GREEN · 10 OPEN · 0 RED.**
 
-**The two that actually gate inviting friends:**
-1. 🔴 **Billing — a real purchase has never settled on prod.** Code shipped (Issue 21 packs, 206
-   webhook verify, 205 ledger reconcile, 290 spend guard) and the 10-week `HTTPXClient` outage is
-   fixed, but the gate stays RED until a real pack purchase credits minutes. **Everything else is
-   downstream of this.**
-2. ⬜ **#28 friend smoke** — the Stage-A capstone: full pipeline on prod with real friends for 48 h.
-   Only worth running after billing settles.
+### A. Operator track — the real critical path (nobody but the owner can do these)
 
-**Operator chores, no code (each ~minutes):** rotate the exposed Anthropic key; Cloudflare edge rate
-limit on `/auth/*` (#286); escrow `TOKEN_ENCRYPTION_KEY`/`JWT_SECRET_KEY`/`.env` off-box (#255); set
-`MAILING_ADDRESS` (#246 — lifecycle email is intentionally **skipped** until then, which is the
-correct fail-safe, not a bug); nightly PG backup bucket + restore drill (#256/#257); R2 Object Lock
-(#258); Redis durability drill (#288); status page/uptime (#282 — **deferred by owner call**, not a
-blocker); billing + LLM-cost alerts.
+Ordered by consequence, per `docs/runbooks/255-258-dr-durability.md`:
 
-**External, not ours to schedule:** Google OAuth verification (#29) — the one true long pole for
-*public* launch, irrelevant to a private beta.
+| # | What | Why it's ordered here | Runbook |
+|---|---|---|---|
+| **255** | **Secrets escrow — DO THIS FIRST.** Copy `TOKEN_ENCRYPTION_KEY`, `JWT_SECRET_KEY` and a snapshot of `/opt/autoclip/.env` to **two independent** legs (password manager **and** GCP Secret Manager). | Without it a perfect Postgres restore yields useless ciphertext — every user's OAuth tokens unrecoverable. It is the prerequisite that makes every other backup worth having. **Never store these inside the backup they protect.** | `docs/RUNBOOKS.md:578-589` |
+| — | **Rotate the exposed Anthropic key.** New key in console → VM `.env` → `doctor.py --full` green → **then** revoke the old one. | A known-exposed credential on a billed API. | `docs/SECRETS.md:219-222` |
+| **256/257** | **Nightly encrypted PG backups.** Create `creatorclip-backups`; set `BACKUP_R2_BUCKET` + `BACKUP_ENCRYPTION_KEY`; install cron `7 3 * * * cd /opt/autoclip && ./scripts/backup_pg.sh`. | No backups exist today. | `docs/RUNBOOKS.md:590-606` |
+| — | **Run the restore drill.** `python3 scripts/reapply_erasures.py` afterwards is **mandatory**, not optional. | It is what stops a restore resurrecting data a user asked to have erased. Record the RTO. | `docs/RUNBOOKS.md:641-648` |
+| **258** | **R2 Object Lock**, Compliance mode ≥14d — **not** Governance (admin-overridable, therefore not tamper-proof) — plus per-prefix lifecycle. | Reconcile the windows against right-to-erasure (#254); also closes that CODE-GREEN row. | `docs/RUNBOOKS.md:596-601` |
+| **288** | **Redis durability.** cron `27 3 * * * ./scripts/backup_redis.sh`, then the restart drill. *Staging Redis is intentionally ephemeral — do not "fix" it.* | The Celery broker currently does not survive a restart. | `docs/RUNBOOKS.md:711-714` |
+| **286** | **Cloudflare edge rate limit** on `/auth/*` — `preauth-rate-limit`, 10 req/min per IP, Managed Challenge. Keep `/health` **out** of the expression. | The verify loop must show the challenge **and** `docker compose logs app` showing no request flood — that is what proves the block happened at the edge, not in the app. | `docs/EDGE_SECURITY.md:26-79` |
+| **246** | **`MAILING_ADDRESS`** — a real physical postal address (PO box or CMRA mailbox; it is printed publicly in every lifecycle email footer). | Until set, **all lifecycle email is intentionally SKIPPED** (`config.py:1007-1010`, enforced at `worker/tasks.py:4556`). That is the correct fail-safe, not a bug. **Not required for a friend beta**; required the moment the audience is not friends. | — |
 
-**Stage B (public launch): 9 gates, all OPEN** — including load profile (#261), reversible-migration
-CI (#296), SLOs (#236), key-rotation dry run (#30 AC), final security review, `ALLOWED_ORIGINS`/`/docs`
-re-verify (#24), and pricing beyond minute packs. **None of these gate the beta.**
+### B. Code track — one genuinely unbuilt item
 
----
+- **Issue 445 — the three-pile triage UI.** Tracked in `docs/issues.md` (Lane L27) — the last session recorded 6 unchecked ACs; **re-read the section before planning, the numbering has drifted**. Strangers hit the
+  review queue on their **first** upload, and today reviewed state does not survive a reload.
+  Four design questions are still open in the issue body — **run a real CHECK phase first.**
+- **Issue 484** — the meaning-inverting cold open (a clip that opens on `"feel like Percy Butler
+  is…"` when the speaker said *"don't feel like"*). Highest-impact known clip-quality defect.
+- **Issue 495** — the deferred list from the 2026-08-14 audit: brand-kit fields that cannot be
+  cleared; the `captions_enabled` toggle no renderer reads; `Profile.tsx` hardcoded `"—"` stats; the
+  fully-built **data export with no UI** (GDPR Art. 15/20); `is_rewatch_spike` +
+  `captions_available` never written; `push_enabled`; unvalidated `_upsert_style_field`; the
+  `AskSurfaceTabs → /analysis` dead end.
 
-## WHAT'S LEFT IN `docs/issues.md`
+### C. The #28 friend smoke itself
 
-**417 checked · 115 unchecked · next free number 484.** The unchecked count overstates the work:
-most are **acceptance-criteria checkboxes inside already-shipped issues**, and the majority need a
-*live upload* rather than code.
+Now **unblocked**. The criterion is *the full pipeline exercised on prod over 48 h* — the invite is
+not the gate. Warn the friend about two expected things so they don't read as breakage:
 
-- **L29 (456–482)** — built and merged; **every** AC in 456–482 is checked. ⚠️ **Corrected
-  2026-08-13:** the 5 stray unchecked ACs in this range are **Issue 483's**, not Issue-442
-  leftovers, and Issue 483 is a deliberately gated successor — its own header reads *"DO NOT BUILD
-  until a beta creator actually uploads screen-share-heavy sources or requests it."* Nothing to
-  tidy; they are unchecked on purpose.
-- **L28 (448–449)** — the billing live-proof ACs (same blocker as above) and one overlay-band
-  re-render check.
-- **L27 (444–447)** — ⚠️ **Corrected 2026-08-13: Issue 445 (three-pile triage UI) is genuinely
-  UNBUILT**, not shipped. All 6 of its ACs are unchecked (`docs/issues.md:2672-2683`) and its body
-  still carries four unresolved design questions (`:2663-2670`) — so this is real UI work with its
-  own CHECK phase, not a live-verification checkbox. **444** did ship (prod DB 0057) and its
-  remaining ACs *are* live-verification. Owner call 2026-08-13: **build 445 before inviting
-  non-friends** — they hit the review queue on their first upload, and today reviewed state does not
-  survive a reload.
-- **L26 (414–426)** — camera-region + overlay ACs pending a frame-extraction spot-check; **363**
-  (caption text editing) and **376(b)** (no-auth demo) are **deliberately parked/descoped**,
-  reversible. **381** (chat-density) is genuinely open, size L, needs external verification.
-- **Pattern:** almost everything left is *"upload one real video and check N things at once."* One
-  good fresh-upload session would clear a large fraction of it.
+1. The **"Google hasn't verified this app"** interstitial at consent (expected while #29 is
+   unsubmitted).
+2. **Weekly reconnect** — Google expires Testing-mode refresh tokens after 7 days. There is now a
+   real reconnect card on Profile (Issue 493), and the app warns 2 days out.
+
+### D. Stage B (public launch) — start the clock now
+
+- **Issue #29 — Google OAuth verification.** 1–4 week external review; **it is the only item with a
+  clock you cannot compress.** Submit the READ-ONLY scope set only (`openid`, `userinfo.email`,
+  `userinfo.profile`, `youtube.readonly`, `yt-analytics.readonly` — `youtube/oauth.py`). **Do NOT
+  include `youtube.upload`**: it drags in the heavier YouTube API compliance audit (#194 keeps it a
+  separate, later submission). The 100-user cap is **not** why this matters — the 7-day token expiry
+  is, and it is independent of user count.
+- Remaining Stage-B gates (8 OPEN): #261 load profile, #236 SLOs, #282 status page (re-opened for a
+  non-friend audience), #326 Grafana/Sentry activation → unblocks #291 cost alerts, key-rotation dry
+  run, final security review, pricing beyond minute packs, and the #30 sign-off.
 
 ---
 
 ## THE ARC THAT LED HERE
 
-1. Prior sessions: full clipping-integrity audit → Lane L29 filed (456–482) → **built and merged**
-   across PRs #85–#98.
-2. This session opened with "merge the slew of branches, sync staging, fix any CI issues."
-3. The branches turned out to be **already merged** (squash-merge artifacts) — verified, deleted.
-4. Gating `main`'s tip for the first time exposed that the **local** gate was broken, and pulling
-   that thread found four more gates that reported green without testing anything.
-5. Branch protection was enabled once `eval/clip-quality` was fixed enough to be requirable.
-6. The last thread — the rate-limit drill — turned out to be masking a genuine cross-drill
-   contamination bug (the leaked spend cool-down), which took five PRs to unwind.
+1. **2026-08-13** — CI-integrity checkpoint closed; `main`/`staging` branch-protected.
+2. **2026-08-14 (morning)** — billing went RED → GREEN: a real purchase credited 200 minutes through
+   the webhook after four stacked defects (transport → Cloudflare OWASP edge block → wrong endpoint
+   URL → branding). Ledger then claimed **#28 was the sole remaining blocker**.
+3. **2026-08-14 (this session)** — owner asked three questions: *"sync says 0 shorts and 0 videos"*,
+   *"why reconnect every 7 days"*, *"why can't I generate titles and hooks"*. They resolved to **one
+   root cause** (the `fields`/`kind` contract drift) plus a class of related defects.
+4. Fixed, guarded with a contract test **verified to fail on the pre-fix spec**, shipped via
+   `#113 → staging`, `#114 → main`, deployed `1221fb8`, and **live-verified with a real sync**.
+5. The ledger claim in (2) was **wrong and has been corrected**: #28 could never have passed while a
+   friend's first sync returned nothing.
 
 ---
 
@@ -186,51 +157,57 @@ most are **acceptance-criteria checkboxes inside already-shipped issues**, and t
 
 | Thing | Value |
 |---|---|
-| Repo | `github.com/reese8272/creatorclip` — **PUBLIC**, `main` + `staging` both protected |
-| Prod | `https://autoclip.studio` · VM `ssh creatorclip-vm` (standing permission), `/opt/autoclip`, docker-compose, Cloudflare tunnel |
-| Prod containers | `autoclip-app-1`, `autoclip-worker-1`, `autoclip-beat-1`, `autoclip-render-worker-1` |
-| Staging | compose project **`ccstage`** on the same VM — *not* the `staging` branch, which drives nothing |
-| Deploy chain | PR → merge to `main` → Docker publish → staging gate → Deploy to production |
-| Alembic head | `0062_delete_masking_skip_feedback` |
-| Drills evidence | staging-drills run **31727428785** (all three legs green, 2026-08-13) |
-| Seeded staging creator | `00000000-1111-2222-3333-444444444444` (`_STAGING_CREATOR_ID` in `scripts/drills.py`) |
-| Eval floor | `SCENARIO_FLOOR=31`, 32 fixtures (`tests/test_clip_engine.py`) |
-| Secrets | by name only — `TOKEN_ENCRYPTION_KEY`, `JWT_SECRET_KEY`, `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`. Live in VM `.env` + GitHub Secrets. **Never committed; never printed.** |
-
-### Local gate incantations
-```bash
-export PATH=/home/reese/.nvm/versions/node/v22.17.1/bin:$PATH && hash -r   # node 26 = 35 phantom jsdom fails
-redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
-# backend:  .venv/bin/python -m pytest -p no:langsmith -q     # BARE — never pass -m
-# frontend: from frontend/ — npx vitest run AND npm run build (tsc -b type-checks TESTS)
-# Layer 0:  PATH="$PWD/.venv/bin:$PATH" .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py
-# NOTE: .githooks/pre-push runs most of the above automatically on every push.
-```
+| Prod URL | `https://autoclip.studio` |
+| VM (DigitalOcean) | `147.182.136.107`, deploy dir `/opt/autoclip`, compose at `/opt/autoclip/src/docker-compose.prod.yml` |
+| Containers | `autoclip-app-1`, `autoclip-worker-1`, `autoclip-render-worker-1`, `autoclip-beat-1`, `autoclip-postgres-1`, `autoclip-redis-1`, `autoclip-cloudflared-1` |
+| Prod DB | `docker exec autoclip-postgres-1 psql -U creatorclip -d creatorclip` |
+| Owner creator id | `eb9af967-5d2f-4063-a05e-9f4f070ce840` ("Backboard Media", channel `UCNU5Tnt0xp7YtHNPgxDrSIw`) |
+| Deployed commit | `1221fb8` |
+| Image | `ghcr.io/reese8272/creatorclip:latest` |
+| Deploy chain | push to `main` → **Docker publish** → (`workflow_run`) → **Deploy to production** → staging gate → prod smoke + auto-rollback |
+| Local test env | **Use `.venv/bin/python`** or `scripts/ci_local.sh` — see gotchas |
+| Node | 22.17.1 (`.nvmrc`); node 26 breaks jsdom |
+| Secrets (names only) | `TOKEN_ENCRYPTION_KEY`, `JWT_SECRET_KEY`, `ANTHROPIC_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `BACKUP_ENCRYPTION_KEY` — in VM `/opt/autoclip/.env` + GitHub secrets. **Never read or print values.** |
 
 ---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **`main` is protected — open a PR.** A direct push is rejected. `strict: true` means a PR goes
-  `BEHIND` the moment anything else merges; fix with `gh pr update-branch --rebase <N>`.
-- **`enforce_admins: false` is load-bearing, not laziness.** A `main` commit carries only the four
-  push-triggered deploy checks and **none** of the 8 required contexts, so
-  `git push origin origin/main:staging` lands *solely* via admin bypass. Flipping it to `true`
-  silently breaks the staging sync.
-- **Never pass `-m` to pytest** in a script, hook, or by hand. It *replaces* `pytest.ini`'s `addopts`
-  and drags in lanes needing real ffmpeg/mediapipe/API keys. (ISSUE-2026-08-13-01.)
-- **On a `pull_request` event, `context.sha` is the merge commit, not the head.** Anything written
-  keyed by commit must use `context.payload.pull_request?.head?.sha`. (ISSUE-2026-08-13-02.)
-- **Drills mutate live staging state.** They now clean up after themselves, but a run killed
-  mid-flight can still leave a 1 h spend cool-down; `_reset_creator_throttles()` clears it at suite
-  start. The drills clear the whole `LIMITS:*` namespace — safe on single-tenant `ccstage`, **never
-  acceptable against prod**.
-- **`health-check.yml` is red and that is expected** — dispatch-only, and probing the
-  Cloudflare-fronted prod URL from a GitHub runner returns a 403 challenge by design. Uptime is owned
-  by Cloudflare Health Checks. Don't "fix" it.
-- **A failed image build silently SKIPS deploy** — check `gh run list` after every merge.
-- Stripe transport must stay `RequestsClient`; **never** revert to `HTTPXClient` (two stacked
-  defects, 10-week outage — `billing/stripe_client.py`, DECISIONS 2026-08-12).
+1. **⚠️ RUN TESTS FROM `.venv`, NOT SYSTEM PYTHON.** This burned the last session badly. System
+   `python3.12` has **fastapi 0.115.4** against the pinned **0.137.1**, and its `mypy` cannot import
+   the `pydantic` plugin — so mypy aborts before checking anything and the Layer-0 gate reports a
+   **vacuous `ok 0`**. Under system python the suite showed 4 phantom failures and pip-audit showed
+   77 phantom CVEs; under `.venv` it is **3170 passed / 0 failed** and mypy/bandit/pip-audit all 0.
+   Two OFF_COURSE_BUGS rows were filed on that bad data and have since been **removed as
+   non-issues**. Use `scripts/ci_local.sh --fast` (it prefixes `PATH` with `.venv/bin`).
+2. **FastAPI 0.137.1 defers `include_router`** into `_IncludedRouter` objects, so `app.routes` holds
+   almost no `APIRoute`. Any test that walks routes naively iterates **zero** routes and passes
+   vacuously — this is the documented cause of `tests/test_response_models.py` being unreliable, and
+   it bit the new billed-route guard in `tests/test_flags.py`. Resolve via
+   `effective_route_contexts` (they carry the prefixed path + merged dependant); see that test.
+3. **`deploy.yml` triggers on `workflow_run`, not `push`.** After merging to `main` there is a gap
+   while **Docker publish** builds. A naive "latest deploy run" check will match the *previous*
+   deploy and report a stale success — this nearly happened. **Pin any deploy check to your SHA.**
+4. **A green intermediate layer is not a working feature.** This is the standing lesson of both the
+   billing outage and the catalog outage, and it recurred three times in one session. Neither a
+   passing suite, nor a success log line, nor a green pipeline is evidence a feature does its job —
+   only the feature's own output is. Read the deployed constant out of the **running container**
+   before trusting a deploy.
+5. **Counters must count writes, not attempts.** `"Synced 4 new video(s)"` over a dead feature is
+   what hid the outage for seven weeks. `sync_video_analytics` now returns whether metrics were
+   written; keep it that way.
+6. **A `fields=`/projection string and the code that parses the response must change together.**
+   `tests/test_data_api.py` now applies the real spec to the fixture before parsing so drift fails
+   CI. A fixture that encodes an *unfiltered* response is worse than no fixture.
+7. **Branch protection**: `enforce_admins: false` is load-bearing for the staging sync — do not
+   "harden" it without reading Issue 145.
+8. **Never revert Stripe to `HTTPXClient`** — two stacked defects, 10-week total checkout outage
+   (`billing/stripe_client.py`, DECISIONS 2026-08-12). `RequestsClient` only.
+9. **Before any fresh-upload drill**: run `python3.12 scripts/r2_set_cors.py https://autoclip.studio`.
+   The `ExposeHeaders ETag` is load-bearing — without it multipart completes stall at 100%.
+10. **Before debugging anything non-trivial**, grep the cross-project log first:
+    `grep -i "<symptom>" ~/.claude/ISSUES_LOG.md`. The `fields=`-strips-a-required-key failure mode
+    is recorded there with its ruled-out hypotheses.
 
 ---
 
@@ -238,14 +215,12 @@ redis-cli ping || redis-server --daemonize yes --save '' --appendonly no
 
 | Doc | What it owns |
 |---|---|
-| `docs/GO_LIVE.md` | **The go/no-go scorecard — canonical for beta readiness** |
-| `docs/issues.md` | Work queue, lanes L26–L29, next free **484** |
-| `docs/SOT.md` | Stack, architecture, file structure |
-| `docs/PROJECT_STATE.md` | Progress log |
-| `docs/DECISIONS.md` | Deviations + rationale |
-| `docs/BRANCHING.md` | Branch model + the applied protection ruleset |
-| `docs/OFF_COURSE_BUGS.md` | Incidental-defect log |
-| `docs/COMPLIANCE.md` · `docs/CLIPPING_PRINCIPLES.md` | ToS/retention · named principles registry |
-| `docs/RUNBOOKS.md` · `docs/DEPLOYMENT.md` · `docs/STAGING_ACCESS.md` | Ops |
-| `~/.claude/ISSUES_LOG.md` | Cross-project root causes — **grep before debugging** |
-| `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` | Session memory index |
+| `docs/GO_LIVE.md` | **The canonical launch scorecard** — Stage A/B gates, owners, evidence. Start here. |
+| `docs/PROJECT_STATE.md` | Session log + what's done/in-flight. |
+| `docs/issues.md` | The work queue (Wave × Lane × Batch). Next free issue number: **496**. |
+| `docs/DECISIONS.md` | Every deviation + why. Grounding-honesty rationale is the 2026-08-14 entry. |
+| `docs/OFF_COURSE_BUGS.md` | Incidental defects found while doing something else. |
+| `docs/RUNBOOKS.md` · `docs/SECRETS.md` · `docs/EDGE_SECURITY.md` · `docs/ACCESS.md` | Operator procedures for the track above. |
+| `docs/SOT.md` · `docs/COMPLIANCE.md` · `docs/CLIPPING_PRINCIPLES.md` | Architecture, ToS/retention posture, named principles. |
+| `~/.claude/ISSUES_LOG.md` | Cross-project root causes (search before debugging). |
+| `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` | Session memory index. |
