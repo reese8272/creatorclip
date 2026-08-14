@@ -5,7 +5,47 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-13 (latest) — Launch sequencing for a non-friend audience: four calls
+## 2026-08-14 (latest) — Descope the separate Stripe account; bill everything under Ludwick Solutions LLC
+
+**Decision — reverse the 2026-08-13 call to stand up a dedicated AutoClip Stripe account. Rebrand
+the existing account to the parent legal entity instead.** Issue 486 is closed by a different fix
+than it was filed with.
+
+**What changed since yesterday.** The separate-account decision rested on one objection: rebranding
+the shared account would move the branding mismatch onto wheretoliv.com. Two facts landed after it
+was made — **wheretoliv is dormant**, so there is nothing to mismatch; and the owner has a real
+registered entity, **Ludwick Solutions LLC**, which is the correct merchant of record for every
+product he sells. Billing multiple products under one parent entity is the ordinary arrangement,
+not a compromise. Splitting Stripe accounts would fragment revenue, payouts and bookkeeping to
+solve a problem that no longer exists.
+
+**What the cheaper fix avoided.** The separate account required rotating `STRIPE_SECRET_KEY` and
+`STRIPE_WEBHOOK_SECRET` on the VM and in GitHub Secrets, recreating products/prices, and
+re-registering the webhook endpoint — on the exact path that had just been unbroken after a
+four-layer outage (Issue 485). Not touching freshly-verified billing plumbing is worth a great deal
+on its own.
+
+**Applied and verified against the live account:** `business_profile.name` `Reese Ludwick` →
+`Ludwick Solutions LLC`; `business_profile.url` `wheretoliv.com` → `autoclip.studio`; statement
+descriptor `LUDWICK SOLUTIONS LLC` → `AUTOCLIP.STUDIO`; card descriptor prefix unset → `AUTOCLIP`.
+
+**The statement descriptor was the non-obvious part.** Stripe derives the card prefix from the
+static descriptor when none is set, truncated to 10 characters — so card charges were going out as
+**`LUDWICK SO`**, which no customer who bought "AutoClip" would recognise. Stripe names unclear
+descriptors as a leading cause of avoidable disputes
+(<https://docs.stripe.com/get-started/account/statement-descriptors>). Legitimate under their rule
+that a descriptor "reflects your DBA name": AutoClip is the trade name the LLC sells under. This
+defect was structurally invisible until billing actually worked — nobody had ever received a
+statement.
+
+**Consequence, filed as Issue 488.** Becoming an entity opened a gap the legal pages have not
+caught up with: `static/privacy.html` and `static/tos.html` still route breach reports and COPPA
+escalations to a personal Gmail. GDPR expects the **data controller** to be named, that is now the
+LLC, and Google's OAuth review reads the privacy policy for exactly this kind of inconsistency.
+
+---
+
+## 2026-08-13 — Launch sequencing for a non-friend audience: four calls
 
 **Trigger.** The owner asked what remains before inviting real users who are *not* personal friends,
 and whether auto-clipping is "95% done". Answering it required auditing the clip engine and the

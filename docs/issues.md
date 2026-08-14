@@ -4179,10 +4179,42 @@ outcome with a different error.
 
 ---
 
-### Issue 486: give AutoClip its own Stripe account — checkout currently shows another product's branding
+### Issue 486: fix checkout branding — checkout showed another product's branding
 
-- [ ] **Status:** open · **Size:** M · filed 2026-08-13 (owner decision same day) · **Lane:** L28 ·
-      **Blocks a non-friend audience, not the friend beta**
+- [x] **Status:** **DONE 2026-08-14 — resolved differently than filed.** · **Size:** M · filed
+      2026-08-13 · **Lane:** L28
+
+> ### ✅ Resolved by rebranding the shared account, NOT by splitting accounts
+>
+> Filed as "give AutoClip its own Stripe account". That is **no longer the right fix**, and the
+> separate-account plan is **descoped** — see `docs/DECISIONS.md` 2026-08-14.
+>
+> **What changed:** wheretoliv.com turned out to be **dormant**, so the shared-account objection
+> ("rebranding moves the mismatch onto the other product") evaporated. The owner also has a real
+> legal entity — **Ludwick Solutions LLC** — which is the correct merchant of record for *both*
+> products. Billing every product under the parent entity is the normal arrangement; splitting
+> Stripe accounts would fragment revenue and payouts for no benefit.
+>
+> **Applied 2026-08-14, verified against the live account:**
+>
+> | Field | Before | After |
+> |---|---|---|
+> | `business_profile.name` | `Reese Ludwick` | `Ludwick Solutions LLC` |
+> | `business_profile.url` | `wheretoliv.com` | `autoclip.studio` |
+> | statement descriptor | `LUDWICK SOLUTIONS LLC` | `AUTOCLIP.STUDIO` |
+> | card descriptor prefix | *(unset → truncated to `LUDWICK SO`)* | `AUTOCLIP` |
+>
+> **The statement descriptor was the real find here.** Stripe truncates an unset card prefix from
+> the static descriptor to 10 characters, so card charges were going out as **`LUDWICK SO`** — an
+> unrecognizable string on the statement of someone who bought "AutoClip". That is the textbook
+> cause of avoidable disputes ([Stripe docs](https://docs.stripe.com/get-started/account/statement-descriptors)),
+> and it was invisible until billing actually worked. Legitimate under Stripe's rule that the
+> descriptor "reflects your DBA name" — AutoClip is the trade name Ludwick Solutions LLC sells under.
+>
+> **Residual (not blocking):** `business_profile.support_email` is still unset, so Stripe prints no
+> support contact on receipts. Set it alongside Issue 488's contact-address work.
+> The `support_address` is still the owner's **home address** — replace with the same PO box /
+> CMRA mailbox that `MAILING_ADDRESS` (#246) needs.
 
 **Severity: high — it lands on the card-entry page, the highest-trust surface in the product.**
 
@@ -4205,18 +4237,20 @@ rewriting the shared account's profile — the shared-profile edit is account-wi
 move the branding mismatch onto the other product. A separate account also keeps revenue, payouts
 and bookkeeping uncommingled.
 
-**Acceptance**
-- [ ] A dedicated AutoClip Stripe account exists with the business profile reading **AutoClip** and
+**Acceptance** *(rewritten 2026-08-14 for the shared-account resolution; the original
+separate-account criteria are descoped — no key rotation, no product recreation, no webhook
+re-registration is needed, which is most of why this approach won)*
+- [x] Checkout no longer shows an unrelated product's domain — `business_profile.url` is
       `autoclip.studio`
-- [ ] Its minute-pack prices/products are recreated and the pack ids match `billing/packs`
-- [ ] `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` rotated on the VM and in GitHub Secrets, with
-      the webhook endpoint registered at `/billing/webhook` (see #485)
-- [ ] `scripts/doctor.py --full` green against the new account (it probes through
-      `billing.stripe_client._STRIPE`, so it exercises the real transport)
-- [ ] A live purchase on the new account credits minutes end to end
-- [ ] Old-account handling recorded: the 2026-08-13 `starter` purchase stays where it settled;
-      note in `docs/DECISIONS.md` whether any further migration is needed
-- [ ] `docs/SECRETS.md` updated for the new key origin
+- [x] The merchant of record is the real legal entity — `business_profile.name` is
+      `Ludwick Solutions LLC`
+- [x] Card statements show a descriptor the customer recognizes — prefix `AUTOCLIP`,
+      static `AUTOCLIP.STUDIO`, both verified against the live account
+- [x] `docs/DECISIONS.md` records why the separate account was descoped
+- [ ] **Residual:** `business_profile.support_email` set (currently unset → no support contact on
+      receipts)
+- [ ] **Residual:** `business_profile.support_address` moved off the owner's home address — same
+      mailbox as `MAILING_ADDRESS` (#246); tracked with Issue 488
 
 ---
 
@@ -4248,4 +4282,53 @@ re-creating the *other* half of #485.
 - [ ] Failing the test names the remediation (update the Stripe endpoint URL **and** the
       `docs/EDGE_SECURITY.md` Rule 2 expression), not just "paths differ"
 
-- Next free issue number: **488**.
+---
+
+### Issue 488: name the legal entity in the ToS and Privacy Policy — the operator is now an LLC
+
+- [ ] **Status:** open · **Size:** S · filed 2026-08-14 · **Lane:** L28 ·
+      **Required before non-friend users; also read by Google's OAuth review (#29)**
+
+**Severity: medium — a compliance-accuracy gap, not a bug.**
+
+**What changed.** As of 2026-08-14 the service bills under a real legal entity, **Ludwick Solutions
+LLC** (Issue 486). The legal pages have not caught up: `static/privacy.html` and `static/tos.html`
+still route the most serious contact channels to a **personal Gmail address** —
+
+- `static/privacy.html`: *"Data breach queries and reports can be directed to
+  `reesepludwick@gmail.com`"*
+- `static/privacy.html`: the COPPA under-age escalation path, same address
+- ToS carries the same address
+
+**Why it matters, concretely:**
+1. **GDPR/CCPA identify-the-controller.** A privacy policy is expected to name the **data
+   controller** — now the LLC, not an individual. Issue 252 rewrote these pages for GDPR/CCPA when
+   the operator *was* an individual; that premise has changed.
+2. **Google's OAuth verification reads this page.** `docs/issues-archive-2026-08-03.md` records
+   *"Privacy Policy inaccuracy … is a common Google rejection reason."* An entity mismatch between
+   the billing merchant, the consent screen, and the privacy policy is exactly the class of
+   inconsistency that review catches (#29).
+3. **A personal Gmail as the breach-report channel** is a credibility problem the moment a user is
+   not a friend — and a breach channel that depends on one person's personal inbox is a genuine
+   operational weakness, not only a cosmetic one.
+4. **The Stripe account has the same shape of gap** — `support_email` unset, `support_address` is
+   the owner's home address. Both surface on customer receipts.
+
+**Approach.** Introduce the entity name once, in config, and reference it from the templates rather
+than hardcoding it in two HTML files — the same mistake as any duplicated constant. Then sweep every
+user-facing legal surface for the personal address.
+
+**Acceptance**
+- [ ] `static/privacy.html` and `static/tos.html` identify **Ludwick Solutions LLC** as the operator
+      and data controller
+- [ ] Breach-report and COPPA contacts point to a role address on the domain (e.g.
+      `privacy@autoclip.studio`), not a personal Gmail
+- [ ] Stripe `business_profile.support_email` set to the same role address (closes an Issue 486
+      residual)
+- [ ] Stripe `support_address` + `MAILING_ADDRESS` (#246) both set to a PO box or CMRA mailbox —
+      **not** the owner's home address, since both are printed publicly
+- [ ] `docs/COMPLIANCE.md` names the controlling entity
+- [ ] The existing structural doc tests still pass (`tests/test_static.py` pins these pages)
+- [ ] No personal email address remains in any user-facing surface — grep clean
+
+- Next free issue number: **489**.
