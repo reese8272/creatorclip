@@ -4,6 +4,11 @@
 **Time to productive:** ~45 minutes if you read this first.
 **Written:** 2026-08-15.
 
+> **This is the deep-technical brief.** If you were sent here to give an overall impression —
+> use the product, skim the code, say what you like and don't — read
+> **`docs/AUDIT_START_HERE.md`** instead. It's shorter and it covers the account
+> prerequisites you'll need before you can sign in. Come back here if you want to go deep.
+
 > **Read this file, then do a cold pass.** There is a second file,
 > `docs/AUDIT_KNOWN_ISSUES.md`, listing everything we already suspect. **Please don't open
 > it until you've formed your own view.** We specifically want the things our priors are
