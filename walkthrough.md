@@ -74,7 +74,7 @@ ingest → transcribe → audio + retention signals → candidates → score →
 ```
 
 - **Ingest** pulls the source video (your upload or yt-dlp from your own channel only)
-- **Transcribe** runs word-level transcription (WhisperX by default; Deepgram as a fallback)
+- **Transcribe** runs word-level transcription (Deepgram nova-3 by default; WhisperX and AssemblyAI are config-selectable alternatives)
 - **Signals** extracts audio energy, silence, laughter heuristics, and merges them with the retention curve from YouTube Analytics
 - **Candidates** detects peaks and looks backwards to find the setup, producing windows with `setup_start_s`, `peak_s`, `end_s`
 - **Score** uses Claude with your DNA brief as a cached system prompt to rank each candidate by fit
