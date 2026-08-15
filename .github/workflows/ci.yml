@@ -30,7 +30,7 @@ on:
   # adding `push: [main]` would double-run the ~12 jobs per merge and burn
   # GitHub-hosted minutes for no extra signal.
   pull_request:
-    branches: [main, staging]
+    branches: [main]
   workflow_dispatch:
     inputs:
       update_snapshots:
