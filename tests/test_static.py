@@ -107,6 +107,18 @@ def test_root_landing_links_tos_and_privacy(client):
     assert "/static/privacy.html" in resp.text
 
 
+def test_legal_pages_carry_no_retired_brand_name(client):
+    # Google's OAuth verification review reads the ToS and privacy policy and
+    # checks that the app name matches the one on the consent screen (AutoClip).
+    # The assertions above only prove "AutoClip" is PRESENT, which is why two
+    # stale "CreatorClip" sentences survived in privacy.html until 2026-08-14 —
+    # a mixed-brand privacy policy is a named cause of Google rejection.
+    for path in ("/static/tos.html", "/static/privacy.html", "/static/accessibility.html"):
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert "CreatorClip" not in resp.text, f"retired brand name in {path}"
+
+
 def test_root_landing_describes_proof_of_lift_outcome_loop(client):
     # The differentiator this page must describe accurately (not generic
     # marketing copy) is the published-clip outcome loop shipped in Issue 374.
