@@ -5,7 +5,61 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-14 (latest) — LLM surfaces omit the DNA block and swap the disclaimer when ungrounded, rather than injecting a placeholder
+## 2026-08-15 (latest) — Retire the `staging` BRANCH; enforce branch protection against admins on `main`
+
+**Decision — the `staging` branch is deleted and the promotion model becomes trunk-based
+(`feature/* → PR → main`), with `enforce_admins: true` on `main`.** This reverses the two-tier
+`feature → staging → main` model established in Issue 145 (2026-06-17). The staging
+**environment** — the data-bearing `ccstage` compose stack and `deploy.yml`'s blocking
+`deploy-staging` gate (Issue 298) — is **unchanged**. Only the git branch is retired.
+
+**Why this diverges from Issue 145.** The trigger was the goal of making protection real rather
+than advisory. Three findings, each verified against the live repo rather than assumed:
+
+1. **The branch verified nothing.** `ci.yml`'s trigger was `pull_request: branches: [main, staging]`
+   — the *identical* 8 required checks ran on PRs into either branch. The second hop cost latency
+   and bought no additional signal.
+2. **Nothing ever deployed it.** `docker-publish.yml` builds on `push: [main]` only; no workflow
+   referenced the `staging` branch anywhere. Every other `staging` string in `.github/workflows/`
+   and `tests/test_ci_config.py` refers to the compose stack, not the branch. So "verify on staging
+   before promoting" was never wired to the branch — the real gate is `deploy.yml`, post-merge and
+   branch-independent.
+3. **It made `enforce_admins: true` impossible.** `enforce_admins` + `required_linear_history` +
+   a long-lived `staging` branch deadlock on the *second* promotion: linear history disables
+   GitHub's merge-commit button, forcing `staging → main` to squash- or rebase-merge, which
+   rewrites SHAs; syncing `staging` back to `main` is then a non-fast-forward, and
+   `allow_force_pushes: false` with admins enforced leaves no way to land it. GitHub exposes no
+   true fast-forward merge button, so one of the three settings had to go.
+
+**Evidence that protection was previously advisory-only.** `main`'s HEAD `1221fb8` is a
+**two-parent merge commit** despite `required_linear_history: true` having been set on 2026-08-13,
+and the documented sync `git push origin origin/main:staging` succeeded on 2026-08-15 while the
+remote itself printed `remote: - 8 of 8 required status checks are expected.` Both landed on admin
+bypass. The rules bound everyone except the only person pushing.
+
+**Alternatives ruled out.** (a) *Keep `staging`, set `required_linear_history: false`* — resolves
+the deadlock and preserves the ability to batch features, but keeps accumulating merge commits and
+still retains a hop that adds no verification. (b) *Keep both, set `allow_force_pushes: true` on
+`staging`* so it can be reset to `main` each cycle — rejected; force-push protection is the single
+setting least worth trading away. (c) *`enforce_admins` on `main` only, keep the admin-bypass
+staging sync* — rejected as it preserves the exact bypass this change exists to close.
+
+**Cost accepted.** Loss of a branch-level mechanism to batch several features before promoting.
+Judged acceptable for a solo maintainer at ≤100-user private-beta scale.
+
+**Follow-up filed.** A real pre-merge test environment (a deployed, auth-gated staging URL fed from
+a branch) is a separate piece of work needing a deploy path — filed in `docs/issues.md`, not
+implied by this decision.
+
+**Source/evidence.** `gh api repos/reese8272/creatorclip/branches/{main,staging}/protection`
+readback; `git log -1 --format='%p' origin/main` → two parents; push output of
+`git push origin origin/main:staging`; `grep -rn staging .github/workflows/`; GitHub docs on
+protected-branch rules (`required_linear_history` disables merge commits; no fast-forward merge
+option exists). Applied protection JSON is recorded verbatim in `docs/BRANCHING.md`.
+
+---
+
+## 2026-08-14 — LLM surfaces omit the DNA block and swap the disclaimer when ungrounded, rather than injecting a placeholder
 
 **Decision — when a creator has no Creator DNA profile, prompt builders OMIT the DNA system block
 entirely and Python appends a non-personalized disclaimer.** They no longer inject the string

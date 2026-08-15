@@ -1,7 +1,12 @@
 # CreatorClip — Branching & Promotion Model
 
-Established in Issue 145 (2026-06-17). Replaces the ad-hoc single-feature-branch flow
-(`issue-139-142-sweep` style) with a two-tier promotion model.
+Established in Issue 145 (2026-06-17) as a two-tier `feature → staging → main` model.
+The `staging` **branch** was retired on 2026-08-15 in favour of trunk-based development
+against `main`; see `docs/DECISIONS.md`. The staging **environment** (the data-bearing
+`ccstage` compose stack on the VM) is unchanged and still gates every prod deploy.
+
+> **`staging` branch vs staging environment — they are different things.** Retiring the
+> branch removed a merge hop that verified nothing. It did NOT remove the pre-prod gate.
 
 ---
 
@@ -9,42 +14,68 @@ Established in Issue 145 (2026-06-17). Replaces the ad-hoc single-feature-branch
 
 | Branch | Role | Who writes to it |
 |--------|------|------------------|
-| `main` | **Live / production.** Every commit here is deployable; `docker-publish.yml` → `deploy.yml` ship it to `autoclip.studio`. | PRs from `staging` only (one-time exception: the 143–147 sweep merges via PR #20 directly). |
-| `staging` | **Pre-prod verification.** Mirrors what's about to go live; used to validate against the staging stack before promotion. | PRs from `feature/*`. |
+| `main` | **Trunk / live production.** Every commit here is deployable; `docker-publish.yml` → `deploy.yml` ship it to `autoclip.studio`. | PRs from `feature/*` only — no direct pushes, no admin bypass. |
 | `feature/*` | **Work.** Short-lived, one issue/topic each. | You + Claude. |
 
 ## Promotion flow
 
 ```
-feature/<issue>  ──PR──►  staging  ──PR──►  main  ──auto──►  deploy → autoclip.studio
-     (CI gates)            (verify on            (CI gates)
-                           staging stack)
+feature/<issue>  ──PR──►  main  ──auto──►  staging stack gate  ──►  deploy → autoclip.studio
+     (8 required CI gates)          (docker-publish)   (data-bearing DB,       (prod)
+                                                    in-container migrations,
+                                                     core smoke — BLOCKING)
 ```
 
-1. Branch `feature/<issue>` off `staging`.
-2. Open a PR into `staging`. The `CI` workflow runs (lint, unit, integration, coverage,
-   static-gates, docker). Merge when green.
-3. Verify on the staging stack (see `docs/STAGING_ACCESS.md`). For feature branches
-   this is the **manual** runbook. Since Issue 298 the same stack is ALSO exercised
-   **automatically** on every prod deploy: `deploy.yml`'s `deploy-staging` gate deploys
-   the exact `sha-` image under test to the persistent (data-bearing) staging DB, runs
-   in-container migrations + the core smoke, and blocks the prod job on failure — so
-   promotion no longer rests on the manual step alone.
-4. Open a PR `staging → main`. Merge when green → auto-deploys (staging gate first,
-   then prod; break-glass via `workflow_dispatch` with `skip_staging=true`).
+1. Branch `feature/<issue>` off `main`.
+2. Open a PR into `main`. The `CI` workflow runs (lint, unit, integration, coverage,
+   static-gates, docker, Playwright, eval). Merge when the 8 required checks are green.
+   Merge with **Rebase** or **Squash** — `required_linear_history` disables merge commits.
+3. Merging pushes `main`, which triggers `docker-publish.yml` → `deploy.yml`. The
+   `deploy-staging` job (Issue 298) deploys the exact `sha-` image under test to the
+   persistent, data-bearing staging DB, runs in-container migrations + the core smoke,
+   and **blocks the prod job on failure**. Break-glass: `workflow_dispatch` with
+   `skip_staging=true`.
+4. For manual pre-merge verification against the staging stack, see
+   `docs/STAGING_ACCESS.md` — that runbook is branch-independent and still applies.
 
-Keep `staging` fast-forward-able from `main`: after any direct hotfix to `main`, sync
-`staging` (`git push origin origin/main:staging`).
+### Why the `staging` branch went away (2026-08-15)
+
+Three findings, all verified rather than assumed:
+
+- **It verified nothing extra.** `ci.yml` ran the *identical* 8 required checks on PRs
+  into `main` and into `staging`. A second hop through the same gates adds latency, not
+  signal.
+- **Nothing deployed it.** `docker-publish.yml` builds on `push: [main]` only. No
+  workflow ever shipped the `staging` branch anywhere, so "verify on staging before
+  promoting" was never actually wired to the branch.
+- **It made real protection impossible.** `enforce_admins: true` +
+  `required_linear_history: true` + a long-lived `staging` branch **deadlock** on the
+  second promotion: linear history forces `staging → main` to squash/rebase-merge, which
+  rewrites SHAs; syncing `staging` back to `main` is then a non-fast-forward, and
+  `allow_force_pushes: false` with admins enforced leaves no way to land it. GitHub
+  offers no true fast-forward merge button, so one of the three had to go. The branch was
+  the one carrying no value.
+
+If a genuine pre-merge test environment is wanted later (a deployed staging URL fed from
+a branch), that is tracked as its own issue — it needs a deploy path and auth gating, not
+a branch.
 
 ---
 
-## Branch protection — ENFORCED since 2026-08-13
+## Branch protection — ENFORCED on `main`, admins included, since 2026-08-15
 
-> ✅ **Live on `main` and `staging`.** The blocker recorded here (Issue 145: the API
+> ✅ **Live on `main`.** The blocker recorded here (Issue 145: the API
 > returned 403 "Upgrade to GitHub Pro or make this repository public" on the free
 > tier) no longer applies — the repo is **public**, where branch protection is free.
-> The ruleset below was applied verbatim on 2026-08-13; readback confirms 8 required
-> checks, `strict`, linear history, and no force-push/deletion on both branches.
+> Protection was first applied 2026-08-13; on **2026-08-15** `enforce_admins` was
+> flipped to `true` and the `staging` branch (and its protection) was retired.
+>
+> ⚠️ **`enforce_admins: true` means the maintainer is gated too.** Before this, the
+> rules were advisory for the only person pushing: `main`'s HEAD `1221fb8` was a
+> **two-parent merge commit** despite `required_linear_history: true`, and the
+> `git push origin origin/main:staging` sync landed while the remote itself printed
+> `8 of 8 required status checks are expected`. Both went through purely on admin
+> bypass. There is now no bypass — every change to `main` goes through a PR.
 >
 > ⚠️ **Verify before trusting `eval/clip-quality`.** That context was posted to
 > `context.sha` — the ephemeral `refs/pull/N/merge` commit — while protection
@@ -65,12 +96,11 @@ Keep `staging` fast-forward-able from `main`: after any direct hotfix to `main`,
 - `Playwright (smoke + a11y)` — Issue 266: a11y regression gate (axe violations on serious/critical)
 - `eval/clip-quality` (commit status, not job) — Issue 265: required on clip_engine/ and tests/eval/ changes; posted via GitHub commit-status API because a skipped required job reports 'success' (GitHub quirk — a commit status always reflects real outcome)
 
-**Applied via `gh` (2026-08-13), for each of `main` and `staging` — re-run to restore:**
+**Applied via `gh` (2026-08-15) to `main` — re-run verbatim to restore:**
 
 ```bash
-for BR in main staging; do
-  gh api -X PUT "repos/reese8272/creatorclip/branches/$BR/protection" \
-    --input - <<'JSON'
+gh api -X PUT "repos/reese8272/creatorclip/branches/main/protection" \
+  --input - <<'JSON'
 {
   "required_status_checks": {
     "strict": true,
@@ -85,7 +115,7 @@ for BR in main staging; do
       "eval/clip-quality"
     ]
   },
-  "enforce_admins": false,
+  "enforce_admins": true,
   "required_pull_request_reviews": null,
   "restrictions": null,
   "required_linear_history": true,
@@ -93,7 +123,6 @@ for BR in main staging; do
   "allow_deletions": false
 }
 JSON
-done
 ```
 
 Notes:
@@ -104,15 +133,20 @@ Notes:
 - `required_linear_history: true` + `allow_force_pushes: false` — clean, non-rewritable history.
 - GitHub's modern equivalent is **Rulesets** (Settings → Rules → Rulesets); the same
   contexts/linear-history/force-push settings apply.
-- `enforce_admins: false` is deliberate and is what keeps the `staging` sync above
-  working. A merge commit on `main` carries **none of the 8 required contexts**: `ci.yml`
-  has no `push` trigger, so those run only on the PR head. What a main commit does carry
-  is the four deploy-track checks that fire on push — measured on `6137992`:
-  `Build & push to GHCR`, `Staging gate (data-bearing DB)`, `Deploy → autoclip.studio`,
-  `Run staging drills (all)`. None of them is a required context, so a fast-forward
-  `git push origin origin/main:staging` can never satisfy the rule on its own — it lands
-  because the maintainer is an admin. Flipping `enforce_admins` to `true` would break
-  that sync; route staging through a PR from `main` first if you ever do.
+- `enforce_admins: true` — the maintainer is gated like everyone else. This is only
+  survivable because there is no longer a branch to sync: a merge commit on `main`
+  carries **none of the 8 required contexts** (`ci.yml` has no `push` trigger, so those
+  run only on the PR head), which is precisely why the old
+  `git push origin origin/main:staging` sync could never satisfy the rule on its own and
+  landed on admin bypass alone. With `staging` retired, every path to `main` is a PR,
+  and a PR always carries the contexts.
+- **Do not re-create a long-lived branch that merges into `main`** without first flipping
+  `required_linear_history` to `false`. The three settings deadlock — see "Why the
+  `staging` branch went away" above for the exact mechanism.
+- The four deploy-track checks that fire on a `main` push — `Build & push to GHCR`,
+  `Staging gate (data-bearing DB)`, `Deploy → autoclip.studio`, `Run staging drills (all)`
+  (measured on `6137992`) — are **not** required contexts and are not merge gates. They
+  run after the merge; `deploy.yml`'s staging gate is what blocks a bad image from prod.
 
 ---
 

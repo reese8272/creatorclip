@@ -313,7 +313,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
     ├── COMPLIANCE.md
     ├── OFF_COURSE_BUGS.md      # Incidental-defect log
     ├── DEPLOYMENT.md
-    ├── BRANCHING.md            # Branch model (feature→staging→main) + protection ruleset (Issue 145)
+    ├── BRANCHING.md            # Branch model (feature→main, trunk-based) + protection ruleset (Issue 145; staging branch retired 2026-08-15)
     ├── RUNBOOKS.md             # Canonical encryption/JWT-key rotation procedures
     ├── SECRETS.md              # Canonical secrets/config registry (what, where, how-to-obtain)
     ├── ACCESS.md               # SSH + CI deploy key + Cloudflare Tunnel + closed-beta OAuth onboarding

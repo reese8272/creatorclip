@@ -4464,4 +4464,33 @@ Found and verified during the audit; deliberately NOT built, per the owner's
 
 ---
 
-- Next free issue number: **496**.
+### 496 — A real pre-merge staging environment (deployed URL, not a branch)
+
+Filed 2026-08-15 alongside the decision to retire the `staging` **branch**
+(`docs/DECISIONS.md`, `docs/BRANCHING.md`). The branch was deleted because it verified
+nothing: `ci.yml` ran the identical 8 required checks on PRs into `main` and `staging`,
+and no workflow ever deployed the branch. This issue is the thing the branch was standing
+in for and never actually was.
+
+Today's only pre-prod gate is `deploy.yml`'s `deploy-staging` job — it runs the real
+data-bearing stack, but **after** merge to `main`, on the way to prod. There is no
+environment you can click through *before* merging, and the stack is reachable only at
+`http://localhost:8001` over SSH to `creatorclip-vm` (`docs/STAGING_ACCESS.md`).
+
+- [ ] Deploy path: trigger a `ccstage` deploy from a PR or a named branch, not only from
+      the post-merge `main` push (`docker-publish.yml` currently builds on `push: [main]`
+      only)
+- [ ] Public hostname for the staging stack (Cloudflare tunnel route, e.g.
+      `staging.autoclip.studio`) so it is browsable without SSH
+- [ ] **Auth gating is load-bearing** — the repo is public and the stack holds seeded
+      creator fixtures. A publicly reachable staging instance must not be open; decide
+      between Cloudflare Access, basic auth at the tunnel, or IP allowlist
+- [ ] Confirm cost/contention: staging shares the prod VM, and its postgres volume is
+      deliberately persistent (that persistence IS the Issue 298 gate — do not break it)
+- [ ] Do NOT reintroduce a long-lived `staging` branch to drive this. It deadlocks against
+      `enforce_admins: true` + `required_linear_history: true` — mechanism documented in
+      `docs/BRANCHING.md`
+
+---
+
+- Next free issue number: **497**.
