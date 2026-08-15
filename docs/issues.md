@@ -4493,4 +4493,58 @@ environment you can click through *before* merging, and the stack is reachable o
 
 ---
 
-- Next free issue number: **497**.
+---
+
+### 497 — Layer 0 has never scanned 8,277 lines: bandit drops every root `.py`, mypy misses 3 packages
+
+Filed 2026-08-15 during the external-audit brief prep (`docs/AUDIT_BRIEF.md`,
+`docs/AUDIT_KNOWN_ISSUES.md` §A1). This is **instance #4** of the failure mode the catalog
+outage, the Stripe outage and the Issue 479 coverage-gate skip all share: a gate reporting
+green over something it never exercised.
+
+**Two independent defects in `.claude/skills/production-assessment/scripts/run_layer0.py`:**
+
+1. **`gate_bandit` (line 226)** filters its own source list to directories:
+   `dirs = [s for s in _sources() if not s.endswith(".py")]`. Bandit is invoked `-r` against
+   those 11 packages, so the **7 root files explicitly listed in `_CANDIDATE_SOURCES` are
+   silently dropped** — `auth.py`, `config.py`, `crypto.py`, `db.py`, `limiter.py`,
+   `main.py`, `models.py`. `-r` recurses directories but bandit accepts plain file paths
+   too, so the filter is unnecessary as well as wrong.
+2. **`_CANDIDATE_SOURCES` (lines 44-63) was never extended** as the codebase grew. It mirrors
+   the module list in `CLAUDE.md` → *Project Structure*, which also predates them. Missing:
+   `analysis/`, `chat/`, `notify/`, and root `api_key.py`, `event_log.py`, `flags.py`,
+   `observability.py`, `redact.py`, `shared_resources.py`, `verbose.py`. These are checked by
+   **neither** mypy nor bandit.
+
+**Blast radius:** mypy has never type-checked **4,093 lines**; bandit has never scanned
+**8,277**. The unscanned set is disproportionately security-load-bearing — `crypto.py`
+(Fernet), `auth.py` (JWT/session), `api_key.py` (key gen + hashing), `redact.py` (the PII
+scrubber), `flags.py` (the billed-LLM kill switch), `config.py` (secret validation). `chat/`
+is among the never-type-checked packages and is where two of the 2026-07-29 SEV2s landed.
+
+**Severity: SEV2 — gate integrity, not a live vulnerability.** Verified on
+`claude/code-audit-prep-eg5128`: running both tools across every excluded path yields
+**bandit 1 LOW (B110), 0 HIGH, 0 MEDIUM** and **mypy 0 errors**. Nothing is hiding there
+today; the defect is that the gate could not have said so. `baselines.json`'s
+`bandit_high: 0 / bandit_medium: 0` has been partly vacuous since inception.
+
+**Deliberately left unfixed** while the external review is in flight, so the reviewer's pass
+is not contaminated by a concurrent change to the object under review.
+
+**Acceptance**
+- [ ] `gate_bandit` passes files as well as directories (drop the `.py` filter; keep `-r`)
+- [ ] `_CANDIDATE_SOURCES` covers every first-party package and root module —
+      add `analysis`, `chat`, `notify`, `api_key.py`, `event_log.py`, `flags.py`,
+      `observability.py`, `redact.py`, `shared_resources.py`, `verbose.py`
+- [ ] Re-baseline `bandit_high` / `bandit_medium` / `mypy_errors` against the widened scope,
+      and fix or justify anything the wider net catches (expected: the single B110)
+- [ ] **Structural guard** — a test asserting `_sources()` covers every top-level package
+      with an `__init__.py` and every root `*.py`, so the next module added to the tree
+      cannot silently fall out of both gates. This is the load-bearing AC: without it the
+      list drifts again the next time a package is added.
+- [ ] Test asserting the bandit invocation receives the root files (the drop was invisible
+      because the gate still reported `ok`)
+- [ ] `CLAUDE.md` → *Project Structure* updated to list `analysis/`, `chat/`, `notify/`,
+      `billing/` — the stale list is the root cause of defect (2)
+
+- Next free issue number: **498**.
