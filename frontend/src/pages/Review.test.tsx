@@ -252,6 +252,26 @@ describe('PersonalizationBand', () => {
     expect(bandText).not.toMatch(/\bviral\b|\bguarantee\b/)
   })
 
+  it('drops the N/threshold fraction when inactive PAST the threshold (#520)', async () => {
+    // Issue 520 — `active` no longer follows from `labels >= threshold`: a creator
+    // can be past it while their model still scores every clip the same, so we
+    // serve DNA order and say so. Without the guard this rendered "45/20 clips
+    // rated", a progress bar counting past its own target.
+    const personalization: PersonalizationStatus = {
+      active: false, labels: 45, threshold: 20, weight: 0,
+    }
+    vi.stubGlobal('fetch', mockFetch(personalization))
+    renderReview('/app/review?video_id=v1')
+    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
+    const band = screen.getByText(/Still learning/i)
+    expect(band).toBeInTheDocument()
+    expect(band.textContent).toContain('45 clips rated')
+    expect(band.textContent).not.toContain('45/20')
+    // The honest count is still shown — the creator did the work either way.
+    const bandText = band.textContent?.toLowerCase() ?? ''
+    expect(bandText).not.toMatch(/\bviral\b|\bguarantee\b/)
+  })
+
   it('renders no personalization band when the field is absent (null)', async () => {
     // When the API returns no personalization field, neither band should appear.
     vi.stubGlobal('fetch', mockFetch(null))

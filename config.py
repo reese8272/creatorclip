@@ -1,7 +1,7 @@
 import logging
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 from cryptography.fernet import Fernet
 from pydantic import ValidationError, ValidationInfo, field_validator, model_validator
@@ -599,7 +599,33 @@ class Settings(BaseSettings):
     # Hard cap on the stored distilled text (and the scoring system block).
     STYLE_NOTES_MAX_CHARS: int = 1200
 
+    # The HONESTY threshold: how much of their own feedback a creator must have
+    # before we tell them personalization is on. Stays at 20 after Issue 520, and
+    # the re-derivation matters — this number is now *above* the non-degeneracy
+    # point of the model that actually serves the 20–60 range (LogisticRegression,
+    # which discriminates from n>=2 with both classes present, a condition
+    # preference/train.py already enforces before it calls fit). Before 520 it sat
+    # 21 *below* LightGBM's, which is what made the whole ramp a no-op.
+    # This is deliberately NOT the same number as PREFERENCE_LGBM_MIN_LABELS: one
+    # constant doing both jobs — "enough data to be honest about" and "enough data
+    # for this estimator to split" — was the root cause of Issue 520.
     PERSONALIZATION_THRESHOLD_LABELS: int = 20
+    # The MODEL-CAPABILITY switchover: below this many labels fit() uses
+    # LogisticRegression, at or above it LightGBM. Derived from a measurement, not
+    # chosen: with min_child_samples=20 a split needs >=20 rows in BOTH children,
+    # so LightGBM cannot split at all below 40 rows, and the measured floor at
+    # which it reliably becomes non-constant is n=41 (100% degenerate at every
+    # n in 20..39; ~43% at n=40; 0% from 41 up). 60 is that floor with a ~1.5x
+    # margin. Raising this is what makes the LogisticRegression cold-start branch
+    # reachable at serve time — before Issue 520 it never ran in production,
+    # because the blend weight was 0 everywhere LR was used. (Issue 520)
+    PREFERENCE_LGBM_MIN_LABELS: int = 60
+    # Pinned, NOT inherited from LightGBM. PREFERENCE_LGBM_MIN_LABELS is derived
+    # from this value, so leaving it at the library default would let a dependency
+    # bump silently move the dead zone the switchover was sized against — which is
+    # the shape of the original defect. Change one and you must re-measure the
+    # other. (Issue 520)
+    PREFERENCE_LGBM_MIN_CHILD_SAMPLES: int = 20
     # Recency-decay half-life (days) for preference-model sample weights. Was a
     # hardcoded ln(2)/30 in preference/decay.py; parameterized (Issue 200) so the
     # eval harness (Issue 198) can grid-search {15,30,60,90} on a held-out NDCG@5
@@ -1012,6 +1038,8 @@ class Settings(BaseSettings):
     @field_validator(
         "PERSONALIZATION_THRESHOLD_LABELS",
         "DECAY_HALF_LIFE_DAYS",
+        "PREFERENCE_LGBM_MIN_LABELS",
+        "PREFERENCE_LGBM_MIN_CHILD_SAMPLES",
     )
     @classmethod
     def _positive_preference_ints(cls, v: int, info: ValidationInfo) -> int:
@@ -1080,6 +1108,47 @@ class Settings(BaseSettings):
                 'print(Fernet.generate_key().decode())"'
             ) from exc
         return v
+
+    # Measured non-degeneracy floor for the LightGBM branch, with
+    # min_child_samples=20: a split needs >=20 rows in both children, so no split
+    # is legal below 40 rows, and only a knife-edge 20/20 succeeds at exactly 40.
+    # Reproduce with tests/preference/test_rerank_eval.py. (Issue 520)
+    _LGBM_MEASURED_FLOOR: ClassVar[int] = 41
+
+    @model_validator(mode="after")
+    def _validate_preference_switchover(self) -> "Settings":
+        """The LightGBM switchover must sit above its MEASURED non-degeneracy floor.
+
+        This is Issue 520's acceptance criterion — "``PERSONALIZATION_THRESHOLD_LABELS``
+        re-derived FROM the measured non-degeneracy point, not the other way round" —
+        made executable. The original defect was not a wrong number; it was that
+        nothing anywhere related the threshold to what the estimator could actually
+        do, so a plausible-looking 20 produced a model that returned the same
+        probability for every clip across the entire maturity ramp while the API
+        reported personalization active.
+
+        A config that puts the switchover back inside the dead zone now fails at
+        boot instead of silently serving a no-op.
+        """
+        if self.PREFERENCE_LGBM_MIN_LABELS < self._LGBM_MEASURED_FLOOR:
+            raise ValueError(
+                f"PREFERENCE_LGBM_MIN_LABELS must be >= {self._LGBM_MEASURED_FLOOR} "
+                f"(got {self.PREFERENCE_LGBM_MIN_LABELS}). Below that, LightGBM with "
+                f"min_child_samples={self.PREFERENCE_LGBM_MIN_CHILD_SAMPLES} trains a "
+                "constant predictor, which makes the rerank blend a monotone transform "
+                "of the DNA score — personalization becomes a provable no-op while the "
+                "API still reports it active (Issue 520). If you changed "
+                "PREFERENCE_LGBM_MIN_CHILD_SAMPLES, re-measure the floor first."
+            )
+        if self.PREFERENCE_LGBM_MIN_LABELS < self.PERSONALIZATION_THRESHOLD_LABELS:
+            raise ValueError(
+                "PREFERENCE_LGBM_MIN_LABELS must be >= PERSONALIZATION_THRESHOLD_LABELS "
+                f"(got {self.PREFERENCE_LGBM_MIN_LABELS} < "
+                f"{self.PERSONALIZATION_THRESHOLD_LABELS}). Otherwise the LightGBM "
+                "branch would serve label counts we have not yet promised to "
+                "personalize, leaving no estimator for the range that we have."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_notify_backend(self) -> "Settings":

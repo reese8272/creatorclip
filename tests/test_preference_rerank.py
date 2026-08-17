@@ -248,3 +248,34 @@ async def test_rerank_falls_back_to_dna_on_non_finite_score():
     # Non-finite pref score → DNA scores untouched, original order preserved.
     assert [c.score for c in out] == [0.9, 0.1]
     assert out[0] is a and out[1] is b
+
+
+@pytest.mark.asyncio
+async def test_rerank_declines_to_blend_a_degenerate_model():
+    """Issue 520 — a mature but non-discriminating model must not be blended.
+
+    The stub's scores would flip the order if applied (0.1 → 0.99, 0.9 → 0.01),
+    and its label_count sits at 2x the threshold, so the maturity weight is at
+    the cap. Only ``is_degenerate`` stands between it and a rerank. That is the
+    assertion: the decision is driven by whether the model can discriminate, not
+    by how much feedback produced it.
+
+    ``blended_score`` staying NULL matters as much as the order — the Issue-465
+    contract defines NULL as "personalization was not applied", so this case
+    reports itself honestly to every downstream reader for free.
+    """
+    from clip_engine.ranking import rerank_with_preference
+
+    a, b = _clip(0.9), _clip(0.1)
+    stub = _StubScorer(
+        label_count=2 * settings.PERSONALIZATION_THRESHOLD_LABELS,
+        scores=[0.01, 0.99],
+    )
+    stub.is_degenerate = True
+    with patch("preference.train.load_latest", new=AsyncMock(return_value=stub)):
+        out = await rerank_with_preference([a, b], MagicMock(), MagicMock())
+
+    assert out[0] is a and out[1] is b, "a degenerate model must not reorder anything"
+    assert all(c.blended_score is None for c in out), (
+        "NULL blended_score is the Issue-465 signal that personalization was not applied"
+    )

@@ -4,7 +4,52 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-17 (latest) — Deep standards & process audit; 7 decisions adopted (Lane L30, Issues 498–527)
+## 2026-08-17 (latest) — Issues 498 (items 1–3), 521 and 520: personalization actually personalizes now
+
+Three PRs off the back of the audit below, in dependency order.
+
+**#119 — the audit itself + Issue 498 items 1–3.** The audit's 12,546 lines across 30 files were
+*untracked*; one `git clean` from gone. Committed alongside the L30 filing and the decision entries.
+Batched with it, three prose→mechanism conversions: `test:ci` pins `--reporter=verbose` (the same
+cold-run vitest flake was logged three times and the failing test's name was never captured once,
+because the flag has to be set *before* the failure is observable); `CLAUDE.md` stops instructing the
+bare `python3` that produces a vacuous `mypy ok 0`; and `frontend/.npmrc` + an `engines` pin make npm
+**refuse to install** under node 26 rather than warn — verified refusing on 26.5.1 and passing on
+22.17.1. Also added the missing `BACKUP_HEALTHCHECK_URL` to `.env.example`, which the backup scripts
+read but the example never listed. Items 4 and 5 deferred with reasons recorded.
+
+**#120 — Issue 521, the gate.** The rerank eval written on 2026-08-13 to guard exactly this defect
+passed only because its fixture was a perfectly balanced 20/20 — the single 40-row shape LightGBM's
+default `min_child_samples=20` can split. Move one label to 21/19 and it collapsed from 92 trees to
+1, spread 0.9999 to 0.000000. Parametrised over eight creator shapes; four landed as
+`xfail(strict=True)`, which is what then *forced* the fix below to clear them.
+
+**#121 — Issue 520, the SEV1.** `PERSONALIZATION_THRESHOLD_LABELS` was answering two unrelated
+questions — "enough feedback to be honest about?" and "enough rows for this estimator to split?" —
+and the gap between the right answers (20 and 60) was the whole defect. The blend weight ramped
+0→cap over exactly n=20→40, and LightGBM was a constant predictor at every n in 20–39, so **the
+entire maturity ramp sat inside the dead zone**: the persisted order was byte-identical to DNA-only
+while the API reported `personalization={active: true}`. Fixed by separating the two numbers, making
+the LogisticRegression branch reachable at serve time for the first time, and routing the reranker,
+the API and the offline harness through one `effective_weight()` so `active` cannot disagree with
+what was served. Rationale, measurements and rejected alternatives in `docs/DECISIONS.md`.
+
+**Expected post-deploy behaviour — not a regression.** Creators whose newest model is a 20–60-label
+LightGBM constant will immediately serve DNA order with `active=false`. That is honest, and
+**identical in ranking to what they were already getting**; the only change is that we stop claiming
+otherwise. They heal on their next retrain. Expect the warn-only NDCG ratchet to fire **once per
+affected creator** on that retrain, because the served model genuinely changes shape — that is the
+ratchet working, not a defect to chase. No migration or backfill: pre-520 model blobs simply lack the
+new degeneracy flag and recompute it lazily on load.
+
+**Not verified locally:** the new end-to-end integration test needs Postgres, and this box has
+neither a local instance nor a running Docker daemon. CI's integration job covers it.
+
+Suite 3170 → **3199 passed, 64 skipped, 0 xfailed**. Layer 0 all green.
+
+---
+
+## 2026-08-17 — Deep standards & process audit; 7 decisions adopted (Lane L30, Issues 498–527)
 
 **No production code changed.** A read-only standards and process audit ran across the whole repo
 (56 agents, three phases): 141 findings, 72 adversarially verified — **8 CONFIRMED, 57 CORRECTED,

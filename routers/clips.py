@@ -778,13 +778,19 @@ def _build_personalization_status(scorer: "PreferenceScorer | None") -> Personal
     trained count, never the raw feedback-row count a flip-flopping creator
     would inflate.
     """
-    from preference.model import preference_weight
+    from preference.model import effective_weight
 
     threshold = settings.PERSONALIZATION_THRESHOLD_LABELS
     if scorer is None:
         return PersonalizationStatus(active=False, labels=0, threshold=threshold, weight=0.0)
     label_count = scorer.label_count
-    weight = preference_weight(label_count)
+    # effective_weight, not preference_weight (Issue 520). It is the SAME function
+    # the reranker uses to decide whether to blend at all, which is what makes
+    # `active` structurally unable to disagree with what was actually served —
+    # rather than two call sites that each have to remember the same two
+    # conditions. `active` can now be False while labels >= threshold: that is a
+    # creator with enough feedback whose model does not yet discriminate.
+    weight = effective_weight(scorer)
     return PersonalizationStatus(
         active=weight > 0.0,
         labels=label_count,

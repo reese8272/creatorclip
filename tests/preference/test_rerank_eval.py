@@ -33,13 +33,17 @@ lightgbm 4.6.0:
 One label. The gate certified a knife-edge and reported it as "a REAL trained
 preference model flips the order".
 
-The rows marked ``xfail(strict=True)`` below are the ones that are a MEASURED
-no-op on today's tree — a constant predictor, so the blend is a strictly
-increasing affine transform of the DNA score and the sort cannot reorder
-anything. They are strict on purpose: when Issue 520 lands they become XPASS,
-which pytest reports as a failure, so "521 blocks 520" is enforced by the test
-runner rather than by a bullet in a doc. Do not relax them to non-strict, and do
-not delete them — remove the markers as part of 520 instead.
+Four of these splits (21/19, 24/16, 16/24 at n=40 and 15/15 at n=30) landed as
+``xfail(strict=True)`` because they were a constant predictor on that tree. Issue
+520 then raised the LightGBM switchover to a measured 60, so the 20-60 range is
+served by LogisticRegression and every split discriminates; the markers are gone.
+That transition is what ``strict=True`` was for — the markers XPASSed, pytest
+failed the run, and the fix could not land while still claiming the defect was
+open.
+
+IF YOU ADD A SPLIT AND IT FAILS, the model cannot learn that shape. Do not delete
+the split and do not narrow the assertion — that is precisely how this file came
+to certify a knife-edge in the first place.
 """
 
 from __future__ import annotations
@@ -73,25 +77,6 @@ _CONTINUOUS = (
     "setup_length_s",
 )
 
-# Splits that are a MEASURED no-op on today's tree (Issue 520). Keyed by (pos, neg)
-# so the reason travels with the shape rather than with a list position.
-_DEGENERATE_TODAY = {
-    (21, 19): "n=40 unbalanced by one label",
-    (24, 16): "n=40 mildly positive-leaning",
-    (16, 24): "n=40 minority-positive",
-    (15, 15): "n=30 mid-ramp — weight 0.25 and the API reports active",
-}
-
-_XFAIL_REASON = (
-    "Issue 520 — LGBMClassifier is fitted with min_child_samples left at "
-    "LightGBM's default of 20, so no split is legal below 40 rows and the only "
-    "40-row shape that splits is exactly 20/20. This split ({shape}: {why}) "
-    "trains to 1 tree / 1 leaf / probability spread 0.000000, making the blend a "
-    "strictly increasing affine transform of the DNA score — the rerank provably "
-    "cannot reorder anything, while the API still reports personalization active. "
-    "Strict: this XPASSes when 520 lands, which is the signal to drop the marker."
-)
-
 
 def _load_fixture() -> dict:
     with open(_FIXTURE, encoding="utf-8") as fh:
@@ -102,37 +87,20 @@ def _shapes() -> list[tuple[int, int]]:
     return [(s["pos"], s["neg"]) for s in _load_fixture()["label_set"]["splits"]]
 
 
-def _plain_params() -> list[Any]:
-    """Every fixture split, UNMARKED.
+def _split_params() -> list[Any]:
+    """Every fixture split as a pytest param.
 
-    Used by the precondition test, which asserts only label count and blend
-    weight — properties a degenerate model satisfies perfectly well. That is
-    precisely why it must not carry the xfail markers: marking it strict would
-    make it XPASS today, and the fact that it passes on every split while the
-    property tests below do not is itself the shape of the Issue-520 defect.
+    Issue 521 landed four of these (21/19, 24/16, 16/24 at n=40 and 15/15 at n=30)
+    as ``xfail(strict=True)`` because they were a MEASURED no-op: LightGBM was
+    fitted with ``min_child_samples`` left at its default of 20, so no split was
+    legal below 40 rows and the only 40-row shape that could split was exactly
+    20/20. Issue 520 raised the LightGBM switchover to a measured 60, so the
+    20-60 range is now served by LogisticRegression and all eight splits
+    discriminate. The markers were removed as part of that fix — which is exactly
+    the transition ``strict=True`` was there to force: they XPASSed, pytest failed
+    the run, and the fix could not land while pretending the defect was still open.
     """
     return [pytest.param(*s, id=f"{s[0]}pos-{s[1]}neg-n{sum(s)}") for s in _shapes()]
-
-
-def _split_params() -> list[Any]:
-    """Every fixture split as a pytest param, xfail-marked where 520 makes it a no-op."""
-    params = []
-    for shape in _shapes():
-        why = _DEGENERATE_TODAY.get(shape)
-        marks = (
-            [
-                pytest.mark.xfail(
-                    strict=True,
-                    reason=_XFAIL_REASON.format(shape=f"{shape[0]}/{shape[1]}", why=why),
-                )
-            ]
-            if why
-            else []
-        )
-        params.append(
-            pytest.param(*shape, marks=marks, id=f"{shape[0]}pos-{shape[1]}neg-n{sum(shape)}")
-        )
-    return params
 
 
 def _row(base: dict, shared: dict, jitter: float) -> list[float]:
@@ -213,7 +181,7 @@ def _ids(clips: list[Clip]) -> list[str]:
 # ── The eval ─────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(("n_pos", "n_neg"), _plain_params())
+@pytest.mark.parametrize(("n_pos", "n_neg"), _split_params())
 def test_label_set_is_above_threshold_with_a_live_weight(n_pos: int, n_neg: int) -> None:
     """Fixture precondition: every split must sit at or above the personalization
     threshold with a NON-ZERO blend weight — otherwise ``rerank_with_preference``

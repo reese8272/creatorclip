@@ -35,10 +35,19 @@ def _video(creator_id: uuid.UUID) -> MagicMock:
     return v
 
 
-def _mock_scorer(label_count: int) -> MagicMock:
-    """Return a fake PreferenceScorer with the given label_count."""
+def _mock_scorer(label_count: int, degenerate: bool = False) -> MagicMock:
+    """Return a fake PreferenceScorer with the given label_count.
+
+    ``is_degenerate`` must be set EXPLICITLY (Issue 520). A bare ``MagicMock``
+    auto-creates a truthy child attribute, so a fake that does not declare which
+    side of the contract it is on would silently read as "this model cannot
+    discriminate" and every personalization assertion below would invert. Making
+    the fake state it is the point: ``active`` now depends on model quality, not
+    just on the label count.
+    """
     scorer = MagicMock()
     scorer.label_count = label_count
+    scorer.is_degenerate = degenerate
     return scorer
 
 
@@ -187,6 +196,40 @@ def test_personalization_above_threshold_returns_active_with_ramp(client):
     p = body["personalization"]
     assert p["active"] is True
     assert p["weight"] > 0.0
+
+
+def test_personalization_degenerate_model_is_never_reported_active(client):
+    """Issue 520, the honesty assertion — the whole point of the SEV1.
+
+    A creator can be well past the threshold and still have a model that returns
+    the same score for every clip. Blended against the DNA score that is a
+    strictly increasing affine transform, so the served order is byte-identical
+    to DNA-only. Reporting ``active: true`` there tells the creator we are
+    learning their style when we provably are not, which is a violation of the
+    north star, not merely a ranking bug.
+
+    ``active`` must follow the model's actual effect, never the label count alone.
+    """
+    creator = _creator()
+    video = _video(creator.id)
+    _set_overrides(creator, video, [])
+    threshold = settings.PERSONALIZATION_THRESHOLD_LABELS
+    labels = 2 * threshold  # maximally mature: the ramp is saturated at the cap
+    scorer = _mock_scorer(labels, degenerate=True)
+
+    try:
+        with patch("preference.train.load_latest", new=AsyncMock(return_value=scorer)):
+            resp = client.get(f"/videos/{video.id}/clips", cookies={"session": "x"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    p = resp.json()["personalization"]
+    assert p["active"] is False, "a model that cannot discriminate is not personalization"
+    assert p["weight"] == 0.0, "weight must be the EFFECTIVE weight the reranker uses"
+    # The label count is still reported truthfully — the creator did the work.
+    assert p["labels"] == labels
+    assert p["threshold"] == threshold
 
 
 # ── Test (c): no virality terms in the personalization copy ──────────────────
