@@ -5,7 +5,270 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-15 (latest) — Retire the `staging` BRANCH; enforce branch protection against admins on `main`
+## 2026-08-17 (latest) — Fail-open vs fail-closed: the record is wrong and must be amended
+
+> **Approved 2026-08-17** (Phase 2). Drafted by the deep standards audit as entry #19 `[CORRECT]` in `docs/assessment/DEEP_AUDIT_2026-08-17/DECISIONS_DRAFTS.md`; adopted as drafted, unamended.
+
+**Decision — the rate limiter degrades to a LOCAL in-memory bucket (`Limiter(..., in_memory_fallback_enabled=True)`); the spend guard then fails CLOSED; and every Redis client carries bounded socket timeouts. `docs/DECISIONS.md:2633-2634`, `docs/AUDIT_BRIEF.md` §5 row 1, and `limiter.py`'s own docstring at lines 42-44 are amended, because all three describe behaviour the code does not have.**
+
+**Why this diverges / why now.** This entry exists to correct the record, not to restate it. The
+most-documented "deliberate decision" in the security domain — that the limiter fails open — is
+**not what the code does**, and it was reproduced against a dead Redis port: `limiter.py:129-133`
+constructs the limiter with neither `swallow_errors` nor `in_memory_fallback`, so slowapi 0.1.9
+re-raises the Redis error (`extension.py:630-645`), there is no catch-all handler in `main.py`, and
+every rate-limited route returns **HTTP 500 with the endpoint body never running**. That includes
+`GET /auth/me` (called by `AuthGate` on every load) and the OAuth callback. A Redis *latency spike* —
+not an outage; co-resident ffmpeg/MediaPipe is enough — is therefore a total sign-in outage.
+`limiter.py` carries a **99% coverage floor**, the joint-tightest in the repo, and
+`tests/test_rate_limiting.py` has **no test at all** for Redis-unavailable behaviour: 99% of lines,
+0% of the property its 50-line docstring is about.
+
+Two corrections the verifier insisted on, and they are load-bearing: **"fail-open is the 2026
+consensus" is false** — Envoy defaults `failure_mode_deny=true` and the literature is explicitly
+context-dependent; the defensible standard is *graceful degradation to a local bucket instead of a
+500*. And the correct posture is **asymmetric by control type**: availability controls degrade,
+money/authorization controls fail closed. Once the limiter genuinely degrades, the spend guard
+becomes the only thing between a bug and an unbounded Anthropic bill, so it must fail closed. Related
+and cheap: `youtube/_redis.py:33` is the only one of four Redis clients with no
+`socket_timeout`/`socket_connect_timeout`, so against a wedged-but-connected Redis the documented
+fail-open arm at `spend_guard.py:373-375` is never reached — a hang is not an exception.
+
+**Alternatives ruled out.** (a) *Amend the docs to say "fails closed" and keep the 500s* — honest,
+and rejected: a 500 on `/auth/me` is a worse outcome than a locally-enforced limit. (b) *A
+Redis-backed circuit breaker* — see draft 13; slowapi already implements the `_storage_dead` latch
+(`extension.py:634-640`), inert only because the flag is off.
+
+**Cost accepted.** In-memory fallback at `--workers 2` means a 2× effective rate limit during a Redis
+outage. A fail-closed spend guard means a Redis outage blocks LLM features entirely — a degraded
+feature with honest copy already written (`spend_guard.py:98-102`), which is recoverable in a way an
+unbounded bill is not.
+
+**Source/evidence.** `limiter.py:129-133`, `youtube/_redis.py:33`, `billing/spend_guard.py:365-375`,
+`docs/DECISIONS.md:2633-2634`, `tests/test_rate_limiting.py:278`, `run_layer0.py:333`;
+audit `d07-security-tenancy.md` F1 (**CORRECTED** — standards basis restated), F3 (**CORRECTED** —
+downgraded to medium, asyncio client so no event-loop block; the cost is unbounded request lifetime
+holding a checked-out session). <https://github.com/firecrawl/firecrawl/issues/3728> (the same bug in
+the wild), <https://nerdleveltech.com/fail-open-vs-fail-closed-hono-middleware-redis-tutorial>.
+
+---
+
+## 2026-08-17 — The single VM is correct; RPO 24 h, RTO 4 h, drilled quarterly
+
+> **Approved 2026-08-17** (Phase 2). Drafted by the deep standards audit as entry #17 `[RATIFY]` in `docs/assessment/DEEP_AUDIT_2026-08-17/DECISIONS_DRAFTS.md`; adopted as drafted, unamended.
+
+**Decision — one DigitalOcean VM remains the production topology; it is not revisited at beta scale. The disaster-recovery targets are **RPO 24 hours, RTO 4 hours**, with a quarterly restore drill whose measured time is recorded in `docs/RUNBOOKS.md`. These targets are only real once backups are armed.**
+
+**Why this diverges / why now.** `docs/RUNBOOKS.md:648` literally reads *"measured RTO recorded
+here: ________"*, and `DECISIONS.md:2334` already chose a 24 h RPO — so half the position exists and
+has never been paired with an RTO or a drill. The design behind it is genuinely good (logical
+`pg_dump`, `openssl enc -pass env:` with the argv-leak reasoning, separate bucket, Object Lock
+**Compliance** not Governance, retention by R2 lifecycle so a script bug cannot mass-delete, key
+escrow on two independent legs). **None of it is on.** Walked today, losing the droplet gives: detect
+= hours to days; provision ≈ 30 min; restore `/opt/autoclip/.env` = 5 min *or unrecoverable*; restore
+Postgres = **∞, no dump exists**. Actual RTO ≈ 1 h to a schema-only stack; actual RPO = total loss of
+the billing ledgers, `preference_models` (the trained taste — irreplaceable, it *is* the product),
+`creator_dna`, `clip_outcomes` and the consent records. R2 media survives; the database that indexes
+it does not.
+
+The verifier's correction matters for scoping: this is a **known, owner-blocked gate**, already
+stated in `GO_LIVE.md:59-61`, `LEFT_OFF.md:115` and `OFF_COURSE_BUGS.md:26` — not a new discovery.
+`BACKUP_R2_BUCKET` and `BACKUP_ENCRYPTION_KEY` *are* documented in `.env.example:116-117`; the one
+genuinely missing variable is **`BACKUP_HEALTHCHECK_URL`** (consumed by `scripts/backup_pg.sh:32`
+and `scripts/backup_redis.sh:19,46,92`), which is the dead-man's switch and is absent from the
+config SSOT.
+
+**Alternatives ruled out.** (a) *Managed PaaS (Render)* — costs roughly 2× and fixes nothing that is
+broken. (b) *Postgres PITR / a replica* — the documented anti-pattern of over-buying RPO; 24 h is
+correct at this scale. (c) *A second droplet for HA* — doubles cost to remove a failure mode that a
+4-hour RTO already tolerates.
+
+**Cost accepted.** Up to 24 hours of creator data can be lost, and a full-day outage is possible if
+the failure lands badly. That is an explicit, stated trade — not an accident.
+
+**Source/evidence.** `docs/DECISIONS.md:2327-2390`, `docs/RUNBOOKS.md:572-670,648`,
+`scripts/backup_pg.sh`, `.env.example:116-117`, `docs/OFF_COURSE_BUGS.md:26`;
+audit `d08-deploy-observability.md` F7 (CORRECTED — known/owner-blocked; `BACKUP_HEALTHCHECK_URL` is
+the one new item). <https://khimananda.com/blog/rpo-and-rto-explained>,
+<https://oneuptime.com/blog/post/2026-02-06-rpo-rto-targets-observability-opentelemetry/view>.
+
+---
+
+## 2026-08-17 — One creator = one login; no team seam in v1, but take the `tid` claim now
+
+> **Approved 2026-08-17** (Phase 2). Drafted by the deep standards audit as entry #20 `[RATIFY]` in `docs/assessment/DEEP_AUDIT_2026-08-17/DECISIONS_DRAFTS.md`; adopted as drafted, unamended.
+
+**Decision — v1 is deliberately one-tenant-one-user: no editors, no VAs, no seats. To keep that reversible, `create_session_token` gains a distinct `tid` claim alongside `sub`, and every RLS GUC is read from `tid`. Today `tid == sub`, so it is a no-op.**
+
+**Why this diverges / why now.** Every table keys on a single `creator_id` and all 27 RLS policies
+are direct-column on it, with no entry acknowledging this as a deliberate bet — the largest
+structural bet in the tenancy model with zero recorded position. The audit priced it, and the pricing
+is the reason to ratify rather than build: **the RLS policies are the cheap part.** They are uniform
+(`creator_id = NULLIF(current_setting('app.creator_id', true),'')::uuid`) and rewriting them to a
+membership subquery is one mechanical migration over a generated list — a day's work — while the seam
+itself (`db.py::tenant_session`, one GUC, one `after_begin` listener) does not change shape at all.
+
+**The expensive part is that `creators` is simultaneously the tenant and the principal.** It carries
+the login identity, the OAuth grant, the consent + COPPA attestation and the billing balance, *and*
+it is the FK target of all 28 tenant tables. The JWT `sub` is that same id and is used
+interchangeably for "who is acting" (`request.state.creator_id`, the audit `actor`) and "whose data
+is this" (the RLS GUC, `routers/_owned.py`). Splitting them later touches auth, the JWT contract,
+every issued cookie, the rate-limit key (one editor would exhaust the whole team's per-creator
+quota), the spend-guard keys, the erasure path (does removing an editor erase the tenant?) and the
+Art. 15 export scope. That is not a weekend. `[unverified]`
+
+The ~10-line `tid` claim converts an *implicit* conflation into an *explicit* one before the first
+paying cohort makes it expensive, and means the day a team seam is wanted, already-issued tokens and
+every RLS policy are reading the right concept.
+
+**Alternatives ruled out.** (a) *Build memberships now* — no beta user has asked, and it adds an
+invite/permission surface to a product still proving its core loop. (b) *Do nothing at all* —
+rejected: the `tid` half is nearly free and the conflation gets more expensive monotonically.
+
+**Cost accepted.** A creator who wants an editor must share their login, which is a real product
+limitation and a security smell to say out loud. If a beta creator asks for it, this decision is
+re-opened rather than worked around.
+
+**Source/evidence.** `db.py:200` (`tenant_session`), `auth.py:86`, `routers/_owned.py`,
+`limiter.py:110-126`, the 27 RLS policies in `alembic/versions/0010_rls_policies.py`;
+audit `d07-security-tenancy.md` §"Answers", Q4 `[unverified]`.
+<https://ricofritzsche.me/mastering-postgresql-row-level-security-rls-for-rock-solid-multi-tenancy/>.
+
+---
+
+## 2026-08-17 — There is no service layer, and there will not be one
+
+> **Approved 2026-08-17** (Phase 2). Drafted by the deep standards audit as entry #1 `[RATIFY]` in `docs/assessment/DEEP_AUDIT_2026-08-17/DECISIONS_DRAFTS.md`; adopted as drafted, unamended.
+
+**Decision — routers own their queries, the domain packages (`clip_engine/`, `dna/`, `knowledge/`, `preference/`, `billing/`) are the layer, and no `services/` package will be introduced at v1 scale.**
+
+**Why this diverges / why now.** This is the single largest structural bet in the backend and it has
+zero recorded rationale, so every session is free to re-open it. It should not be re-opened. The
+officially maintained `fastapi/full-stack-fastapi-template` (last commit verified 2026-08-17) has
+**no `services/`** — its route handlers run `select(...)` including the ownership predicate inline.
+This repo is strictly ahead of that reference: `routers/_owned.py` (47 lines) collapses fetch +
+ownership into one query that 404s for both missing and foreign rows, and `routers/_enqueue.py`
+(75 lines) is a single enqueue + SSE-ownership seam behind 19 endpoints. That is targeted
+extraction where duplication was measured, which is the KISS-correct answer.
+
+**Alternatives ruled out.** (a) *Per-domain `service.py`* as `zhanymkanov/fastapi-best-practices`
+prescribes — rejected: that guide's rationale is "many domains in a large monolith", and at 24
+routers / 98 endpoints this repo is below the scale at which either reference claims the layer pays
+for itself. (b) *`Netflix/dispatch`'s ~50 `service.py` packages* — rejected: archived read-only
+since 2025-09-03, so citing it as current practice is a stretch. (c) *A repository layer* —
+rejected on the standing YAGNI caveat: do not add an interface you have exactly one implementation of.
+
+**Cost accepted.** Router handlers contain business logic, so a second consumer (a CLI, a second API
+version) would require extraction at that time. Testing routes means testing through HTTP rather
+than against a service object — already the repo's habit via `TestClient`.
+
+**Source/evidence.** `routers/_owned.py`, `routers/_enqueue.py`; audit `01-domains/d01-backend-layering.md`
+§"What the current standard actually is". <https://github.com/fastapi/full-stack-fastapi-template>,
+<https://github.com/zhanymkanov/fastapi-best-practices>, <https://github.com/Netflix/dispatch>,
+<https://www.oreilly.com/library/view/architecture-patterns-with/9781492052197/ch06.html>.
+
+---
+
+## 2026-08-17 — No circuit breaker and no cross-model fallback at beta scale
+
+> **Approved 2026-08-17** (Phase 2). Drafted by the deep standards audit as entry #13 `[RATIFY]` in `docs/assessment/DEEP_AUDIT_2026-08-17/DECISIONS_DRAFTS.md`; adopted as drafted, unamended.
+
+**Decision — we are deliberately NOT building a circuit breaker or a cross-model fallback for Anthropic. The existing layers are sufficient at ≤100 users. The missing artifact is one runbook line, not a mechanism.**
+
+**Why this diverges / why now.** Standard practice says retries → fallback chain → circuit breaker,
+and the audit deliberately argued *against* it here. The layers already present: SDK
+`max_retries=2` on 16 of 17 clients (429/408/5xx/connection, exponential backoff); Celery
+`max_retries=2–3` at `default_retry_delay=60` on every LLM task, with `analyze_video_context`
+deliberately at 0 and the reason written inline (`worker/tasks.py:518-526`); and the
+`flags.llm_generation` **database** kill switch (30 s TTL, no deploy) plus the spend guard, both
+gating every LLM-reaching route. A one-hour Anthropic outage therefore costs: each in-flight job
+burns ~2 SDK retries then 2–3 Celery retries over ~3 minutes and fails cleanly, the queue drains
+rather than backs up, and the owner flips the kill switch. Adding Redis-backed breaker state would
+put a new dependency **inside the failure path of the thing meant to protect it** — the 2026
+guidance's own caveat that every reliability layer must itself have a fallback — in a system where
+Redis is already the single point of failure for the limiter and the spend guard (draft 19).
+This finding was **CONFIRMED** by an adversarial verifier.
+
+**Alternatives ruled out.** (a) *`pybreaker` or equivalent around the Anthropic clients* — 17 call
+sites, new state, and it protects against a failure mode that already degrades acceptably. (b)
+*Cross-model fallback (Opus → Sonnet on error)* — silently changes clip quality with no record of
+which model served the response, which is the opposite of this product's honesty posture.
+
+**Cost accepted.** During a provider outage, jobs fail with a retry message rather than degrading to
+a cheaper model, and recovery is a manual kill-switch flip. That is the correct trade while one
+person is the responder.
+
+**Missing artifact to add.** One line in `docs/RUNBOOKS.md`: *"Anthropic degraded > 15 min →
+`scripts/flags.py llm_generation off`; renders and triage continue; re-enable and the queue drains."*
+
+**Source/evidence.** `worker/tasks.py:518-526`, `flags.py`, `billing/spend_guard.py`,
+`routers/clips.py:401,492,641`; audit `d04-llm-layer.md` §6 (**CONFIRMED**).
+<https://portkey.ai/blog/retries-fallbacks-and-circuit-breakers-in-llm-apps/>,
+<https://zylos.ai/research/2026-02-20-graceful-degradation-ai-agent-systems/>.
+
+---
+
+## 2026-08-17 — Frontend performance budget and accessibility scope
+
+> **Approved 2026-08-17** (Phase 2). Drafted by the deep standards audit as entry #22 `[RATIFY]` + `[CHANGE]` in `docs/assessment/DEEP_AUDIT_2026-08-17/DECISIONS_DRAFTS.md`; adopted as drafted, unamended.
+
+**Decision (perf, RATIFY) — the SPA ships as a single chunk with a budget of 300 KB gzipped; no code-splitting programme is started. Revisit if mobile becomes a real surface or the bundle crosses the budget.**
+**Decision (a11y, CHANGE) — the target is WCAG 2.2 AA. `e2e/a11y.spec.ts` adds `'wcag22aa'` to `withTags`, and SC 2.5.8 on the timeline handles is either fixed or the Essential exception is claimed IN WRITING.**
+
+**Why this diverges / why now.** Measured on the 2026-08-15 build: one
+`assets/index-*.js` at 887,823 B raw / **261,004 B gzip**, one CSS file, zero `React.lazy`, zero
+`manualChunks`. That is above the 2026 working budget of 150–200 KB gz — but the risk is genuinely
+over-stated, and saying so is the point of ratifying: `/` is served by FastAPI as a static
+`landing.html`, **not** the SPA, so anonymous marketing traffic never downloads the bundle. The app is
+a repeat-visit authenticated tool behind Cloudflare with content-hashed assets; after first load it is
+a 304. React Router v7 Data Mode makes route-level `lazy` a 3-line per-route change if it ever
+matters, so deferring costs nothing. This finding was **CONFIRMED**: the code is fine, the vacuum was
+the finding.
+
+Accessibility is the opposite shape — the implementation is *ahead* of the record (cut edges are
+`role="slider"` with `aria-valuetext`, 17 live regions, a sourced rationale for why the rail container
+is `role="group"`), but the gate is one WCAG version behind. `e2e/a11y.spec.ts:44` tags
+`['wcag2a','wcag2aa','wcag21a','wcag21aa']`; **`wcag22aa` is absent**, and axe-core's `target-size`
+rule is tagged `wcag22aa` and off by default — so it has never executed against this app on any
+route. `Timeline.tsx:263` styles each cut edge `w-[3px]`; SC 2.5.8 requires 24×24 CSS px or the
+spacing exception, and Issue 134's filler/silence removal can put `start` and `end` handles a few
+pixels apart, failing both. WCAG 2.2 has been a W3C Recommendation since Oct 2023 and EN 301 549
+v4.1.1 (the EAA technical standard) aligns to it. `[unverified]`
+
+**Alternatives ruled out.** (a) *A 200 KB gz budget now* — would mandate splitting work that buys
+nothing for ≤100 desktop creators. (b) *Stay on WCAG 2.1* — defensible only if written down; silently
+encoding 2.1 inside a `withTags` array is not a decision. (c) *Widen the handles to 24 px* — may be
+wrong for frame-accurate trimming, which is exactly why the Essential exception is a legitimate answer.
+
+**Cost accepted.** First authenticated load pays 261 KB gz to render a Google button. Enabling
+`wcag22aa` will surface a triage backlog, and the gate still filters to `serious || critical`, so
+moderate violations stay invisible.
+
+**Source/evidence.** `frontend/dist/assets/index-DJ9gBY7A.js` (887,823 B / 261,004 B gz, build
+2026-08-15), `frontend/src/App.tsx:66-73`, `frontend/e2e/a11y.spec.ts:44,50-52`,
+`frontend/src/components/editor/Timeline.tsx:250-256,263`, `TimelineRail.tsx:70-71`;
+audit `d06-frontend.md` F5 (**CONFIRMED**), F6 `[unverified]`.
+<https://webperfclinic.com/article/javascript-bundle-optimization-complete-guide-shipping-less-code>,
+<https://www.levelaccess.com/blog/wcag-2-2-aa-summary-and-checklist-for-website-owners/>,
+<https://www.deque.com/blog/axe-core-4-5-first-wcag-2-2-support-and-more/>.
+
+---
+
+## Closing note for the approver
+
+Six of these ratify what you already do (1, 13, 17, 20, 22-perf, and half of 2). That is the honest
+finding of the audit's architecture pass: the decision discipline in this project is above industry
+norm for a solo build — 259 dated entries with sources and logged deviations — but **the rigor was
+applied to features and not to structure.** Every algorithm choice has a documented rationale; the
+three largest structural facts about the codebase had none.
+
+If you approve only one, approve **#6 (scan, don't list)**. It is the only entry that removes an
+entire class of the "one baby snag after another" pattern rather than one instance of it, and it is
+backed by the hardest evidence in the audit: 11 measured registries, 10 drifted, 2 hiding live
+defects.
+
+---
+
+## 2026-08-15 — Retire the `staging` BRANCH; enforce branch protection against admins on `main`
 
 **Decision — the `staging` branch is deleted and the promotion model becomes trunk-based
 (`feature/* → PR → main`), with `enforce_admins: true` on `main`.** This reverses the two-tier

@@ -4,6 +4,14 @@
 queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `docs/DECISIONS.md`
 (2026-08-03). This file is the live queue.
 
+> **Active lane: L30 — Deep standards & process audit (Issues 498–527).** Filed 2026-08-17 from
+> `docs/assessment/DEEP_AUDIT_2026-08-17/`. Start at `REPORT.md`, then `SYNTHESIS_process.md`.
+> **#520 (personalization is a measured no-op) and #521 (the gate that certifies it) outrank
+> everything else on consequence** — schedule them alongside Batch A. Lanes L26–L29 below are
+> complete; this header previously read "Active lane: L26" while L27/L28/L29 had closed, which the
+> audit flagged as a tracker-drift defect.
+
+**Historical — lane L26 declaration (superseded by L30 above):**
 **Active lane: L26 — A→B Auto-Clipping MVP (Issues 414–426).** Declared 2026-08-04 (user decision;
 `docs/DECISIONS.md` 2026-08-04): the MVP viability criterion is "the best auto-clipping short creation
 on the planet," and three verified gaps block it — the LLM never reads the whole video, the crop is a
@@ -3922,6 +3930,840 @@ fallback so silent degradation becomes visible.
 **Acceptance**
 - [x] Each doc corrected in one pass; registry cross-check test added
 - [x] `docs/SOT.md` window.py description matches reality
+
+---
+
+## Lane L30 — Deep standards & process audit (Issues 498–527)
+
+Filed 2026-08-17 from the deep standards audit
+(`docs/assessment/DEEP_AUDIT_2026-08-17/`). **Read `REPORT.md` first, then
+`SYNTHESIS_process.md`.** 56 agents, three phases, read-only; 141 findings, 72 adversarially
+verified (8 CONFIRMED / 57 CORRECTED / 7 REFUTED), 909 citations checked (906 resolve, 0 pointing
+at a non-existent file).
+
+**The finding in one paragraph.** The architecture and the stack are not the problem — three
+independent domains concluded the biggest structural bets (no service layer, single VM,
+`worker/tasks.py`'s size) are correct and should be left alone. What is wrong is that **this project
+diagnoses better than it defends**: it finds the right root cause almost every time, writes the
+correct fix into the row that reported it, and then does not build it. Nine recurring gotchas each
+have a correct structural fix already written down; none was built; the classes recurred. ~30
+maintainer-hours of engineering controls, starting with a ten-minute npm-script change, converts the
+four highest-cost classes from "remembered" to "impossible."
+
+**Honest bound on that diagnosis (completeness critic).** Prose-instead-of-mechanism explains ~56 of
+138 logged snags (Classes 1, 4, 6). The rest — third-party SDK surprise, clip-engine domain
+correctness, most test-infra churn — is not preventable by any internal gate. Class 3 escapes to
+production *every time*. Those need a **habit**, not a mechanism: one real transaction against each
+live integration on a schedule. Batch G carries that.
+
+> ⚠️ **Two reading rules for every issue below.**
+> 1. Where a verifier CORRECTED a finding, the corrected statement is used here, not the original
+>    claim. Issues marked `[unverified]` were never adversarially checked — treat severity and scope
+>    as unconfirmed and re-check before scheduling.
+> 2. **Discount unverified severities by about one level.** Measured: of the 21 findings that went
+>    through adversarial verification, **21 were downgraded and 0 upgraded**.
+
+> 📌 **Coverage caveat.** 67% of the frontend, `ingestion/transcribe.py` (the live ASR switch), the
+> four `knowledge/clip_*` modules, `upload_intel/`, `improvement/` and 59 of 62 migrations were
+> **never examined**. Absence of findings there is not a clean bill of health.
+
+### Batches
+
+| Batch | Theme | Issues | Effort |
+|-------|-------|--------|--------|
+| **A** | Week 1 — six conversions that have already cost more sessions than they cost to fix | 498 | ~1.5 h |
+| **B** | Gate integrity — make a check unable to pass without doing work | 499–504 | ~7 h |
+| **C** | Scan, don't list — retire hand-maintained gate-scope literals | 505–507 | ~5 h |
+| **D** | Docs as schema — make prose that machines read verifiable | 508–510 | ~3 h |
+| **E** | Production truthfulness — alerting, worker liveness, real probes | 511–515 | ~5 h |
+| **F** | Process artifacts — hooks, ADRs, CLAUDE.md, closing pressure | 516–519 | ~8 h |
+| **G** | Verified product/correctness defects (independent of the process track) | 520–525 | ~15 h |
+| **H** | Dead output — capabilities that cost money and reach nobody | 526–527 | ~6 h |
+
+Batches A→F are the 90-day plan in `SYNTHESIS_process.md` §8 and run in order. **Batch G is
+independent and #520/#521 outrank everything in A–F on consequence** — schedule them alongside
+Batch A, not after Batch F.
+
+---
+
+### Issue 498: the six Week-1 prose→mechanism conversions
+
+- [ ] **Status:** in progress — **items 1–3 DONE 2026-08-17**; 4 and 5 open · **Size:** S (~1.5 h
+      total) · filed 2026-08-17 · **Lane:** L30 Batch A
+
+Six independent one-line-to-twenty-minute changes, each retiring a gotcha that is currently stored
+as prose someone must remember. Grouped because each is too small to be its own issue and they share
+one rationale.
+
+1. ~~**`frontend/package.json` → `"test:ci": "vitest run --reporter=verbose"`, called from
+   `ci.yml:456`.**~~ ✅ **DONE 2026-08-17.** **Do this first.** The same cold-run vitest flake was
+   logged three times (`OFF_COURSE_BUGS:133`, `:147`, `:157`) and on all three occasions the failing
+   test's *name was never captured*, each time because nobody remembered the flag beforehand. This is
+   the canonical unfixable-by-documentation shape: the knowledge must be applied *before* the failure
+   is observable, so it can only ever be a default. **10 min.**
+   *Landed as an npm script rather than `vitest.config.ts` so the local `npm test` stays quiet while
+   CI is always verbose. Verified under node 22: 92 files / 683 tests, each named in the output.*
+2. ~~**`CLAUDE.md:120` → `.venv/bin/python …`.**~~ ✅ **DONE 2026-08-17.** The governing rules file
+   currently instructs the exact interpreter that produces phantom results — system python3 here
+   yields four phantom test failures, a phantom 77-CVE pip-audit, and a vacuous `mypy ok 0`. A prior
+   session filed those phantoms as real defect reports and had to retract them
+   (`OFF_COURSE_BUGS:156`, `DECISIONS.md:12884`). `grep -n venv CLAUDE.md` currently returns nothing.
+   **5 min.**
+   *Both interpreter-invoking lines converted — the Phase-4 Layer-0 gate and the Testing Rules
+   full-run line — with the failure mode spelled out inline so the rule carries its own why. The
+   structural half (a gate that cannot run must report `fail`, not `ok 0`) remains **Issue 499**.*
+3. ~~**`frontend/package.json` `"engines": {"node": ">=22 <23"}` + `frontend/.npmrc`
+   `engine-strict=true`**~~ ✅ **DONE 2026-08-17.** So npm *refuses to install* under node 26 (jsdom
+   breaks). Bit twice (`:37`, `:135`); the fix has lived only in `LEFT_OFF.md` prose, and the row's
+   own status column reads "engines pin open". **15 min.**
+   *Verified in both directions on this box — node 26.5.1 → `EBADENGINE … Required:
+   {"node":">=22 <23"} Actual: v26.5.1`, exit 1; node 22.17.1 → clean install plan, exit 0. No
+   dependency's own `engines` range conflicts.*
+4. **`ci_local.sh`: echo the `--randomly-seed=N` used, preserve `.pytest_cache/v/cache/lastfailed`,
+   and reconcile the `failed: 0` vs `LOCAL CI FAILED` disagreement at `:157`/`:160`.** **20 min.**
+5. **Promote `Migration lint (Squawk)` and `Visual regression` to required** (one `gh api` call).
+   `ci.yml:605-609` documents itself in-file as *"GATING since 2026-07-29"* and is not in the 8
+   required contexts — delete the comment or honour it. **15 min.**
+6. ~~**Delete the `Next free issue number` line from `LEFT_OFF.md`** so `docs/issues.md` is the sole
+   authority.~~ ✅ **DONE 2026-08-17** during the audit handoff. Three files disagreed (`LEFT_OFF`
+   said 497, `docs/PROJECT_STATE.md` said 443, `docs/issues.md` said 498); both stale copies are
+   removed and `LEFT_OFF`'s pointer table now names `docs/issues.md` as the sole authority.
+
+**Acceptance**
+- [ ] All six landed; each verified by the mechanism failing when the condition it guards is violated
+      — *1, 2, 3 and 6 done. Items 1 and 3 were verified by the negative case (the mechanism refusing
+      / naming the test), item 2 by inspection since it is prose-to-prose.*
+- [ ] `docs/OFF_COURSE_BUGS.md` rows `:37`, `:133`, `:135`, `:147`, `:156`, `:157` closed with a link here
+      — *`:37`, `:133`, `:135`, `:147` closed; `:156` annotated (its structural half is Issue 499).
+      `:157` stays open: it is item 4's `ci_local.sh` disagreement plus the ranking-persist flake.*
+
+> **Deferred out of the first pass (2026-08-17), each for a stated reason rather than for time:**
+> **item 4** (`ci_local.sh` seed echo + the `failed: 0` vs `LOCAL CI FAILED` contradiction) needs the
+> two reported numbers reconciled before either is trusted — that is a diagnosis, not a one-liner, and
+> doing it inside a docs PR would bury it. **Item 5** (promoting `Migration lint (Squawk)` and
+> `Visual regression` to required) mutates branch protection on a repo where protection was only just
+> made real; it wants its own change with a protection readback, not a drive-by `gh api` call.
+
+---
+
+### Issue 499: `run_layer0.py` static gates must check `proc.returncode` — a failing tool currently scores a perfect 0
+
+- [ ] **Status:** open · **Size:** M (~2 h) · filed 2026-08-17 · **Lane:** L30 Batch B ·
+      **CORRECTED (high → medium), reproduced**
+
+**The single most important gate finding in the audit, and it inverts the obvious fix.**
+
+`gate_mypy`, `gate_bandit`, `gate_pip_audit` and `gate_ruff` infer their result purely from stdout
+and never inspect `proc.returncode`. A tool that runs and *fails* — non-zero exit, empty stdout —
+returns `{"status": "ok", "value": 0}`, a perfect score against the strict baseline of `0`, and the
+job prints "All runnable gates passed" and exits 0. Reproduced against the real `.venv` binaries:
+mypy with zero targets or a bad config exits 2 with empty stdout and scores `ok 0`. bandit is hollow
+by a second route — an ignored `errors[]` array in its JSON.
+
+**Why `--require` does not help.** `--require` (Issue 479, built for exactly this class) only
+escalates a gate whose status is `skipped`. It cannot see an `ok`. **The fix the process map
+recommends — adding `--require` to `static-gates` — would not have caught this.**
+
+**Scope, corrected.** ruff is independently guarded by the separate required `lint` job, so the
+exposed set is mypy, bandit and pip-audit. Most plausible live consequence: **pip-audit reporting
+"0 vulnerabilities" during a PyPI/OSV outage**, on a required check.
+
+**Evidence:** `.claude/skills/production-assessment/scripts/run_layer0.py:159-164`, `:170-172`,
+`:227-231`, `:274-281`; `docs/assessment/DEEP_AUDIT_2026-08-17/02-sweep/mA-gates-exitcodes.md` §A1.
+
+**Acceptance**
+- [ ] Every static gate returns `fail` on non-zero returncode, and bandit on a non-empty `errors[]`
+- [ ] A test proves each gate goes red when its tool is made to fail
+- [ ] Only then: add `--require ruff,mypy,bandit,pip_audit` to `static-gates` and `ci_local.sh:95` (Issue 500)
+
+---
+
+### Issue 500: add `--require` to every `run_layer0.py` invocation, and pin that it is present
+
+- [ ] **Status:** open · **Size:** S (~30 min) · **BLOCKED BY #499** · **Lane:** L30 Batch B
+
+`static-gates` and `ci_local.sh:95` invoke `run_layer0.py` without `--require`, so a genuinely
+skipped gate (tool missing, output unparseable) passes silently. The coverage job was hardened for
+this in Issue 479; these callers were not. **Order matters: #499 first** — adding `--require` before
+the returncode fix creates a false sense of coverage over the larger hole.
+
+**Acceptance**
+- [ ] `--require` on all invocations; `tests/test_ci_config.py` asserts every invocation carries it
+
+---
+
+### Issue 501: `gate_module_coverage` fails OPEN when a floored module cannot be measured
+
+- [ ] **Status:** open · **Size:** S (~30 min) · **Lane:** L30 Batch B · **CORRECTED, reproduced**
+
+When `_module_line_rate` returns `None` the loop `continue`s, `_failures` stays empty, and the gate
+evaluates `ok` — which `--require` accepts. Its anti-hollowing test never parses a coverage report
+at all, despite its name.
+
+**Corrected: not vacuous today.** Under the current single-root `--cov .`, coverage.py is
+source-based so all five floored modules always resolve (verified: a one-test run reds correctly
+with all five violations). The reachable failure is **drift** — reverting to multi-root `--cov` (the
+exact Issue-368 cause, pinned by nothing), a package rename, an `omit` addition, or deleting root
+`auth.py`. These floors have already been silently lost once for a year and once for 7 weeks.
+
+**Evidence:** `run_layer0.py:396-413`, `:479-481`; `tests/test_layer0_module_coverage.py:86-95`.
+
+**Acceptance**
+- [ ] `rate is None` → failure; the guard test asserts resolution against a real coverage report
+
+---
+
+### Issue 502: no load-bearing CI step may swallow its exit code
+
+- [ ] **Status:** open · **Size:** M (~2 h) · **Lane:** L30 Batch B
+
+The mutation gate — the only mechanism measuring whether tests *assert* rather than merely execute —
+is `mutmut run || true` (`.github/workflows/mutation.yml:48`) piped through `tee` with pipefail off
+(`:52`), inside a `{ … } >> $GITHUB_STEP_SUMMARY` group. **It has never executed a single mutant
+while reporting success on 8/8 weekly runs.**
+
+Add a `tests/test_ci_config.py` assertion that no load-bearing workflow step uses `|| true` or an
+unguarded pipe outside a named allowlist, and pin the required-context list against `ci.yml` job
+names (nothing machine-checks it today — `Visual regression` documents itself as gating and is not).
+
+**Acceptance**
+- [ ] Meta-test lands and goes red against a deliberately-`|| true`'d step
+- [ ] Required-context list pinned; `ci.yml:605-609`'s "GATING" comment made true or deleted
+
+---
+
+### Issue 503: make `mutmut` actually run mutants, or delete the gate
+
+- [ ] **Status:** open · **Size:** M (~1.5 h) · **Lane:** L30 Batch B
+
+Beyond the swallowed exit code (#502), `mutmut` needs `also_copy` for the first-party import closure
+starting with `shared_resources.py`, and an assertion that `checked > 0`. A weekly report that
+cannot report is worse than no report — it is the thing this audit is about.
+
+**Acceptance**
+- [ ] `checked > 0` asserted; a mutant is demonstrably killed and demonstrably survives on a seeded bug
+- [ ] If it cannot be made to run cheaply, **delete the workflow** rather than leave a green no-op
+
+---
+
+### Issue 504: the nightly live-LLM and live-ASR lanes report green with zero tests executed
+
+- [ ] **Status:** open · **Size:** S (~1 h) · **Lane:** L30 Batch B · **CORRECTED (latent, not firing)**
+
+Both lanes gate on `bool(ANTHROPIC_API_KEY)`. `${{ secrets.X }}` expands to `""` if the secret is
+unset, renamed or blanked → every test `skipif`-skips → pytest exits 0 → both steps go green — and
+`docs/GO_LIVE.md:71` keeps citing "LLM E2E nightly green daily" as proof the external APIs are live.
+**The two meta-tests written to prevent exactly this assert YAML string literals**, all of which a
+secret-less workflow satisfies. The workflow's one self-report writes *"scoring lane did not run"*
+into a step summary and exits 0.
+
+Latent: the 2026-08-17 run genuinely made 9 live calls. The in-repo pattern to copy is
+`ci.yml:130-141`'s `render_env` collect-count guard.
+
+**Evidence:** `llm-e2e-nightly.yml:64,103`; `tests/test_llm_live.py:18`;
+`tests/test_ci_config.py:491,513`.
+
+**Acceptance**
+- [ ] `test -n "$KEY"` fails loudly on an empty secret; a minimum executed-count is asserted, not a YAML string
+
+---
+
+### Issue 505: derive the RLS sweep from `pg_policies` instead of two hand-written tuples
+
+- [ ] **Status:** open · **Size:** M (~2 h) · **Lane:** L30 Batch C · **CORRECTED, reproduced**
+
+All three loops in the RLS regression sweep are driven by hand-written literals; **8 of 31 policied
+tables never enter any loop** (`chat_conversations`, `clip_publications`, `data_exports` have *no*
+guard anywhere). No live defect — all eight carry the post-0045 hardened predicate — but **nothing in
+the repo reconciles any literal against `pg_policies`** (zero references), so the construction
+cannot detect a tenant table shipped with **no policy at all** — the exact
+`improvement_briefs`/`creator_insights` leak of migration 0038. Migration 0045 is itself a second
+27-name list that four later migrations outgrew.
+
+Separately: `creator_api_keys` and `creator_identity` carry `creator_id` with **no policy and no
+recorded exemption**. This is the third repetition of the `OFF_COURSE_BUGS:25` shape (a vacuous RLS
+gate whose fix replaced a 2-item literal with a 17-item literal).
+
+**Evidence:** `tests/test_rls_isolation_integration.py:265`, `:579`; `models.py:279-318`, `:590-620`.
+
+**Acceptance**
+- [ ] Sweep enumerates `pg_policies` + `pg_class.relrowsecurity` at runtime, in the existing integration lane
+- [ ] Every model with a `creator_id` column has a policy or an entry on an explicit exemption list
+- [ ] Add the two missing policies or record the exemptions in `docs/DECISIONS.md`
+
+---
+
+### Issue 506: derive the quota / spend-guard / kill-switch route sets from the live route table
+
+- [ ] **Status:** open · **Size:** M (~2 h) · **Lane:** L30 Batch C · **CORRECTED, reproduced**
+
+Three sibling registries are frozen as literals while the route table moved:
+
+- `_LLM_ROUTES` (`tests/test_creator_quota.py:30`) lists **9**; the live table has **17** routes
+  behind `require_flag('llm_generation')`. Four violate the invariant the module docstring asserts:
+  `chat.post_message` and `chat.regenerate` have a daily cap and **no burst limit**;
+  `creators.identity_chat` has 40/hour and **no daily cap**; `creators.build_dna` has a **120/minute
+  burst and no daily cap** on a route that enqueues a Sonnet DNA build.
+- `_BILLED_LLM_ROUTES` (`tests/test_flags.py:410`) verifies **10 of 17**, missing both chat routes,
+  identity chat, improvement-brief, video-analysis and **both clips/generate routes** — the core
+  product action.
+- The sibling AST sweep (`tests/test_security_baselines.py:304`) excludes `routers/chat.py` and
+  `routers/creators.py` entirely, so three routes have **zero** structural coverage from either
+  mechanism.
+
+**Scope, corrected: not an open spend hole.** All four uncapped routes carry
+`Depends(require_budget)` and are re-checked task-side against `SPEND_CAP_CREATOR_DAILY_USD = 5.00`.
+The residual harm is Celery/CPU flooding — plus the fact that `CLAUDE.md`'s ✅ for Issue 228 and
+`AUDIT_KNOWN_ISSUES.md:230`'s "gating is complete and CI-enforced" now rest on tests that cannot
+detect a new uncapped LLM route. **The model to copy is `tests/test_usage_coverage.py`** — a genuine
+repo-wide AST sweep with a bidirectional staleness check.
+
+**Acceptance**
+- [ ] All three registries derived from the resolver / live route table
+- [ ] The four uncapped decorators fixed; `CLAUDE.md` and `AUDIT_KNOWN_ISSUES.md` claims made true
+
+---
+
+### Issue 507: derive `RENDER_TASKS` from the call graph — the routing test compares a literal to a copy of itself
+
+- [ ] **Status:** open · **Size:** S (~1 h) · **Lane:** L30 Batch C · `[unverified — repro output disputed]`
+
+`test_every_ffmpeg_task_is_routed` reads `expected = {five literals}; assert set(RENDER_TASKS) ==
+expected`. Its stated claim is already false: the critic ran the finding's own repro and measured
+**two** unrouted ffmpeg tasks (`backfill_video_peaks`, `backfill_video_camera_regions`) — not the
+three originally claimed, because `ingest_video` reaches ffmpeg through imported helpers the repro's
+regex cannot see. n=2, verified.
+
+**Evidence:** `tests/test_celery_routing.py:29-38`.
+
+**Acceptance**
+- [ ] `RENDER_TASKS` derived from the call graph or a task decorator; the two unrouted tasks routed or exempted
+
+---
+
+### Issue 508: `tests/test_doc_citations.py` — resolve every `file:line` and symbol cited in the docs
+
+- [ ] **Status:** open · **Size:** M (~1.5 h) · **Lane:** L30 Batch D
+
+The project has been prescribing this to itself in prose since `OFF_COURSE_BUGS:159` (*"docs cite
+code by path/line and nothing verifies the citation still resolves"*), and that failure **seeded
+Issue 497**. The audit ran the check: **1,670 repo-rooted citations across the 17 governing docs;
+122 missing files; 6 line numbers past EOF.** Most of the 122 are historical `static/*.html`
+references inside dated `DECISIONS.md` entries — fine, that is history. **Four are not:**
+
+1. **`docs/SOT.md:100` lists `.github/workflows/quality.yml` in the canonical project-structure tree
+   as "ratcheted CI gates". That file does not exist** — the gates live in `ci.yml:251,434`. SOT is
+   *the* architecture source of truth, not history, and this is precisely the shape that seeded
+   Issue 497. The same defect class, still live, in the document `CLAUDE.md`'s read-order puts first.
+2. **`docs/issues.md` — the active work queue — carries 7 line citations into
+   `frontend/src/pages/Editor.tsx` at lines 296–654. The file is 206 lines.** Any session picking up
+   those issues starts by re-deriving what the issue meant. That is the baby-snag mechanism
+   operating inside the tracker itself.
+3. `docs/issues.md` and `docs/OFF_COURSE_BUGS.md` both cite
+   `frontend/src/components/review/WhyThisClip.tsx`, which no longer exists — and a *different*
+   issue in the same file instructs deleting it. The queue contradicts itself.
+4. `docs/SOT.md:156-158` lists four `static/*.css` files deleted with Issue 226.
+
+The **symbol half is load-bearing**: `CLAUDE.md` cited `WINDOW_S = 75.0` as living in
+`clip_engine/window.py` when it is at `clip_engine/candidates.py:22`. Path resolution alone would
+not have caught that.
+
+Cost to run: ~40 lines of Python, sub-second.
+
+**Acceptance**
+- [ ] Test asserts path resolves, line ≤ EOF, **and the named symbol is defined in the cited file**
+- [ ] `docs/archive/` excluded; dated `DECISIONS.md` history exempted
+- [ ] The four live drifts above fixed
+
+---
+
+### Issue 509: `tests/test_env_example_parity.py` — `Settings.model_fields` ↔ `.env.example`
+
+- [ ] **Status:** open · **Size:** S (~1 h) · **Lane:** L30 Batch D · `[unverified]`
+
+The `CLAUDE.md:126` checklist item *"All new config in `.env.example` with description"* is a manual
+human check only, and no test asserts parity. **8 `Settings` fields are undocumented** — three of
+them Anthropic model overrides an operator cannot discover, plus `COST_CACHE_WRITE_MULTIPLIER`
+(money path), `CELERY_SOFT_TIME_LIMIT_S`, `YOUTUBE_PUBLISH_PRIVACY`,
+`MAX_INGESTED_CHANNEL_TITLE_CHARS`, `REDBEAT_REDIS_URL`. Six documented keys are not settings.
+
+*(Do not pursue `extra="forbid"` — it is not an option here and none of the cited precedent
+incidents were caused by an ignored key.)*
+
+**Acceptance**
+- [ ] One test iterating `Settings.model_fields` against parsed `.env.example` keys, both directions
+
+---
+
+### Issue 510: Issue 497's own acceptance criterion — `_sources()` must cover every top-level package
+
+- [ ] **Status:** open · **Size:** S (~30 min) · **Lane:** L30 Batch D
+
+`run_layer0.py:43-62`'s `_CANDIDATE_SOURCES` is a hand-maintained literal, and mypy/bandit have
+**never scanned** `api_key.py`, `flags.py`, `event_log.py`, `observability.py`, `redact.py`,
+`verbose.py`, `shared_resources.py`, `chat/`, `media/`, `notify/`, `analysis/` or `scripts/`.
+`chat/` — never type-checked at all — is exactly where two July SEV2s landed. This is Issue 497's
+load-bearing AC and it is also a "scan, don't list" instance.
+
+**Acceptance**
+- [ ] `_sources()` derived from the tree, not a literal; baselines re-established for the newly-covered files
+
+---
+
+### Issue 511: one alert rule — the repo currently contains zero
+
+- [ ] **Status:** open · **Size:** M (~1 h) · **Lane:** L30 Batch E
+
+`grep -i alert docs/dashboards/` returns **zero hits**. There is no alert rule anywhere in the
+repository. The minimum credible set for a solo responder: **deploy-run failure**, and **`/health`
+non-`ok`**.
+
+Do **not** file this as the missing uptime monitor — that is Issue 282, an explicit owner deferral
+with written re-open criteria (`docs/GO_LIVE.md:82`). Note also that `docs/DEPLOYMENT.md:162-163`
+falsely claims `/health` returns **503** when degraded; it always returns **200** with the JSON
+`status` flipping to `"degraded"`, and that is deliberate (liveness-only, so a blip does not trigger
+an autoheal restart). The risk is an operator configuring status-code matching and losing the body
+match on `"status":"ok"` — which is the load-bearing half.
+
+**Acceptance**
+- [ ] Two alert rules land as config-as-code; `docs/DEPLOYMENT.md:162-163` corrected
+
+---
+
+### Issue 512: the production deploy never asserts `alembic current == head`
+
+- [ ] **Status:** open · **Size:** S (~45 min) · **Lane:** L30 Batch E · **CORRECTED, reproduced**
+
+The staging job in the same file and `scripts/deploy.sh` both assert it; the **prod** job does not.
+Reproduced: mutating prod's step to `alembic upgrade head || true` leaves all 22
+`tests/test_ci_config.py` tests green, because the meta-test is a whole-file substring check
+satisfied by the staging job alone.
+
+**Corrected scope.** Lock timeouts, role differences and partial revisions all exit non-zero and
+fail loudly. The genuinely silent modes are: a VM `.env` DSN resolving to a wrong-but-valid database
+(nothing validates it, and neither DSN is pinned in `docker-compose.prod.yml` the way staging pins
+them), the `skip_staging` break-glass path, and drift left by a prior break-glass deploy. This is the
+family of the 2026-06-24 incident where every prod migration was a silent no-op with exit 0.
+
+**Evidence:** `deploy.yml:299-300` vs `:88-101`; `tests/test_ci_config.py:174-177`.
+
+**Acceptance**
+- [ ] Assertion added to the prod job; meta-test covers **both** jobs, not the file as a whole
+
+---
+
+### Issue 513: nothing observes a Celery worker; `beat` has no liveness at all
+
+- [ ] **Status:** open · **Size:** M (~3 h) · **Lane:** L30 Batch E · **CORRECTED (high → medium), reproduced**
+
+`/health` probes exactly Postgres, Redis and R2 — no worker heartbeat, no queue depth, no Alembic
+revision (reproduced: with all three probes stubbed healthy the body is
+`{"status":"ok","postgres":"ok","redis":"ok","storage":"ok","version":"dev"}`, no worker key).
+Post-deploy Phase 1 reads only `status`; Phase 2 hard-asserts four **read** endpoints and marks the
+one write probe WARN-only. Rollout is `up -d` with **no `--wait`**.
+
+**Corrected.** The `celery inspect ping` healthchecks in `docker-compose.prod.yml:50,76` *are* read —
+by the `autoheal` sidecar, which restarts unhealthy workers. That is a real remediation loop. And
+"bad env" / "tasks.py import error" are app-fatal too (`config.py` `sys.exit(1)`s at import;
+`routers/videos.py:52` imports `worker.tasks` at module scope), so those *do* fail Phase 1 and
+trigger rollback.
+
+**The sharp, genuinely unguarded case is `beat`** (`docker-compose.prod.yml:82-91`): no healthcheck
+and **no `autoheal` label**, so nothing can distinguish a running beat from a dead one. Silent beat
+death stops `purge_stale_youtube_analytics` (YouTube ToS §III.E.4.b) and `purge_stale_event_logs`
+(GDPR Art. 5(1)(e)) with zero signal — a **compliance-drift path**, not just a throughput one.
+
+Note: Issue 282's own scope presumes a "worker heartbeat" signal that does not exist in the
+codebase, so building #282 as written is blocked on this.
+
+**Acceptance**
+- [ ] Worker/queue dimension on `/health` (or `/health/worker`); one required `inspect ping` smoke step
+- [ ] `beat` gets a healthcheck **and** an `autoheal` label
+
+---
+
+### Issue 514: the deploy preflight never contacts a third-party provider
+
+- [ ] **Status:** open · **Size:** S (~1 h) · **Lane:** L30 Batch E · **CORRECTED (high → medium), reproduced**
+      · *(merges the independently-found A4 / mC-1 / E1)*
+
+Both automated deploy paths run `scripts/doctor.py` **without `--full`**, and `--full` appears in
+zero workflows and zero scripts — only in eight prose docs. So the 2026-08-13 hardening that made
+`_live_stripe` and `_live_r2` drive the app's *own* clients — **the fix for the 10-week Stripe
+outage's probe defect** — has no automated caller. `docs/SOT.md:298` and `DECISIONS.md:10471` both
+describe the bare invocation as validating "live reachability of every secret".
+
+**Corrected scope.** Bare mode still runs 8 presence/format sections plus live Postgres and Redis,
+and **R2 *is* live-probed every deploy** via `/health` → `_check_storage()` → `head_bucket` with
+auto-rollback. Anthropic and Deepgram have partial nightly coverage. **The genuine gap narrows to
+Voyage and Stripe having no automated live probe anywhere.** Also: `has_failures` counts only
+`Status.FAIL`, so "cannot verify" (WARN) and "not configured" (SKIP) exit 0.
+
+**Evidence:** `.github/workflows/deploy.yml:279`, `scripts/deploy.sh:97`, `scripts/doctor.py:461`.
+
+**Acceptance**
+- [ ] `--full` on the preflight; decide whether provider flakiness may block a deploy (if not, run post-rollout non-blocking)
+- [ ] `SKIP` → `FAIL` for a dependency declared active; the two docs corrected
+
+---
+
+### Issue 515: reconcile externally-registered endpoints against the app's route table
+
+- [ ] **Status:** open · **Size:** M (~1.5 h) · **Lane:** L30 Batch E · `[unverified inventory]`
+
+The defect that kept billing dead for its entire life was a **path mismatch**: the webhook was
+registered in the Stripe Dashboard at `/webhooks/stripe` while the app serves `/billing/webhook` — a
+404 for its whole life. **It was fixed by hand in the Dashboard and nothing prevents recurrence.**
+The sweep counted **nine externally-registered values with zero automated reconciliation**: the
+Stripe webhook path, the OAuth redirect URI's path, R2 CORS origins (set from `sys.argv`), and the
+Cloudflare tunnel ingress rules.
+
+**Acceptance**
+- [ ] `doctor.py` resolves `stripe.WebhookEndpoint.list()` URLs and `OAUTH_REDIRECT_URI` against `main.app.routes`
+- [ ] Values unreadable from the repo are named explicitly, with the command that would read them
+
+---
+
+### Issue 516: a `PreToolUse` hook that refuses the wrong interpreter
+
+- [ ] **Status:** open · **Size:** S (~30 min) · **Lane:** L30 Batch F
+
+**The entire Claude Code hook surface is unused locally.** `.claude/` contains one hook and it
+`exit 0`s unless `CLAUDE_CODE_REMOTE=true` (`.claude/hooks/session-start.sh:12`). There is no
+`PreToolUse`, no `PostToolUse`, no `Stop`. Every project rule is therefore advisory prose.
+
+The controls that exist sit at the **git boundary** (`pre-push` → `ci_local.sh`, 8 required checks),
+which is defensible — nothing broken ships on a phantom result. The residual is the **in-session
+window**: a session can spend an hour producing *and reporting* wrong results before any gate runs.
+That window is exactly where `OFF_COURSE_BUGS:156` happened.
+
+**Acceptance**
+- [ ] `PreToolUse` hook on `Bash` blocks bare `python3` / `pytest` / `mypy` / `pip-audit`
+- [ ] `run_layer0.py` and `tests/conftest.py` self-guard: refuse to run when `sys.prefix` is not the repo `.venv`
+
+---
+
+### Issue 517: closing pressure for `docs/OFF_COURSE_BUGS.md`
+
+- [ ] **Status:** open · **Size:** S (~1 h) · **Lane:** L30 Batch F
+
+138 rows; **52 (38%) still open**; only **10** ever promoted to `docs/issues.md`. Rows sit open for
+months. The mechanism successfully prevents derailment but has **no closing pressure** — and *this
+is literally the "baby snag after baby snag" sensation*: the snags are not disappearing, they are
+accumulating in a file. The critic's measurement supports this reading directly: **August has the
+lowest fix-commit ratio in the project's history (36%)**, so the defect arrival rate is not rising.
+The feeling is backlog visibility, not a deteriorating codebase.
+
+**Acceptance**
+- [ ] `tests/test_off_course_budget.py` — a ratchet on open-row count plus a status-reconciliation assertion
+- [ ] A weekly triage step that either promotes a row to `docs/issues.md` or closes it as a non-issue
+
+---
+
+### Issue 518: migrate `DECISIONS.md` to ADRs with `Status:` and `Superseded-by:`
+
+- [ ] **Status:** open · **Size:** L (~4 h, interruptible) · **Lane:** L30 Batch F · **CONFIRMED**
+
+13,018 lines, 259 entries, unreadable whole, reversal language in 101 places, and supersession
+encoded only in heading parentheticals. It fails all three ADR properties, **and the failure has
+already caused reversals**: the prompt-cache floor flipped 2048 → 1024 → 2048 → 1024, and the
+Render-vs-VM deployment trail has two superseded entries never marked superseded — leaving
+`render.yaml` in the tree looking live.
+
+Migration path in `SYNTHESIS_process.md` §4 (steps 1–6, loses nothing, does not need a weekend).
+
+**Acceptance**
+- [ ] Per-decision `Status:` from {Proposed, Accepted, Deprecated, Superseded, Rejected} + `Superseded-by:` links
+- [ ] One test asserting every ADR carries an allowed status and every `Superseded-by` resolves
+- [ ] The two Render entries marked SUPERSEDED; history preserved verbatim
+
+---
+
+### Issue 519: restructure `CLAUDE.md` — the mandated Read Order is ~23,000 lines
+
+- [ ] **Status:** open · **Size:** M (~2.5 h) · **Lane:** L30 Batch F · **CORRECTED**
+
+`CLAUDE.md` mandates reading six files before writing any code. Those six total **~23,000 lines**.
+It is unsatisfiable and is therefore ignored — which means *none* of it is reliably in force. One of
+its own citations is wrong (`WINDOW_S` in `clip_engine/window.py`; it is at `candidates.py:22`) and a
+stale structure list in the same file **seeded Issue 497**.
+
+Also adopt the **prose→mechanism rule** from `SYNTHESIS_process.md` §2 as a section here:
+
+> Convert prose to mechanism when **any** holds. The trigger is recurrence or timing, never severity.
+> (1) it has been logged twice; (2) the knowledge must be applied *before* the failure is observable
+> (advice of the form "next time pass `--flag` on the first run" is structurally unfixable by
+> documentation and must become a **default**); (3) the prose is a machine input — if a script mirrors
+> a list that lives in a doc, that doc is a schema, so add a parity test or better, **scan**; (4) a
+> script can check it in under a second. **Corollary:** any remediation ending in "remember to…",
+> "consider…" or "if it recurs…" is an administrative control and will fail. **Gate corollary:** a
+> check that cannot fail is not a gate — every gate must assert a non-zero count of things actually
+> checked, and "could not run" must never share an exit code with "ran and passed."
+
+**Acceptance**
+- [ ] Read Order → "grep by topic"; conditional bodies moved to skills; size target stated and met
+- [ ] Phase 4 rewritten as a machine block + ~6 judgement questions + an adversarial subagent, replacing the ~30-item manual checklist (only 1 item of which is automated today)
+- [ ] The wrong `WINDOW_S` citation fixed and covered by Issue 508's test
+
+---
+
+### Issue 520: personalization is a measured no-op across its entire ramp while the API reports it active
+
+- [ ] **Status:** open · **Size:** M (~4–6 h) · **Lane:** L30 Batch G ·
+      **CORRECTED — the correction *strengthens* it. SEV1.**
+
+**Schedule this alongside Batch A. It outranks everything in the process track on consequence.**
+
+`LGBMClassifier` is fitted with `min_child_samples=20` untouched, making it a **constant predictor
+for label counts 21–40** (measured: 200/200 degenerate at n=38–39, 198/200 at n=40, 0/200 at n≥42).
+The blend weight ramps 0→cap across exactly n=20→40, so **the whole ramp lies inside the dead zone**
+and the model only becomes non-constant at n=41 — by which point the weight is already saturated.
+`blended_score` is then a strictly monotone transform of `score`, i.e. the persisted order is
+byte-identical to DNA-only — while `GET /videos/{id}/clips` returns
+`personalization={active: true, …}`. **Corollary: the LogisticRegression branch (n<20) is unreachable
+at serve time by construction.**
+
+Against the north star (*"it learns your style from your own analytics"*) this is an honesty defect
+as much as a correctness one: the product tells the creator it is personalizing when it provably is
+not.
+
+**Evidence:** `preference/model.py:196-208`, `:162-167`; `config.py:602`; `routers/clips.py:786-792`.
+
+**Acceptance**
+- [ ] Set `min_child_samples`/`num_leaves` for the small-n regime, **or** raise the LightGBM switchover to ~60 and give LR a non-zero weight
+- [ ] `PERSONALIZATION_THRESHOLD_LABELS` re-derived **from** the measured non-degeneracy point, not the other way round
+- [ ] `personalization.active` cannot report true while the blend is provably order-preserving
+- [ ] Blocked-by/blocks relationship with #521 recorded
+
+---
+
+### Issue 521: the rerank eval certifies the false property — its fixture is the one shape LightGBM can split
+
+- [ ] **Status:** open · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CONFIRMED** · **blocks #520**
+
+The Issue-480 rerank eval — **written four days ago to close exactly this class** — uses
+`rows_per_class: 20`, the single 40-row shape where the unique best split is exactly 20/20 and
+satisfies `min_child_samples` on both children. Verified by running the repo's own `_train_scorer`:
+**92 trees, spread 0.9999** on the fixture; move one label (24/16, 27/13, 30/10) and it collapses to
+**1 tree, spread 0.000000**. Its control test proves only that the harness *can* go red, by patching
+the weight to 0.
+
+This is the newest gate in the repo and it is already an instance of the house failure class. Fix it
+**before** #520 so the fix to #520 has a gate that can actually see it.
+
+**Evidence:** `tests/preference/test_rerank_eval.py:105-131`;
+`tests/eval/scenarios/ranking/rerank_preference_flips_order.yaml`.
+
+**Acceptance**
+- [ ] Parametrised over an unbalanced split; asserts `booster_.num_trees() > 1`
+- [ ] Verified to go red on today's tree
+
+---
+
+### Issue 522: the rate limiter fails CLOSED with an unhandled 500 — the record says the opposite
+
+- [ ] **Status:** open · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CORRECTED (severity kept high)**
+
+`slowapi 0.1.9` is constructed with neither `swallow_errors` nor `in_memory_fallback`, so any Redis
+error re-raises and **every rate-limited route returns 500 while the body never runs** — including
+`GET /auth/me` (120/min, called by `AuthGate` on every page load) and the OAuth callback.
+Reproduced against a dead Redis with the module's exact arguments. A Redis *stall* (>100 ms
+`socket_timeout`, e.g. a BGSAVE fork or CPU starvation from a concurrent encode) is sufficient.
+
+**Three documents state the opposite posture** — `DECISIONS.md:2633-2634`, `docs/AUDIT_BRIEF.md` §5,
+and the module's own docstring — and `limiter.py` carries a **99% coverage floor with zero tests for
+Redis-unavailable behaviour**. Combined with `/health` returning 200 during a Redis outage, a Redis
+stall is a **silent full user-facing outage that the only continuous uptime signal reports as green**.
+
+Related, same root: the spend guard's Redis client is the only one of the app's four without socket
+timeouts (`youtube/_redis.py:32`), so against a wedged-but-connected Redis `await r.ttl(...)` has no
+deadline and the documented fail-open arm is never reached — a hang is not an exception. Issue 312
+diagnosed this exact class and fixed one of the two clients.
+
+> ✅ **POSTURE DECIDED 2026-08-17 — `docs/DECISIONS.md` (Fail-open vs fail-closed).** The split
+> posture is adopted: **the limiter degrades to a local in-memory bucket** (availability control) and
+> **the spend guard fails CLOSED** (money control). This is no longer an open question — build to it.
+> Note the accepted cost: in-memory fallback at `--workers 2` means a **2× effective rate limit**
+> during a Redis outage, and a fail-closed spend guard means a Redis outage **blocks LLM features
+> entirely** — honest degraded copy for that already exists in `billing/spend_guard.py:98-102`.
+
+**Acceptance**
+- [ ] `Limiter(..., in_memory_fallback_enabled=True)` — no more unhandled 500s on `/auth/me`
+- [ ] Spend guard fails **closed** on Redis error (it currently fails open) and emits a signal when it does
+- [ ] `youtube/_redis.py` gets the same socket timeouts the other three clients use, pinned by a kwargs test —
+      **required for the fail-closed arm to be reachable at all** (a hang is not an exception)
+- [ ] A Redis-down test lands (there are currently none, behind a 99% coverage floor)
+- [ ] All three stale documents amended: `docs/DECISIONS.md:2633-2634`, `docs/AUDIT_BRIEF.md` §5 row 1, `limiter.py` docstring lines 42-44
+
+---
+
+### Issue 523: a Stripe Dashboard toggle creates a take-money-grant-nothing path
+
+- [ ] **Status:** open · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CONFIRMED (latent)**
+
+`payment_method_types` is never set, so the offered payment-method set is a **Dashboard UI toggle**.
+If ACH or BNPL is ever enabled: `checkout.session.completed` fires with `payment_status: "unpaid"` →
+correctly ignored; `async_payment_succeeded` fires days later → **no branch handles it**; and the 48h
+reconcile sweep filters on session **creation** time, so the settled session is already outside the
+window and never returns. Net: **money collected, zero minutes granted, permanently, with no error.**
+
+Stripe's own fulfillment documentation makes this explicit — its sample handler branches on
+`checkout.session.completed || checkout.session.async_payment_succeeded` and step 4 is "check the
+`payment_status` property" (verified against the live doc).
+
+Also in the same surface: **refunds and chargebacks reported by Stripe are unhandled in both
+directions**, and reconciliation runs Stripe→ledger only, so a charged-back pack leaves the minutes
+spendable. Issue 208 decided refunds *we* initiate; it says nothing about refunds Stripe *reports*.
+`[refund half unverified]`
+
+**Evidence:** `billing/stripe_client.py:93-116`, `:173-180`; `routers/billing.py:245-260`.
+
+**Acceptance**
+- [ ] `payment_method_types=["card"]` pinned **and** a branch on the async pair
+- [ ] `payment_status` checked before granting entitlement
+- [ ] Reconcile sweep keyed on settlement, not creation
+
+---
+
+### Issue 524: the render never verifies its own output
+
+- [ ] **Status:** open · **Size:** M (~3 h) · **Lane:** L30 Batch G · **CORRECTED, reproduced**
+
+Reproduced on the real production function: a silently **short** clip (0.400 s against a 0.6 s
+request, 28 KB) is uploaded, marked `render_status=done`, and announced **"Clip ready."** ffmpeg's
+"partial file / Decoding error" goes to the stderr that `_run` discards. The wholly-empty exit-0 case
+remains unguarded on `render_cleaned_clip_file` ("Clean ready.") and `render_summary_file`.
+
+**A `st_size > 0` check is not the fix** — a 28 KB truncated clip passes it.
+
+**Evidence:** `clip_engine/render.py:94-127`, `:941`, `:1105`, `:1288`; `worker/tasks.py:2666-2699`.
+
+**Acceptance**
+- [ ] ffprobe the output duration against the requested window on all three entry points
+- [ ] ffmpeg stderr surfaced on the success path
+
+---
+
+### Issue 525: `clips_ready` tells the creator "Your 0 clips are ready for review."
+
+- [ ] **Status:** open · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CORRECTED (high → medium), reproduced**
+
+`clips_ready` is enqueued with **no reference to how many clips exist**, so a zero-clip video emails
+*"Your 0 clips from "&lt;title&gt;" are ready for review."* with a "Review your clips" CTA, and writes
+an in-app row saying *"We found candidate clips from your video."* — with a
+`NotificationDelivery(status=sent)` committed for it. Both halves reproduced by driving the real
+`_generate_clips_async` and the production template renderer. No test passes `clip_count=0` anywhere.
+
+Zero clips is a **designed** state (the five-code `skip_reason` taxonomy, the dashboard "Why no
+clips?" link) and Issue 458 deliberately *increased* how often it happens. The terminal SSE event one
+line earlier is honest ("Generated 0 clip(s)."); the dishonesty is confined to the outbound
+notification. This is Class 5 — the class that escapes to production every time.
+
+**Related and worth fixing together:** `NOTIFY_BACKEND` defaults to `"console"` with **no production
+guard**, and the delivery row is committed `status=sent` *before* the send. `_send_console` logs and
+returns `None`, so a no-op is indistinguishable from delivery. Worse, **the dedupe short-circuit only
+retries rows whose status is `failed`, so console-era rows can never be re-sent after a flip to
+`resend` — the dead path is latched by its own success record.** The live prod value is unknowable
+from this repo (VM `.env`, never synced by `deploy.yml`), but `render.yaml:21-27` pairs
+`ENV=production` with `NOTIFY_BACKEND=console`.
+*(The `MAILING_ADDRESS` lifecycle short-circuit is **not** part of this — it is a recorded CAN-SPAM
+fail-safe, `DECISIONS.md:12800`.)*
+
+**Evidence:** `worker/tasks.py:3870-3884`, `:6730-6738`, `:6895-6900`; `config.py:993`;
+`notify/mailer.py:183-222`.
+
+**Acceptance**
+- [ ] Zero-case copy carrying the `skip_reason` the API already computes
+- [ ] `NOTIFY_BACKEND != resend` under `ENV=production` rejected or warned — the exact treatment `STORAGE_BACKEND=local` already gets
+- [ ] The handling backend stamped on the delivery row so console-era rows are re-sendable
+
+---
+
+### Issue 526: the GDPR data export has no UI, and the Privacy Policy says it does
+
+- [ ] **Status:** open · **Size:** M (~4 h, or 0.5 h for the policy-only fix) · **Lane:** L30 Batch H ·
+      **CORRECTED (high → medium), reproduced**
+
+Three endpoints, a table, a Celery task, integration tests, and a queue prod consumes — and **zero
+UI**. Verified by parsing every API path literal in non-test `frontend/src`: **100 distinct backend
+paths, zero containing "export"**. Meanwhile `static/privacy.html:162` tells every visitor the export
+is "made available as a download from your account". The sibling erasure capability *did* get UI
+(`AccountDeletion.tsx`), so this is an omission, not a house convention.
+
+**Corrections that lower the severity:** it is already tracked in the repo's own queue
+(`docs/issues.md:4457`, Issue 495 deferral list); the very next policy paragraph gives a working
+email channel, so Art. 15/20 remains exercisable inside the statutory window; and the hollow is
+exactly one layer thick — the missing button.
+
+**Acceptance**
+- [ ] Either ship the UI affordance **or** correct the one policy clause (decide explicitly; do not leave both)
+
+---
+
+### Issue 527: paid capabilities that reach nobody — audit and decide
+
+- [ ] **Status:** open · **Size:** M (~2 h to triage) · **Lane:** L30 Batch H · mixed verification
+
+A class the audit did not set out to find: work that costs money, latency or disk and is consumed by
+nothing. Each needs a **delete / wire-up / keep** decision, not a fix:
+
+- **`demographics`** — a paid YouTube Analytics report fetched per creator, refreshed daily, purged
+  on a schedule, **read by nothing**. README, `walkthrough.md`, `docs/SOT.md` and
+  `docs/COMPLIANCE.md` all state it feeds the DNA. Independently verified: `worker/tasks.py:5030`'s
+  own comment attributes three consumers to it, and **all three read `AudienceActivity` only**
+  (`dna/builder.py:321`, `routers/upload_intel.py:45`, `chat/tools.py:348`). *A YouTube scope
+  justified to Google for a purpose that does not exist is a data-minimisation problem as well as
+  waste.* **CONFIRMED, and stronger than originally filed.**
+- **`GET /creators/me/thumbnail-patterns`** — a hardened, thrice-rate-limited, billed vision endpoint
+  with **zero callers** in `frontend/src` or `static/`. **CONFIRMED.**
+- **`ix_dna_embeddings_hnsw`** — serves a `<=>` query that has never existed, with a green
+  integration test attesting to it; `DECISIONS.md:8957`'s justification ("the cosine query was an
+  unindexed scan") is false. Also moots Issue 56's deferred RLS/ANN tradeoff, which is unfalsifiable
+  because no ANN scan exists. **CORRECTED → low.**
+- **`clip_impressions`** — inserted **and committed inside a GET**, and `Review.tsx:239-246` polls
+  that GET every 4 s while any clip renders, so one viewing session writes ~150 duplicate rows per
+  clip. Together with `ClipTriage` these are the two most valuable data assets in the project and
+  **`grep keep_rate` returns zero hits repo-wide.** *(The "no index" claim is refuted — migration
+  0037 indexes `(creator_id, shown_at)`; `models.py` merely fails to mirror it.)* **CORRECTED → low.**
+- **`GET /billing/packs` is dead and `Pricing.tsx:21-29` retypes the six pack prices**, guarded by a
+  test asserting three hardcoded strings. The server *is* the price authority (the client sends
+  `pack_id` only; Stripe displays the true amount before confirmation), so the failure is a
+  **pre-checkout misquote on the marketing page**, not a wrong charge — but it is a money-path drift
+  trap and worth closing even unverified. `[unverified]`
+- **`Usage.videos_processed` / `Usage.clips_generated`** — written by nothing, read by nothing,
+  permanently 0. *(The `usage` ledger itself is **not** dead output — its designed consumer is the
+  operator-run Monthly Cost Review, pinned in CI by `tests/test_incident_docs.py:35-45`.)*
+
+**Acceptance**
+- [ ] A delete/wire-up/keep decision recorded for each, in `docs/DECISIONS.md`
+- [ ] If `demographics` is deleted: the YouTube scope re-justified, and README/walkthrough/SOT/COMPLIANCE corrected
+- [ ] If kept: the consumer that justifies it is named and tested
+
+---
+
+### L30 — deliberately NOT filed
+
+Recorded so a future pass does not re-derive them. Full reasoning in
+`SYNTHESIS_technical.md` §3 "Excluded" and `SYNTHESIS_process.md` §8.
+
+**Refuted findings — do not re-file:** `response.model` is never recorded (every configured model is
+a pinned snapshot); `render.yaml` is armed to auto-deploy (inert without a linked Blueprint); the
+prompt-cache floor was never revisited after Opus 5 (recorded at `DECISIONS.md:969-971`; net value
+over the whole beta is single-digit dollars — **leave it**); `Unit` + `Coverage floor` duplicate work
+(consolidating would re-introduce the exact 7-week vacuous-gate outage Issue 479 fixed);
+`ci_local.sh` prints "Local CI passed" after skipping every gate (refuted on three grounds).
+
+**Rejected process changes:** a pre-commit hook, a merge queue, a required human review, a
+deploy-approval gate, a canary, Pact contract testing, and assertion-density linting (measured: 18 of
+3,102 test functions lack an assertion, ~15 of them legitimately). **None would have prevented
+anything in the corpus and several would make the process worse.**
+
+**Architecture explicitly ratified — do not "improve":** no service layer (the official FastAPI
+full-stack template does the same, and `_owned.py`/`_enqueue.py` are better than its equivalent);
+the single VM; `worker/tasks.py`'s line count (the defects came from **envelope duplication** across
+~60 `_async` bodies, not size — and 39 of 40 tasks pin explicit names, so a split is a 1–2 day job
+whenever wanted). These need **decision entries ratifying them**, not work — see
+`DECISIONS_DRAFTS.md` #1–#3.
 
 ---
 

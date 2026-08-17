@@ -117,8 +117,13 @@ Wait for explicit confirmation. Capture changed approaches in `docs/DECISIONS.md
 ### Phase 4 — REVIEW & ASSESS
 
 **Automated gates (Layer 0 — must be green before close)**
-- [ ] `python3 .claude/skills/production-assessment/scripts/run_layer0.py` passes
+- [ ] `.venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py` passes
       (ruff, mypy, coverage floor, bandit, pip-audit — no regression vs baseline)
+      **`.venv/bin/python`, never bare `python3`.** System python here has fastapi 0.115.4 against
+      the pinned 0.137.1 and a mypy that cannot import the pydantic plugin, so mypy aborts before
+      checking anything and the gate reports a vacuous `ok 0` — plus phantom test failures and a
+      phantom 77-CVE pip-audit. `scripts/ci_local.sh` prefixes `PATH` with `.venv/bin` for you.
+      (Issue 498)
 - [ ] If coverage dropped, tests added; if a gate baseline moved, justified here
 
 **Resource lifecycle**
@@ -199,7 +204,8 @@ split.
 
 ## Testing Rules
 
-- Full pytest run before every issue close
+- Full pytest run before every issue close — **`.venv/bin/python -m pytest`**, never bare `python3`
+  (see the interpreter note in Phase 4)
 - Tests for new behavior written with the code
 - 80/20: happy path + load-bearing edges (see global CLAUDE.md)
 - `tests/` mirrors source structure
