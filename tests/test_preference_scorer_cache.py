@@ -37,7 +37,7 @@ def _training_arrays(n_pos: int = 5, n_neg: int = 5):
 def _real_blob() -> bytes:
     """A genuine serialized scorer so `from_bytes` succeeds in the miss path."""
     X, y, w = _training_arrays()
-    return fit(X, y, w, threshold=20).to_bytes()
+    return fit(X, y, w, lgbm_min_labels=60).to_bytes()
 
 
 class _FakeSession:
@@ -127,7 +127,7 @@ def test_lru_eviction_bound(monkeypatch):
 
     monkeypatch.setattr(settings, "PREFERENCE_SCORER_CACHE_SIZE", 2)
     X, y, w = _training_arrays()
-    scorer = fit(X, y, w, threshold=20)
+    scorer = fit(X, y, w, lgbm_min_labels=60)
     creator = uuid.uuid4()
 
     scorer_cache.put((creator, 1), scorer)

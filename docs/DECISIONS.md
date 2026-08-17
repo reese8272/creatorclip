@@ -5,7 +5,95 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-17 (latest) — A known-red gate lands as `xfail(strict=True)`, never as a narrowed assertion (Issue 521)
+## 2026-08-17 (latest) — Two numbers, not one: the personalization threshold and the LightGBM switchover are separated (Issue 520)
+
+**Decision — `fit()` switches to LightGBM at a new `PREFERENCE_LGBM_MIN_LABELS = 60`, derived from a
+measured non-degeneracy floor of 41, instead of at `PERSONALIZATION_THRESHOLD_LABELS`.
+`min_child_samples` is pinned in code rather than inherited. The 20–60 range is served by the
+LogisticRegression branch, which becomes reachable at serve time for the first time.
+`PERSONALIZATION_THRESHOLD_LABELS` stays at 20. A `PreferenceScorer` now knows whether it
+discriminates at all, and one function — `effective_weight()` — is the sole producer of the blend
+weight for the reranker, the API and the offline harness.**
+
+**Why this diverges.** `PERSONALIZATION_THRESHOLD_LABELS` was answering two unrelated questions at
+once: *"does this creator have enough of their own feedback for us to honestly claim we are
+personalizing?"* and *"does this estimator have enough rows to learn anything?"*. Those have
+different right answers, and the gap between them was the entire defect. Measured on the repo's own
+`fit()` against lightgbm 4.6.0, 40 trials per label count:
+
+| n (labels) | trained booster | probability spread |
+|---|---|---|
+| 20–39 (every n, 40/40 trials) | 1 tree, 0 splits | **0.000000** |
+| 40 | degenerate in 17/40 trials | 0.0 or 0.9999 |
+| ≥41 | 92+ trees | 0.9999 |
+
+`min_child_samples=20` requires ≥20 rows in **both** children, so no split is legal below 40 rows and
+the only 40-row shape that splits is a knife-edge 20/20. Meanwhile the blend weight ramps 0→cap over
+exactly n=20→40 — **the entire maturity ramp sat inside the dead zone.** With a constant `pref_score`
+the blend is a strictly increasing affine transform of the DNA score, so the persisted order was
+byte-identical to DNA-only while `GET /videos/{id}/clips` returned `personalization={active: true}`.
+Against the north star (*"it learns your style from your own analytics"*) that is an honesty defect
+before it is a correctness one.
+
+**Why option B (raise the switchover) over option A (tune `min_child_samples` down).** Four reasons,
+in order of weight:
+
+1. **It restores the design the module already documents.** `preference/model.py`'s own docstring
+   claims "LogisticRegression cold-start → LightGBM warm-start". The LR branch was *unreachable at
+   serve time by construction* — `preference_weight` returned 0.0 for every n below the threshold,
+   which was also every n where LR ran. Option B makes the docstring true rather than rewriting it.
+2. **On 20–60 rows the industry standard is a linear model, not a shallower GBDT.** LightGBM's own
+   parameter-tuning guidance treats small `min_data_in_leaf` / `num_leaves` as the *over-fitting*
+   lever, not a small-data recipe. A boosted ensemble on 40 rows × 8 features with
+   `min_child_samples=5` fits noise, and per-creator run-to-run variance would exceed the signal.
+   Cold-start hybrid ranking (content-based → linear personalization → GBDT) is the standard ladder.
+3. **It leaves the creator-facing contract untouched.** Option A forces
+   `PERSONALIZATION_THRESHOLD_LABELS ≥ 41`, which moves the ramp cap to 82+ labels and changes the
+   number shown to the creator on the Review page from 20 to 45 — a real product regression adopted
+   to fix an implementation defect.
+4. **Both sides are measured, not assumed.** LR is non-degenerate and flips the eval fixture at every
+   n=40 split tested (`|coef|max ≈ 0.33`, spread 0.999); LightGBM is non-degenerate at every n ≥ 41
+   across 50/50, 75/25 and 90/10 balances. 41 is the floor; 60 carries a ~1.5× margin.
+
+**Why `PERSONALIZATION_THRESHOLD_LABELS` stays at 20 — the re-derivation the acceptance asked for.**
+With the switchover at 60, n ∈ [20, 60) is served by LogisticRegression, whose non-degeneracy point is
+n ≥ 2 with both classes present — a condition `preference/train.py` already enforces before it calls
+`fit`. So 20 now sits *above* the non-degeneracy point of the model that actually serves that range,
+where before it sat 21 *below* LightGBM's. The threshold's job is honesty about data volume; the
+model-capability constraint is now carried by a separately measured constant, and a `model_validator`
+refuses to boot if that constant is ever set back inside the dead zone.
+
+**The honesty half.** `active` could previously report `true` while the served order was provably
+unchanged, because it consulted the label count alone. Both the reranker and the API now read
+`effective_weight(scorer)`, which returns 0.0 for a degenerate model. The invariant
+`active ⟺ weight > 0 ⟺ the blend was applied` therefore holds because there is *one function*, not
+because three call sites each remember the same two conditions. `PersonalizationStatus` keeps its four
+fields; the observable change is that `active` can now be `false` while `labels >= threshold`.
+
+**Accepted costs, stated plainly.**
+- Creators whose newest blob is a 20–60-label LightGBM constant will immediately serve DNA order with
+  `active=false`. That is honest, and **identical in ranking to what they were already getting** —
+  the only thing that changes for them is that we stop claiming otherwise. They heal on their next
+  retrain, which the debounced `retrain_preference` fires on the next verdict.
+- **No migration and no backfill.** `_degenerate` is a plain bool, so it needs no entry in the
+  unpickling allowlist, and joblib restores `__dict__` without calling `__init__` — pre-520 blobs
+  simply lack the attribute and the property recomputes it lazily. Deliberately NOT wired into the
+  feature-schema drift guard: that would zero out personalization for every healthy n ≥ 60 model
+  until its owner happened to give feedback again, a regression adopted to fix a non-problem.
+- Expect the warn-only NDCG ratchet to fire **once per affected creator** on that first retrain,
+  because the served model genuinely changes shape. That is the ratchet working, not a regression —
+  do not chase it.
+
+**Source / evidence.** LightGBM parameter-tuning documentation on `min_data_in_leaf` /
+`min_child_samples`; measurements above, reproducible via `tests/preference/test_rerank_eval.py` and
+`tests/test_preference.py`. `preference/model.py`, `config.py`, `clip_engine/ranking.py`,
+`routers/clips.py`, `preference/efficacy.py`. Blocked by Issue 521 — see the entry below.
+
+**Date:** 2026-08-17
+
+---
+
+## 2026-08-17 — A known-red gate lands as `xfail(strict=True)`, never as a narrowed assertion (Issue 521)
 
 **Decision — when a test is written to expose a defect that has not been fixed yet, it lands
 `@pytest.mark.xfail(strict=True)` with the mechanism in the `reason=` string, and `pytest.ini`

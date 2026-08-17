@@ -50,10 +50,18 @@ function PersonalizationBand({ status }: { status: PersonalizationStatus }) {
           status.labels == scorer.label_count — POST-dedup, one per clip
           (newest verdict wins) — so a creator who re-rated the same clip five
           times sees the number the model actually trained on, not five. */}
+      {/* Issue 520: `active` no longer follows from `labels >= threshold`. A
+          creator can be well past the threshold while their model still returns
+          the same score for every clip, in which case we serve DNA order and say
+          so. Rendering the `N/threshold` progress unconditionally would print
+          nonsense like "45/20 clips rated" for exactly those creators, so the
+          progress fraction is shown only while it is still counting up. */}
       <span>
         {status.active
           ? `Personalized to your feedback (${status.labels} clips rated)`
-          : `Still learning — DNA-based ranking (${status.labels}/${status.threshold} clips rated)`}
+          : status.labels < status.threshold
+            ? `Still learning — DNA-based ranking (${status.labels}/${status.threshold} clips rated)`
+            : `Still learning — DNA-based ranking (${status.labels} clips rated)`}
       </span>
     </span>
   )

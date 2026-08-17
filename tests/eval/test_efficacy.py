@@ -97,26 +97,57 @@ def test_below_threshold_blend_falls_back_to_dna_and_beats_random():
 
 
 def test_trained_scorer_path_ranks_correctly() -> None:
-    """Above the threshold the real fit()+predict_score path runs (weight > 0). With perfectly
-    separable features the blend ranks positives first → NDCG@5 == 1.0."""
+    """Above the threshold the real fit()+predict_score path runs (weight > 0), and the
+    preference model must OVERTURN a DNA composite that points the wrong way.
+
+    Issue 520 — this test used to be unfalsifiable. It aligned ``dna_composite``
+    with relevance (0.9 for the relevant clips, 0.1 for the rest), so the DNA
+    ranking was already perfect and the blend, being a monotone function of it,
+    could not disturb that. ``ndcg == 1.0`` therefore held no matter what the
+    preference model did — including when it was the constant predictor the whole
+    20-40 band was producing in production. A test that passes for a broken model
+    is worse than no test, because it is cited as coverage.
+
+    Now ``dna_composite`` is ANTI-aligned with relevance, so NDCG@5 == 1.0 is
+    reachable ONLY if the preference model genuinely reorders. And the train split
+    is a 24/16 unbalanced n=40 — precisely the shape that was a measured no-op
+    before Issue 520 — so this doubles as the regression guard.
+
+    The DNA gap is 0.10 (0.45 vs 0.55), not 0.8, and the small number is load-
+    bearing rather than timid. The blend can move a clip by at most ``w`` times the
+    model's probability spread; at w=0.5 with LogisticRegression's L2-regularized
+    spread of ~0.28 (measured), the most it can overturn is ~0.14. A 0.8 gap would
+    make this test fail for a perfectly healthy model — asserting something the
+    design never promised. Personalization reweights; it does not overrule.
+    """
     base = datetime(2026, 1, 1, tzinfo=UTC)
-    # 30 train clips (above threshold 20) → weight > 0; perfectly separable.
+    # n=40, deliberately UNBALANCED (24 positive / 16 negative).
     train = []
-    for i in range(15):
-        train.append(_clip(1.0, 5.0, 0.9, base + timedelta(days=i)))
-        train.append(_clip(0.0, 0.0, 0.1, base + timedelta(days=i, hours=1)))
+    for i in range(24):
+        train.append(_clip(1.0, 5.0, 0.45, base + timedelta(days=i)))
+    for i in range(16):
+        train.append(_clip(0.0, 0.0, 0.55, base + timedelta(days=i, hours=1)))
     ev = [
-        _clip(1.0, 5.0, 0.9, base + timedelta(days=40)),
-        _clip(1.0, 5.0, 0.9, base + timedelta(days=41)),
-        _clip(0.0, 0.0, 0.1, base + timedelta(days=42)),
-        _clip(0.0, 0.0, 0.1, base + timedelta(days=43)),
+        _clip(1.0, 5.0, 0.45, base + timedelta(days=40)),
+        _clip(1.0, 5.0, 0.45, base + timedelta(days=41)),
+        _clip(0.0, 0.0, 0.55, base + timedelta(days=42)),
+        _clip(0.0, 0.0, 0.55, base + timedelta(days=43)),
     ]
+    # Precondition: the DNA composite alone ranks the IRRELEVANT clips first, so a
+    # no-op blend cannot score 1.0. Without this the assertion below is vacuous
+    # again — which is the entire history of this test.
+    dna_order = [c.relevance for c in sorted(ev, key=lambda c: c.dna_composite, reverse=True)]
+    assert dna_order == [0.0, 0.0, 1.0, 1.0], "fixture is no longer anti-aligned"
+
     try:
         m = compute_creator_metrics(train, ev, k=5, seed=1)
     except OSError:
         pytest.skip("libgomp.so.1 not available on this host")
     assert m is not None
-    assert m.ndcg["dna_preference"] == pytest.approx(1.0)
+    assert m.ndcg["dna_preference"] == pytest.approx(1.0), (
+        "the blend did not overturn an anti-aligned DNA composite — either the "
+        "preference model is degenerate or its weight is not being applied"
+    )
 
 
 def test_blend_parity_with_shared_helper() -> None:

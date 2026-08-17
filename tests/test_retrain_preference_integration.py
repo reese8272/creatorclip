@@ -180,3 +180,115 @@ async def test_outcome_arrival_triggers_a_retrain(db_session: AsyncSession):
         )
     finally:
         await _cleanup(db_session, creator_id)
+
+
+# ── Issue 520 — the end-to-end proof that personalization is no longer a no-op ─
+
+
+def _candidate(start_s: float, score: float, hook: float, dna: float, rank: int) -> dict:
+    """A scored-candidate dict in the shape persist_ranked_clips consumes."""
+    return {
+        "setup_start_s": start_s,
+        "start_s": start_s,
+        "end_s": start_s + 60.0,
+        "peak_s": start_s + 40.0,
+        "score": score,
+        "dna_match": dna,
+        "features": {"hook_energy": hook},
+        "principle": "test-fixture",
+        "reasoning": "",
+        "origin": "signal",
+        "rank": rank,
+    }
+
+
+@pytest.mark.asyncio
+async def test_unbalanced_40_label_creator_gets_a_genuinely_reordered_ranking(
+    db_session: AsyncSession,
+):
+    """The whole SEV1, end to end, through the real persist path (Issue 520).
+
+    Before the fix this exact creator — 40 labels on a 24/16 UNBALANCED split —
+    trained a LightGBM model with ``min_child_samples`` left at LightGBM's default
+    of 20. A split needs >=20 rows in both children, so none is legal below 40
+    rows, and the only 40-row shape that splits is a perfectly balanced 20/20.
+    The booster came back with a single leaf and returned the SAME probability for
+    every clip. ``(1-w)*fit + w*constant`` is then a strictly increasing affine
+    transform of the fit score, so the re-sort could not reorder anything: the
+    persisted rank order was byte-identical to DNA-only while
+    ``GET /videos/{id}/clips`` reported ``personalization={active: true}``.
+
+    The unbalanced split is the point. A balanced 20/20 is the one shape that
+    accidentally worked, which is why this defect survived its own eval gate.
+
+    Numbers are chosen from a measurement, not by feel: on this training set the
+    fitted model separates the two candidate patterns by 0.608 in probability, and
+    at the cap weight of 0.5 that lets the blend overturn a DNA score gap of up to
+    0.608. The gap here is 0.30 — comfortably inside it, and still far too large
+    for a constant predictor (which can overturn exactly 0.0) to touch.
+    """
+    from clip_engine.ranking import persist_ranked_clips
+    from preference.train import load_latest
+    from routers.clips import _build_personalization_status
+
+    feedback = tuple([(0.8, FeedbackAction.upvote)] * 24 + [(0.2, FeedbackAction.downvote)] * 16)
+    creator_id, _seeded = await _seed_creator_with_feedback(db_session, feedback=feedback)
+    try:
+        await _retrain_preference_async(str(creator_id))
+        assert await _model_versions(db_session, creator_id) == [1]
+
+        scorer = await load_latest(db_session, creator_id)
+        assert scorer is not None
+        assert scorer.label_count == 40
+        assert scorer.is_degenerate is False, (
+            "the trained model returns a constant score for every clip — "
+            "personalization is a measured no-op (Issue 520)"
+        )
+
+        status = _build_personalization_status(scorer)
+        assert status.active is True
+        assert status.weight > 0.0
+
+        # A SECOND video: persist_ranked_clips is idempotent and no-ops when the
+        # video already has clips, and the seeded training clips live on the first.
+        video = Video(
+            creator_id=creator_id,
+            youtube_video_id=f"yt_{uuid.uuid4().hex[:8]}",
+            title="Issue 520 rerank target",
+            kind=VideoKind.long,
+        )
+        db_session.add(video)
+        await db_session.commit()
+
+        # Two candidates whose DNA fit order is the INVERSE of the creator's taste:
+        # the quiet clip has the better fit score (0.9), the high-hook clip the
+        # worse one (0.6). Only a model that learned the creator's pattern flips it.
+        dna_leader = _candidate(10.0, score=0.9, hook=0.2, dna=0.2, rank=1)
+        feedback_favorite = _candidate(200.0, score=0.6, hook=0.8, dna=0.8, rank=2)
+        await persist_ranked_clips(
+            db_session, video.id, creator_id, [dna_leader, feedback_favorite]
+        )
+
+        persisted = (
+            (
+                await db_session.execute(
+                    select(Clip).where(Clip.video_id == video.id).order_by(Clip.rank)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(persisted) == 2
+        served = [c.start_s for c in persisted]
+
+        assert served == [200.0, 10.0], (
+            f"persisted rank order by start_s is {served}, but DNA-only order is "
+            "[10.0, 200.0] — the creator's own feedback reordered nothing, so this "
+            "is DNA ranking wearing a personalization label"
+        )
+        assert all(c.blended_score is not None for c in persisted), (
+            "NULL blended_score means personalization was not applied (Issue 465)"
+        )
+        assert [c.rank for c in persisted] == [1, 2], "ranks must be dense 1..n after the rerank"
+    finally:
+        await _cleanup(db_session, creator_id)

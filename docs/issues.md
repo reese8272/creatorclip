@@ -4509,7 +4509,7 @@ Also adopt the **prose→mechanism rule** from `SYNTHESIS_process.md` §2 as a s
 
 ### Issue 520: personalization is a measured no-op across its entire ramp while the API reports it active
 
-- [ ] **Status:** open · **Size:** M (~4–6 h) · **Lane:** L30 Batch G ·
+- [x] **Status:** ✅ **DONE 2026-08-17** · **Size:** M (~4–6 h) · **Lane:** L30 Batch G ·
       **CORRECTED — the correction *strengthens* it. SEV1.**
 
 **Schedule this alongside Batch A. It outranks everything in the process track on consequence.**
@@ -4530,10 +4530,69 @@ not.
 **Evidence:** `preference/model.py:196-208`, `:162-167`; `config.py:602`; `routers/clips.py:786-792`.
 
 **Acceptance**
-- [ ] Set `min_child_samples`/`num_leaves` for the small-n regime, **or** raise the LightGBM switchover to ~60 and give LR a non-zero weight
-- [ ] `PERSONALIZATION_THRESHOLD_LABELS` re-derived **from** the measured non-degeneracy point, not the other way round
-- [ ] `personalization.active` cannot report true while the blend is provably order-preserving
-- [ ] Blocked-by/blocks relationship with #521 recorded
+- [x] Set `min_child_samples`/`num_leaves` for the small-n regime, **or** raise the LightGBM switchover to ~60 and give LR a non-zero weight
+- [x] `PERSONALIZATION_THRESHOLD_LABELS` re-derived **from** the measured non-degeneracy point, not the other way round
+- [x] `personalization.active` cannot report true while the blend is provably order-preserving
+- [x] Blocked-by/blocks relationship with #521 recorded
+
+**Built 2026-08-17. Took the second option** — raise the switchover, make the LR branch reachable —
+for reasons recorded in `docs/DECISIONS.md` (2026-08-17). Summary: it restores the design
+`preference/model.py`'s own docstring already claims; a linear model is the standard choice on 20–60
+rows, where a shallower GBDT would fit noise; and tuning `min_child_samples` down would have forced
+`PERSONALIZATION_THRESHOLD_LABELS` to ≥41, moving the creator-facing number from 20 to 45 — a product
+regression adopted to fix an implementation defect.
+
+**The two numbers are now separate.** `PERSONALIZATION_THRESHOLD_LABELS` (20) answers "enough
+feedback to be honest about?"; the new `PREFERENCE_LGBM_MIN_LABELS` (60) answers "enough rows for
+this estimator to split?". One constant answering both was the root cause. `min_child_samples` is
+pinned in code rather than inherited, because the switchover is derived from it and a dependency bump
+would otherwise move the dead zone silently.
+
+**The re-derivation.** With the switchover at 60, n ∈ [20,60) is served by LogisticRegression, whose
+non-degeneracy point is n ≥ 2 with both classes present — a condition `preference/train.py` already
+enforces. So 20 now sits *above* the non-degeneracy point of the model that actually serves that
+range, where before it sat 21 *below* LightGBM's. A `model_validator` refuses to boot if
+`PREFERENCE_LGBM_MIN_LABELS` is ever set back below the measured floor of 41.
+
+**The honesty half is structural, not a second check.** `effective_weight(scorer)` is the single
+producer of the blend weight, returning 0.0 for a degenerate model, and the reranker, the API and the
+offline efficacy harness all read it. `active ⟺ weight > 0 ⟺ the blend was applied` holds because
+there is one function, not because three call sites remember the same two conditions. A degenerate
+model returns early in the reranker, so `blended_score` stays NULL — which the Issue-465 contract
+already defines as "personalization was not applied", so the honest case reports itself downstream
+for free. `PersonalizationStatus` keeps its four fields; the observable change is that `active` can be
+`false` while `labels >= threshold`, and `Review.tsx` no longer renders a "45/20 clips rated"
+progress fraction for exactly those creators.
+
+**No migration.** `_degenerate` is a plain bool (so no unpickling-allowlist entry) and joblib restores
+`__dict__` without `__init__`, so pre-520 blobs lack the attribute and the property recomputes it
+lazily. Deliberately NOT wired into the feature-schema drift guard — that would zero out
+personalization for every healthy n ≥ 60 model until its owner happened to give feedback again.
+
+**Three vacuous greens fixed in the same change**, all inside this issue's blast radius rather than
+logged off-course (two could not even compile past the `threshold` → `lgbm_min_labels` rename):
+`tests/test_preference.py` fit n=30 and asserted only `isinstance` / round-trip equality — a constant
+model round-trips perfectly, and round-tripping a 1-leaf booster proves almost nothing about the
+Booster serialization path it exists to guard; `tests/eval/test_efficacy.py` asserted
+`ndcg["dna_preference"] == 1.0` with `dna_composite` already perfectly aligned to relevance, so it was
+unreachable-by-failure. The efficacy fixture is now ANTI-aligned, with a DNA gap of 0.10 sized from
+the measured LR probability spread of ~0.28 — a larger gap would fail for a healthy model, since
+personalization reweights rather than overrules.
+
+**Verification.**
+- `tests/preference/test_rerank_eval.py`: the four Issue-521 strict-xfails **XPASSed and failed the
+  run** — the intended signal, and the reason the markers could then be removed. Now 25 passed.
+- Full suite **3199 passed, 64 skipped, 0 xfailed** (3183 → 3199).
+- Layer 0 all green: ruff 0, mypy 0, bandit 0, pip-audit 0, coverage 84.85, `preference` 94.04
+  (floor 88), `clip_engine` 93.31 (floor 91). mypy re-run directly — "no issues found in 29 source
+  files", exit 0 — because a Layer-0 `ok 0` is not yet trustworthy on its own (Issue 499).
+- Frontend `Review.test.tsx` 21/21.
+- ⚠️ The end-to-end integration test
+  (`test_unbalanced_40_label_creator_gets_a_genuinely_reordered_ranking`) **was not run locally** —
+  no Postgres and no Docker daemon on this box. It is verified by CI's integration job. Its numbers
+  are chosen from a local simulation of the same training set: the fitted model separates the two
+  candidate patterns by 0.608 in probability, so at the 0.5 cap weight the blend can overturn a DNA
+  score gap up to 0.608; the fixture uses 0.30.
 
 ---
 

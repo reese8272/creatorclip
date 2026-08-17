@@ -333,12 +333,18 @@ def _blend_scores(
     Below the personalization threshold the weight is 0 → the blend reduces to the DNA
     composite (the honest production fallback).
     """
-    from preference.model import blend_scores, preference_weight
+    from preference.model import blend_scores, effective_weight
 
     scorer = _train_scorer(train, half_life_days=half_life_days)
     # scorer.label_count == fitted trainable labels — the same count production feeds
-    # preference_weight (clip_engine/ranking.py), excluding eval-only rows.
-    weight = preference_weight(scorer.label_count) if scorer is not None else 0.0
+    # effective_weight (clip_engine/ranking.py), excluding eval-only rows.
+    #
+    # effective_weight, not preference_weight (Issue 520): the Issue-475 parity
+    # promise is that these offline numbers measure what production serves. Using
+    # the maturity ramp alone here would score a degenerate model as personalized
+    # while production correctly declines to blend it — parity broken in exactly
+    # the direction that hides the defect this harness exists to catch.
+    weight = effective_weight(scorer)
     if scorer is not None and weight > 0.0:
         # The shared production blend (Issue 465) — never a hand copy, so the
         # offline numbers measure the formula rerank_with_preference serves.

@@ -137,6 +137,36 @@ def test_valid_preference_settings_accepted():
     assert s.PREFERENCE_WEIGHT_CAP == 1.0
 
 
+# ── the LightGBM switchover must stay above its MEASURED floor (Issue 520) ───
+
+
+def test_lgbm_switchover_below_measured_floor_is_rejected():
+    """The config cannot be set back into the dead zone.
+
+    This is Issue 520's root cause turned into a boot-time failure. The original
+    defect was not a wrong number — it was that nothing related the switchover to
+    what LightGBM could actually do at that many rows, so a plausible 20 produced
+    a constant predictor across the whole maturity ramp while the API reported
+    personalization active. Anything below the measured floor of 41 now refuses
+    to start.
+    """
+    with pytest.raises(pydantic.ValidationError, match="PREFERENCE_LGBM_MIN_LABELS"):
+        Settings(PREFERENCE_LGBM_MIN_LABELS=20)
+
+
+def test_lgbm_switchover_below_the_honesty_threshold_is_rejected():
+    """The switchover may not sit below the threshold we promise personalization at,
+    which would leave the range we HAVE promised with no estimator behind it."""
+    with pytest.raises(pydantic.ValidationError):
+        Settings(PREFERENCE_LGBM_MIN_LABELS=45, PERSONALIZATION_THRESHOLD_LABELS=50)
+
+
+def test_lgbm_switchover_at_the_measured_floor_is_accepted():
+    """41 is the measured floor itself — the boundary must be inclusive, or the
+    number recorded in config.py's comment would contradict the validator."""
+    assert Settings(PREFERENCE_LGBM_MIN_LABELS=41).PREFERENCE_LGBM_MIN_LABELS == 41
+
+
 # ── from_bytes rejects a corrupt blob ────────────────────────────────────────
 
 

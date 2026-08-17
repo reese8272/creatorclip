@@ -62,7 +62,9 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `MIN_VIDEOS_FOR_DNA` | No | Default `10` |
 | `MIN_SHORTS_FOR_DNA` | No | Default `5` |
 | `SHORTS_MAX_DURATION_S` | No | Default `180`. YouTube's official Shorts maximum (raised from 60s in Oct 2024). Issue 87. |
-| `PERSONALIZATION_THRESHOLD_LABELS` | No | Default `20` |
+| `PERSONALIZATION_THRESHOLD_LABELS` | No | Default `20`. The **honesty** threshold — labels before we tell a creator personalization is on. Deliberately NOT the estimator switchover; see the next two rows (Issue 520). |
+| `PREFERENCE_LGBM_MIN_LABELS` | No | Default `60`. The **model-capability** switchover: below it `fit()` uses LogisticRegression, at/above it LightGBM. Derived from a measured non-degeneracy floor of 41 — the config refuses to boot below that. Issue 520. |
+| `PREFERENCE_LGBM_MIN_CHILD_SAMPLES` | No | Default `20`. Pinned rather than inherited from LightGBM, because the switchover above is derived from it. Issue 520. |
 | `LLM_TIMEOUT_SECONDS` | No | Default `120` |
 | `ACTIVE_SPEAKER_REFRAME_ENABLED` | No | Default `False`. Gates the per-frame MediaPipe reframe path in render.py (Issue 189). **ON in prod since 2026-08-05** (Issue 422 — all four unlocks verified live). |
 | `REFRAME_MIN_MAPPING_CONFIDENCE` | No | Default `0.3` (prod `0.2`). Speaker-map confidence floor for the speaker_cut rung; side-by-side layouts honestly score low because co-occurrence votes carry no signal (Issue 422 drill). |

@@ -170,7 +170,7 @@ async def rerank_with_preference(
     after this call means personalization was not applied to that clip.
     """
     from preference.features import clip_features
-    from preference.model import blend_scores, preference_weight
+    from preference.model import blend_scores, effective_weight
     from preference.train import load_latest
 
     scorer = await load_latest(session, creator_id)
@@ -180,8 +180,22 @@ async def rerank_with_preference(
     # Honest personalization threshold: below it the model gets weight 0, so the
     # DNA + signal ranking is returned unchanged (no false personalization). The
     # weight ramps with the creator's own feedback volume. (Issue 60)
-    weight = preference_weight(scorer.label_count)
+    #
+    # effective_weight, not preference_weight (Issue 520): a mature-but-degenerate
+    # model would otherwise get a healthy weight and write a blended_score that
+    # cannot reorder anything, making the no-op indistinguishable from real
+    # personalization downstream. Returning early here means blended_score stays
+    # NULL, which the Issue-465 contract already defines as "personalization was
+    # not applied" — so the honest case needs no new signal, just this call.
+    weight = effective_weight(scorer)
     if weight == 0.0:
+        if getattr(scorer, "is_degenerate", False):
+            logger.info(
+                "Preference model for creator %s is degenerate (label_count=%d) — "
+                "serving DNA ranking and reporting personalization inactive",
+                creator_id,
+                scorer.label_count,
+            )
         return clips
 
     def _features(clip: Clip) -> list[float]:

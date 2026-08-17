@@ -135,25 +135,86 @@ def _training_data(n_pos=5, n_neg=5):
     return X, y, w
 
 
-def test_fit_logistic_below_threshold():
+def _separable_data(n_pos, n_neg):
+    """Learnable data: positives and negatives occupy disjoint feature ranges.
+
+    Issue 520 — the random ``_training_data`` above is fine for round-trip and
+    range assertions, but it cannot support a "did the model actually learn
+    anything?" assertion, because on noise there is nothing to learn. Any test
+    about model CAPABILITY has to train on data with a signal in it.
+    """
+    rng = np.random.default_rng(7)
+    n = n_pos + n_neg
+    X = np.empty((n, len(FEATURE_NAMES)))
+    X[:n_pos] = 0.75 + 0.2 * rng.random((n_pos, len(FEATURE_NAMES)))
+    X[n_pos:] = 0.05 + 0.2 * rng.random((n_neg, len(FEATURE_NAMES)))
+    y = np.array([1] * n_pos + [0] * n_neg)
+    return X, y, np.ones(n)
+
+
+def test_fit_below_switchover_uses_logistic_regression():
     X, y, w = _training_data(5, 5)
-    scorer = fit(X, y, w, threshold=20)
+    scorer = fit(X, y, w, lgbm_min_labels=60)
     assert isinstance(scorer, PreferenceScorer)
+    assert type(scorer._model).__name__ == "LogisticRegression"
     assert scorer.label_count == 10
 
 
-def test_fit_lgbm_at_threshold():
-    X, y, w = _training_data(15, 15)
+def test_fit_below_switchover_is_not_a_constant_predictor():
+    """Issue 520 — the test that would have caught the original defect.
+
+    The old ``test_fit_lgbm_at_threshold`` fit n=30 and asserted only
+    ``isinstance(scorer, PreferenceScorer)``. That passes for a model that
+    returns the identical probability for every clip — which is exactly what the
+    n=30 LightGBM branch was producing in production for the whole life of the
+    feature. Assert the property that matters: the fitted model discriminates.
+    """
+    X, y, w = _separable_data(24, 16)  # n=40: the LightGBM dead zone, pre-520
+    scorer = fit(X, y, w)
+    assert type(scorer._model).__name__ == "LogisticRegression"
+    assert scorer.is_degenerate is False
+    high = scorer.predict_score([0.9] * len(FEATURE_NAMES))
+    low = scorer.predict_score([0.1] * len(FEATURE_NAMES))
+    assert high > low, "the model separates the training patterns in name only"
+
+
+def test_fit_lgbm_above_switchover_learns_splits():
+    """Above PREFERENCE_LGBM_MIN_LABELS the booster must actually split.
+
+    ``num_trees() > 1`` is the cheap public signal; the leaf count is the one a
+    future ``n_estimators`` change cannot fake.
+    """
+    X, y, w = _separable_data(40, 40)  # n=80, comfortably above the 60 switchover
     try:
-        scorer = fit(X, y, w, threshold=20)
+        scorer = fit(X, y, w)
     except OSError:
         pytest.skip("libgomp.so.1 not available on this host")
-    assert isinstance(scorer, PreferenceScorer)
+    assert type(scorer._model).__name__ == "LGBMClassifier"
+    booster = scorer._model.booster_
+    assert booster.num_trees() > 1
+    assert max(t["num_leaves"] for t in booster.dump_model()["tree_info"]) > 1
+    assert scorer.is_degenerate is False
+
+
+def test_fit_flags_a_degenerate_model_instead_of_serving_it():
+    """A model that cannot learn is flagged, not silently served (Issue 520).
+
+    Single-feature-value data gives LightGBM nothing to split on, so the booster
+    comes back with one leaf. The scorer must know that about itself — that flag
+    is what stops ``effective_weight`` from reporting personalization."""
+    n = 80
+    X = np.ones((n, len(FEATURE_NAMES)))
+    y = np.array([1] * (n // 2) + [0] * (n // 2))
+    try:
+        scorer = fit(X, y, np.ones(n))
+    except OSError:
+        pytest.skip("libgomp.so.1 not available on this host")
+    assert scorer.is_degenerate is True
 
 
 def test_predict_score_in_range():
     X, y, w = _training_data()
-    scorer = fit(X, y, w, threshold=20)
+    scorer = fit(X, y, w, lgbm_min_labels=60)
     feats = clip_features(signal_density=1.0, has_retention_spike=True)
     score = scorer.predict_score(feats)
     assert 0.0 <= score <= 1.0
@@ -165,7 +226,7 @@ def test_predict_score_positive_features_higher():
     # Make all positives have signal_density=1.0 and negatives=0.0
     X[:10, FEATURE_NAMES.index("signal_density")] = 1.0
     X[10:, FEATURE_NAMES.index("signal_density")] = 0.0
-    scorer = fit(X, y, w, threshold=20)
+    scorer = fit(X, y, w, lgbm_min_labels=60)
 
     high = scorer.predict_score(clip_features(signal_density=1.0))
     low = scorer.predict_score(clip_features(signal_density=0.0))
@@ -176,7 +237,7 @@ def test_predict_score_positive_features_higher():
 def test_scorer_round_trips_joblib():
     """A legitimate scorer survives to_bytes → from_bytes with identical predictions."""
     X, y, w = _training_data()
-    scorer = fit(X, y, w, threshold=20)
+    scorer = fit(X, y, w, lgbm_min_labels=60)
     blob = scorer.to_bytes()
     reloaded = PreferenceScorer.from_bytes(blob)
     feats = clip_features(signal_density=0.5)
@@ -186,27 +247,49 @@ def test_scorer_round_trips_joblib():
 def test_scorer_round_trips_preserves_label_count():
     """label_count attribute survives the serialisation round-trip."""
     X, y, w = _training_data(n_pos=7, n_neg=3)
-    scorer = fit(X, y, w, threshold=20)
+    scorer = fit(X, y, w, lgbm_min_labels=60)
     reloaded = PreferenceScorer.from_bytes(scorer.to_bytes())
     assert reloaded.label_count == scorer.label_count
 
 
+def test_legacy_blob_without_degeneracy_flag_recomputes_it():
+    """Blobs written before Issue 520 have no ``_degenerate`` attribute.
+
+    joblib restores ``__dict__`` without calling ``__init__``, so the property
+    must recompute lazily rather than raise or default to a wrong answer. This is
+    what makes the fix migration-free — delete this test and someone will "tidy
+    up" the lazy branch and silently disable personalization for every model
+    trained before the deploy."""
+    X, y, w = _separable_data(24, 16)
+    scorer = fit(X, y, w)
+    reloaded = PreferenceScorer.from_bytes(scorer.to_bytes())
+    del reloaded._degenerate  # simulate a pre-520 blob
+    assert reloaded.is_degenerate is False
+
+
 def test_lgbm_scorer_round_trips_through_allowlist():
     """The LightGBM branch of the serialization allowlist round-trips (2026-07-20
-    assessment): fit ABOVE the threshold (LGBMClassifier + Booster path), dump,
+    assessment): fit ABOVE the switchover (LGBMClassifier + Booster path), dump,
     restore through _RestrictedUnpickler, and predict identically. Without this,
     a dep bump or an incomplete allowlist makes from_bytes raise and load_latest
-    silently disables personalization for every mature model."""
-    X, y, w = _training_data(15, 15)
+    silently disables personalization for every mature model.
+
+    Trained on SEPARABLE data at n=80 (Issue 520). It used to train on n=30, which
+    produced a 1-leaf constant booster — a round-trip test whose subject had
+    almost no content to preserve, so it could not have caught a real
+    serialization regression in the Booster."""
+    X, y, w = _separable_data(40, 40)
     try:
-        scorer = fit(X, y, w, threshold=20)  # n=30 ≥ threshold → LightGBM
+        scorer = fit(X, y, w)  # n=80 ≥ PREFERENCE_LGBM_MIN_LABELS → LightGBM
     except OSError:
         pytest.skip("libgomp.so.1 not available on this host")
     assert type(scorer._model).__name__ == "LGBMClassifier"
+    assert scorer._model.booster_.num_trees() > 1, "round-tripping a constant proves little"
     reloaded = PreferenceScorer.from_bytes(scorer.to_bytes())
     feats = clip_features(signal_density=0.5, hook_energy=0.7)
     assert reloaded.predict_score(feats) == pytest.approx(scorer.predict_score(feats))
-    assert reloaded.label_count == 30
+    assert reloaded.label_count == 80
+    assert reloaded.is_degenerate is scorer.is_degenerate
 
 
 def _make_malicious_joblib_blob() -> bytes:

@@ -87,12 +87,62 @@ class _RestrictedUnpickler(_jnp.NumpyUnpickler):
         return super().find_class(module, name)
 
 
+def _is_degenerate(model: Any) -> bool:
+    """True when ``model`` returns the same score for every input (Issue 520).
+
+    A degenerate model is not a broken one in any way the type system or the
+    serialization layer can see. It fits, round-trips, and returns a perfectly
+    valid probability — the same probability, for every clip. Blended against the
+    DNA score that makes ``(1-w)*fit + w*c``, a strictly increasing affine
+    transform of ``fit``, so the rerank's sort is provably order-preserving and
+    personalization is a no-op no matter how healthy the weight looks.
+
+    Fails CLOSED: any error inspecting the model counts as degenerate, so we fall
+    back to the honest DNA ranking. Consistent with rerank_with_preference's
+    existing "a broken model leaves the DNA ranking untouched" behavior, and with
+    the rule that falsely claiming personalization is worse than missing it.
+    """
+    try:
+        booster = getattr(model, "booster_", None)
+        if booster is not None:
+            info = booster.dump_model()["tree_info"]
+            return max(t["num_leaves"] for t in info) <= 1
+        coef = getattr(model, "coef_", None)
+        if coef is not None:
+            return bool(np.abs(coef).max() == 0.0)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not inspect preference model for degeneracy (%s)", exc)
+        return True
+    logger.warning(
+        "Unrecognised preference estimator %s — treating as degenerate", type(model).__name__
+    )
+    return True
+
+
 class PreferenceScorer:
     """Wraps either a LogisticRegression or LightGBM classifier."""
 
-    def __init__(self, model: Any, label_count: int) -> None:
+    def __init__(self, model: Any, label_count: int, degenerate: bool | None = None) -> None:
         self._model = model
         self.label_count = label_count
+        self._degenerate = _is_degenerate(model) if degenerate is None else degenerate
+
+    @property
+    def is_degenerate(self) -> bool:
+        """Whether this model discriminates at all (Issue 520).
+
+        Computed once at fit time and pickled with the scorer, so the serving path
+        never pays for it. Recomputed lazily for blobs written before Issue 520:
+        joblib restores ``__dict__`` without calling ``__init__``, so those
+        instances simply lack the attribute. That is why there is no migration —
+        and why ``_degenerate`` is a plain bool rather than a new class, which
+        would need an entry in the ``_ALLOWED_CLASSES`` unpickling allowlist.
+        """
+        cached = getattr(self, "_degenerate", None)
+        if cached is None:
+            cached = _is_degenerate(self._model)
+            self._degenerate = cached
+        return cached
 
     def predict_score(self, features: list[float]) -> float:
         """Return probability of positive label in [0, 1].
@@ -167,6 +217,31 @@ def preference_weight(label_count: int) -> float:
     return round(min(cap, cap * ramp), 4)
 
 
+def effective_weight(scorer: Any | None) -> float:
+    """The ONE producer of the blend weight actually used at serve time (Issue 520).
+
+    ``preference_weight`` answers "how mature is this creator's feedback?".
+    That is necessary but not sufficient: a model can be perfectly mature and
+    still discriminate nothing, in which case the blend cannot reorder anything
+    and claiming personalization would be a lie. This function is the conjunction.
+
+    Every consumer — the reranker, the API's personalization status, and the
+    offline efficacy harness — reads THIS, not ``preference_weight``. That is the
+    whole structural point: the invariant
+    ``active <=> weight > 0 <=> the blend was applied`` holds because there is one
+    function, not because three call sites each remember to check two conditions.
+
+    ``getattr`` rather than attribute access on purpose — the duck-typed stub
+    scorers in the unit lane have no ``is_degenerate``, and a stub that hand-picks
+    its own scores is by construction not degenerate.
+    """
+    if scorer is None:
+        return 0.0
+    if getattr(scorer, "is_degenerate", False):
+        return 0.0
+    return preference_weight(scorer.label_count)
+
+
 def blend_scores(fit_score: float, pref_score: float, weight: float) -> float:
     """The ONE personalization blend: (1-weight)*fit + weight*pref.
 
@@ -183,28 +258,62 @@ def fit(
     X: np.ndarray,
     y: np.ndarray,
     sample_weights: np.ndarray,
-    threshold: int | None = None,
+    lgbm_min_labels: int | None = None,
 ) -> PreferenceScorer:
     """
     Fit and return a PreferenceScorer.
 
-    Uses LogisticRegression when label_count < threshold, LightGBM otherwise.
+    Uses LogisticRegression when label_count < ``lgbm_min_labels``, LightGBM
+    otherwise.
+
+    Issue 520 — the parameter is ``lgbm_min_labels``, NOT ``threshold``. It used
+    to default to ``PERSONALIZATION_THRESHOLD_LABELS``, which meant one constant
+    was answering two unrelated questions: "does the creator have enough feedback
+    for us to honestly claim personalization?" and "does this estimator have
+    enough rows to learn anything?". Those have different right answers — 20 and
+    60 — and collapsing them is what made the entire maturity ramp a no-op. Keep
+    them separate.
     """
-    if threshold is None:
-        threshold = settings.PERSONALIZATION_THRESHOLD_LABELS
+    if lgbm_min_labels is None:
+        lgbm_min_labels = settings.PREFERENCE_LGBM_MIN_LABELS
 
     n = len(y)
-    if n < threshold:
+    if n < lgbm_min_labels:
         from sklearn.linear_model import LogisticRegression
 
         clf = LogisticRegression(max_iter=500, class_weight="balanced")
         clf.fit(X, y, sample_weight=sample_weights)
-        logger.info("Fitted LogisticRegression (n=%d, threshold=%d)", n, threshold)
+        logger.info("Fitted LogisticRegression (n=%d, lgbm_min_labels=%d)", n, lgbm_min_labels)
     else:
         import lightgbm as lgb
 
-        clf = lgb.LGBMClassifier(n_estimators=100, learning_rate=0.1, verbosity=-1)
+        # min_child_samples is PINNED, not inherited. Its default (also 20) is
+        # what PREFERENCE_LGBM_MIN_LABELS is measured against, so an unpinned
+        # value would let a library bump move the dead zone silently.
+        # num_leaves stays at LightGBM's default 31 deliberately: measured, the
+        # deepest tree this data actually grows uses 3-4 leaves at n=80, so
+        # num_leaves is not the binding constraint and lowering it would change
+        # nothing except make a future reader think it had been tuned.
+        clf = lgb.LGBMClassifier(
+            n_estimators=100,
+            learning_rate=0.1,
+            min_child_samples=settings.PREFERENCE_LGBM_MIN_CHILD_SAMPLES,
+            verbosity=-1,
+        )
         clf.fit(X, y, sample_weight=sample_weights)
         logger.info("Fitted LightGBM (n=%d)", n)
 
-    return PreferenceScorer(clf, label_count=n)
+    scorer = PreferenceScorer(clf, label_count=n)
+    if scorer.is_degenerate:
+        # Not an error — a creator can genuinely produce unlearnable feedback
+        # (e.g. every label the same class after dedup). It IS something we must
+        # never quietly serve as personalization, so make it visible. The
+        # honest consequence is applied by effective_weight().
+        logger.warning(
+            "Fitted a DEGENERATE preference model (n=%d, %s): it returns a constant "
+            "score for every clip, so personalization will stay OFF for this creator "
+            "until the next retrain produces a model that discriminates. (Issue 520)",
+            n,
+            type(clf).__name__,
+        )
+    return scorer
