@@ -1,25 +1,45 @@
 scenario: rerank_preference_flips_order
 description: >
-  Preference-rerank eval (Issue 480): a REAL trained preference model — fit via
-  the production preference.model.fit() on the deterministic 40-row label set
-  below (40 = 2x PERSONALIZATION_THRESHOLD_LABELS, so the LightGBM branch runs
-  and preference_weight() sits exactly at PREFERENCE_WEIGHT_CAP) — must FLIP the
-  DNA ordering when driven through the REAL rerank_with_preference. The creator's
-  own feedback history (thumbs-up on laughter/spike clips, thumbs-down on long
-  quiet ones) outweighs a 0.3 fit-score gap at the cap weight. Assertions are
-  ORDERINGS only, never float equality. Issue-465 contract also pinned: score is
-  never mutated, the blend lands in blended_score, survivor ranks are dense.
+  Preference-rerank eval (Issue 480, hardened by Issue 521): a REAL trained
+  preference model — fit via the production preference.model.fit() on the
+  deterministic label sets below — must FLIP the DNA ordering when driven through
+  the REAL rerank_with_preference. The creator's own feedback history (thumbs-up
+  on laughter/spike clips, thumbs-down on long quiet ones) outweighs a 0.3
+  fit-score gap once the maturity weight is high enough. Assertions are ORDERINGS
+  only, never float equality. Issue-465 contract also pinned: score is never
+  mutated, the blend lands in blended_score, survivor ranks are dense.
+
+  WHY SEVERAL SPLITS (Issue 521). The original fixture was a single 20/20 pair.
+  That is not "a mature creator" — it is the ONE shape LightGBM's default
+  min_child_samples=20 can split, because the unique best split lands exactly
+  20/20 and clears the minimum on both children by a hair. Measured on this tree:
+  20/20 gives 92 trees and a 0.9999 probability spread, while moving a SINGLE
+  label to 21/19 collapses it to 1 tree and a spread of 0.000000. A gate whose
+  fixture is a knife-edge certifies the knife-edge, not the property. Real
+  creators do not vote in perfectly balanced pairs, so the splits below cover
+  unbalanced ones and a mid-ramp label count as well.
 
 # In the ranking/ subdir so the geometry scenario glob (scenarios/*.yaml) does not
 # load this — it has no timeline; it is exercised by
 # tests/preference/test_rerank_eval.py.
 
-# Deterministic, RNG-free label set: 20 positive rows (the creator upvoted
-# short, laughter/spike clips) + 20 negative rows (downvoted long, quiet ones).
+# Deterministic, RNG-free label sets: `pos` rows where the creator upvoted short,
+# laughter/spike clips + `neg` rows where they downvoted long, quiet ones.
 # dna_match is held CONSTANT across all rows so the trained model cannot lean on
 # the DNA feature — the flip must come from the behavioral features alone.
 label_set:
-  rows_per_class: 20
+  # Each entry is one independent creator shape the eval is parametrised over.
+  # `n` (= pos + neg) drives the branch and the maturity weight; the pos/neg
+  # balance is what the old fixture accidentally held fixed.
+  splits:
+    - {pos: 20, neg: 20}   # n=40, perfectly balanced — the original knife-edge
+    - {pos: 21, neg: 19}   # n=40, ONE label moved off balance
+    - {pos: 24, neg: 16}   # n=40, mildly positive-leaning
+    - {pos: 16, neg: 24}   # n=40, minority-positive (the picky creator)
+    - {pos: 15, neg: 15}   # n=30, MID-RAMP: weight 0.25, API reports active
+    - {pos: 40, neg: 40}   # n=80, mature and balanced
+    - {pos: 48, neg: 32}   # n=80, mature and unbalanced
+    - {pos: 60, neg: 20}   # n=80, mature and strongly positive-leaning
   shared: {dna_match: 0.7}
   positive:
     {signal_density: 2.0, hook_energy: 1.2, silence_ratio: 0.05,
@@ -29,8 +49,8 @@ label_set:
     {signal_density: 0.5, hook_energy: 0.2, silence_ratio: 0.40,
      clip_duration_s: 70.0, setup_length_s: 25.0,
      has_retention_spike: false, has_laughter: false}
-  # Per-row deterministic jitter added to the continuous features:
-  # row i gets +jitter_step * (i % rows_per_class).
+  # Per-row deterministic jitter added to the continuous features: within each
+  # class, row i gets +jitter_step * i.
   jitter_step: 0.01
 
 clips:

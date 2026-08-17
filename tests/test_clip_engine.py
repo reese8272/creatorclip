@@ -305,10 +305,16 @@ def test_eval_scenario_no_unapproved_skip_markers() -> None:
     """
     import re
 
-    pattern = os.path.join(SCENARIOS_DIR, "*.yaml")
+    # RECURSIVE (Issue 521). This scan used to glob SCENARIOS_DIR/*.yaml — top level
+    # only — so every scenario in a subdirectory was outside the gate's scope. The
+    # ranking/ fixture in particular was exempt from the anti-skip discipline for its
+    # whole life. Note this is deliberately NOT the same glob as _load_scenarios(),
+    # which stays top-level: that one feeds SCENARIO_FLOOR, which counts geometry
+    # scenarios and must not drift when a non-geometry fixture is added.
+    pattern = os.path.join(SCENARIOS_DIR, "**", "*.yaml")
     skip_re = re.compile(r"\bskip\b|\bxfail\b", re.IGNORECASE)
     violations: list[str] = []
-    for path in sorted(glob.glob(pattern)):
+    for path in sorted(glob.glob(pattern, recursive=True)):
         stem = os.path.splitext(os.path.basename(path))[0]
         if stem in SKIP_ALLOWLIST:
             continue
