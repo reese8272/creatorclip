@@ -5,7 +5,53 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-17 (latest) — Fail-open vs fail-closed: the record is wrong and must be amended
+## 2026-08-17 (latest) — A known-red gate lands as `xfail(strict=True)`, never as a narrowed assertion (Issue 521)
+
+**Decision — when a test is written to expose a defect that has not been fixed yet, it lands
+`@pytest.mark.xfail(strict=True)` with the mechanism in the `reason=` string, and `pytest.ini`
+carries `-rxX` so those reasons print. It does NOT land with its assertion narrowed until it passes,
+and it does NOT land non-strict.**
+
+**Why this needed deciding.** `main` is protected with `enforce_admins: true` and eight required
+checks, with no bypass. A genuinely red test cannot merge. That constraint has exactly two escapes,
+and the tempting one is wrong: weakening the assertion until the gate is green is *how the repo got
+here* — Issue 521 exists because the 2026-08-13 rerank eval asserted the property it could prove
+(the 20/20 fixture flips) instead of the property that matters (a trained model flips), and then
+reported the second. A defect that outlives its own gate is worse than an unguarded defect, because
+the gate is now evidence of safety.
+
+Strict xfail resolves the constraint without the compromise, and buys a third thing neither
+alternative offers:
+
+1. CI stays green, so the work merges under real protection.
+2. The `reason=` string is printed into the build log by `-rxX`, so the known-red property is
+   *recorded* rather than merely absent. Without `-rxX` pytest prints counts only, and an xfail is
+   indistinguishable from a test that does not exist.
+3. **A strict xfail that starts passing is a hard failure.** So "Issue 521 blocks Issue 520" stops
+   being a bullet someone has to honour and becomes something the test runner enforces: the fix to
+   520 cannot land without also clearing 521's markers, and 521's markers cannot be left behind to
+   rot once they are stale.
+
+**The obligation this creates.** Before marking a row strict-xfail you must confirm it will actually
+XPASS under the intended fix, or you have written a permanent blocker. For 521 this was done by
+simulation — the four degenerate splits were re-fit with the LightGBM switchover raised to 60, and
+all four flipped the DNA order (blend margins +0.025 to +0.350) before any marker was committed.
+
+**Ruled out.** *Narrowing the assertion* — the failure class under repair. *`quarantine`* — that
+marker means "flaky, under repair" and excludes the test from the gating lane (`pytest.ini`); these
+tests are not flaky, they are correct and deterministically failing, and excluding them would hide
+exactly what we want on the record. *Non-strict xfail* — leaves no signal when the defect is fixed,
+so the marker silently outlives the bug.
+
+**Source / evidence.** pytest's own documentation on `xfail_strict` and the `-r` summary flags;
+`tests/preference/test_rerank_eval.py`; `pytest.ini`; `docs/issues.md` Issue 521. Measurements for
+the eight splits are tabulated in the Issue 521 entry.
+
+**Date:** 2026-08-17
+
+---
+
+## 2026-08-17 — Fail-open vs fail-closed: the record is wrong and must be amended
 
 > **Approved 2026-08-17** (Phase 2). Drafted by the deep standards audit as entry #19 `[CORRECT]` in `docs/assessment/DEEP_AUDIT_2026-08-17/DECISIONS_DRAFTS.md`; adopted as drafted, unamended.
 

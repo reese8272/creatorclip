@@ -4539,7 +4539,8 @@ not.
 
 ### Issue 521: the rerank eval certifies the false property — its fixture is the one shape LightGBM can split
 
-- [ ] **Status:** open · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CONFIRMED** · **blocks #520**
+- [x] **Status:** ✅ **DONE 2026-08-17** · **Size:** S (~2 h) · **Lane:** L30 Batch G ·
+      **CONFIRMED** · **blocks #520**
 
 The Issue-480 rerank eval — **written four days ago to close exactly this class** — uses
 `rows_per_class: 20`, the single 40-row shape where the unique best split is exactly 20/20 and
@@ -4555,8 +4556,53 @@ This is the newest gate in the repo and it is already an instance of the house f
 `tests/eval/scenarios/ranking/rerank_preference_flips_order.yaml`.
 
 **Acceptance**
-- [ ] Parametrised over an unbalanced split; asserts `booster_.num_trees() > 1`
-- [ ] Verified to go red on today's tree
+- [x] Parametrised over an unbalanced split; asserts `booster_.num_trees() > 1`
+- [x] Verified to go red on today's tree
+
+**Built 2026-08-17.**
+
+The fixture's `rows_per_class: 20` became a `splits:` list of eight creator shapes — data in the
+YAML, the reason a split is expected to fail in the test, since that is a claim about the code and
+not about the scenario. Four are green today, four are a measured no-op:
+
+| split | n | model | trees | leaves | weight | p_fav | p_lead | rerank flips? |
+|---|---|---|---|---|---|---|---|---|
+| 20/20 | 40 | LGBM | 92 | 2 | 0.500 | 0.99995 | 0.00005 | **yes** |
+| 21/19 | 40 | LGBM | **1** | **1** | 0.500 | 0.52500 | 0.52500 | no |
+| 24/16 | 40 | LGBM | **1** | **1** | 0.500 | 0.60000 | 0.60000 | no |
+| 16/24 | 40 | LGBM | **1** | **1** | 0.500 | 0.40000 | 0.40000 | no |
+| 15/15 | 30 | LGBM | **1** | **1** | 0.250 | 0.50000 | 0.50000 | no |
+| 40/40 | 80 | LGBM | 99 | 4 | 0.500 | 0.99998 | 0.00002 | **yes** |
+| 48/32 | 80 | LGBM | 99 | 3 | 0.500 | 0.99998 | 0.00003 | **yes** |
+| 60/20 | 80 | LGBM | 96 | 3 | 0.500 | 0.99998 | 0.00005 | **yes** |
+
+Three deviations from the plan, each for a reason:
+
+1. **A mid-ramp `15/15` (n=30) split was added**, which the audit's acceptance did not ask for. The
+   issue is about the *ramp*, and n=30 is where a real creator sits: weight 0.25, `active: true` on
+   the wire, and a model that returns 0.5 for every clip. Restricting the eval to n=40 would have
+   reproduced the original mistake at a different point.
+2. **The precondition test is deliberately NOT xfail-marked.** It asserts label count and blend
+   weight — properties a degenerate model satisfies perfectly. It therefore passes on all eight
+   splits while the two property tests fail on four. That gap, visible in one test run, *is* Issue 520
+   stated as a test result.
+3. **`test_eval_scenario_no_unapproved_skip_markers` now globs recursively.** Its scope was
+   `scenarios/*.yaml` — top level only — so both `ranking/` fixtures had been outside the anti-skip
+   gate for their whole lives. `_load_scenarios()` stays top-level on purpose: it feeds
+   `SCENARIO_FLOOR`, which counts geometry scenarios and must not drift.
+
+**Landed as `xfail(strict=True)`, not as a red test.** `main` is protected with
+`enforce_admins: true`, so a genuinely red test cannot merge, and narrowing the assertion until it
+passed would be the exact failure class this issue exists to fix. Strict xfail keeps CI green, prints
+the reason into the build log (`-rxX` is now in `pytest.ini`), and — because a strict xfail that
+starts passing is a hard failure — makes "521 blocks 520" enforced by the test runner instead of by a
+bullet in a doc. Confirmed by simulation that all four rows DO flip under the proposed 520 fix
+(margins +0.025 to +0.350), so the markers can actually clear.
+
+**Verification.** `17 passed, 8 xfailed`. Re-run with `--runxfail`: **8 failed**, each with
+`AssertionError: the booster is degenerate at label_count=40: 1 tree(s), 1 leaf/leaves` — that is the
+"verified to go red on today's tree" evidence. Full suite `3183 passed, 64 skipped, 8 xfailed`
+(3170 → 3183 is the parametrisation). ruff + ruff-format clean.
 
 ---
 
