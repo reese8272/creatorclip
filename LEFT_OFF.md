@@ -1,18 +1,23 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-17 · **Branch:** `main` @ `1def133` · **Working tree:** ⚠️ **DIRTY — the
-2026-08-17 audit's output is uncommitted.** Changed: `docs/issues.md` (Lane L30 added),
-`docs/DECISIONS.md` (7 entries), `docs/PROJECT_STATE.md`, `LEFT_OFF.md`, plus the untracked
-directory `docs/assessment/DEEP_AUDIT_2026-08-17/`. **No source, test or config file was touched** —
-verify with `git status --porcelain | grep -vE '^(\?\? docs/assessment/| M (docs/|LEFT_OFF\.md))'`,
-which should print nothing. ⚠️ **Commit before doing anything destructive** — the audit directory is
-**untracked**, so a `git clean` would delete ~11,000 lines of it. Use a `feature/*` branch and a PR;
-`main` is protected with no bypass.
-**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3170 passed, 64 skipped**.
-**Prod:** `https://autoclip.studio`. **Running commit NOT verified this session** — it was `c260689`
-on 2026-08-15, and `1def133` (PR #118) merged after that, which should have deployed. Confirm before
-trusting it:
+**Last updated:** 2026-08-17 (late) · **Branch:** `main` @ `c342c4a` · **Working tree:** ✅ **CLEAN.**
+The 2026-08-17 audit is **committed and merged** — the "untracked, one `git clean` from gone" warning
+that stood here is resolved. Three PRs shipped this session: **#119** (the audit + Issue 498 items
+1–3), **#120** (Issue 521), **#121** (Issue 520 — the personalization SEV1). History on `main` is
+linear.
+**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3199 passed, 64 skipped, 0 xfailed**.
+**Prod:** `https://autoclip.studio`. **Running commit VERIFIED this session** — the container's image
+revision label reads `c342c4ae67dbafcdcc5d60faace60c7cd598591f`, i.e. prod is running the SEV1 fix,
+not merely a green pipeline. Re-confirm the same way after any deploy:
 `docker inspect autoclip-app-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
+
+**Live-verified beyond the label** (per gotcha 4 — a green pipeline is not a working feature). Against
+the prod DB under a real `tenant_session`, the owner's scorer now reports:
+`LogisticRegression · label_count=10 · is_degenerate=False · effective weight 0.0 ·
+API active=False labels=10 threshold=20`. Two things that proves: `is_degenerate` computed correctly
+on a **pre-520 blob** (the lazy-recompute path is what makes the fix migration-free — it ran in
+production), and the honest sub-threshold fallback is intact. The owner has only 10 labels, so the
+*active* path could not be exercised live — that needs ≥21 clips rated.
 
 > ⚠️ **THE BRANCHING MODEL CHANGED ON 2026-08-15.** The `staging` **branch is deleted**. The model is
 > trunk-based: `feature/* → PR → main`. `main` protection is now **`enforce_admins: true`** — there
@@ -29,33 +34,45 @@ trusting it:
 
 ## CURRENT FOCUS
 
-**Durability first, then the two SEV1s the audit found.** 2026-08-17 was a read-only deep standards
-and process audit — **no product code changed.** It confirmed the friend-beta track below is still
-the right shape, and found one product defect serious enough to jump the queue. The owner's chosen
-order for the next session is **backups → personalization → the Week-1 conversions.**
+**Durability is now the only thing left on the critical path.** The owner's chosen order was
+**backups → personalization → the Week-1 conversions**; the second and third have shipped, so
+backups stand alone at the front with nothing ahead of them and no code excuse to defer behind.
+
+The 2026-08-17 audit itself was read-only. Everything it found that jumped the queue —
+**Issue 521** (the gate that certified the wrong property) and **Issue 520** (personalization was a
+measured no-op across its entire ramp while the API reported it active) — is fixed, merged, deployed
+and live-verified on the running container. Lane L30's process track (Batches B–H) is untouched and
+is the natural next code work; **Issue 499** is its highest-value entry.
 
 ### → NEXT ACTION
 
-1. **Arm backups — operator track §A, starting with Issue 255 (secrets escrow).** Unchanged as the
-   #1 item, and now with a recorded target behind it: `docs/DECISIONS.md` 2026-08-17 commits to
-   **RPO 24 h / RTO 4 h with a quarterly drill**, which gives this work a definition of done.
-   Walked today, losing the droplet means **total loss** of the billing ledgers, `preference_models`
-   (the trained taste — irreplaceable, it *is* the product), `creator_dna`, `clip_outcomes` and the
-   consent records. R2 media survives; the database that indexes it does not. One genuinely missing
-   config key the audit found: **`BACKUP_HEALTHCHECK_URL`** (the dead-man's switch, consumed by
-   `scripts/backup_pg.sh` and `scripts/backup_redis.sh`) is absent from `.env.example`.
-2. **Issue 521, then Issue 520 — in that order.** `docs/issues.md` Lane L30 Batch G.
-   **520:** LightGBM's untouched `min_child_samples=20` makes the preference model a **constant
-   predictor for label counts 21–40** — exactly the band the maturity ramp covers — so
-   `blended_score` is a monotone transform of `score`, the persisted order is byte-identical to
-   DNA-only, and the API still returns `personalization={active: true}`. Against the north star that
-   is an honesty defect, not just a correctness one.
-   **521 first, because the gate lies.** The rerank eval written on 2026-08-13 to guard exactly this
-   passes only because its fixture is the single 40-row shape LightGBM can split. Fix the gate first,
-   so the fix to 520 has something that can actually see it.
-3. **Issue 498 — the six Week-1 conversions (~1.5 h total).** Batch A. Start with the ten-minute one:
-   `"test:ci": "vitest run --reporter=verbose"`. The flake it closes has cost three sessions, each of
-   which ended by writing down the same advice and not applying it.
+1. **Arm backups — operator track §A, starting with Issue 255 (secrets escrow).** Now the **#1 item
+   with nothing ahead of it**, and the only thing on the critical path that nobody but the owner can
+   do. It has a recorded definition of done: `docs/DECISIONS.md` 2026-08-17 commits to **RPO 24 h /
+   RTO 4 h with a quarterly drill**. Losing the droplet today means **total loss** of the billing
+   ledgers, `preference_models` (the trained taste — irreplaceable, it *is* the product),
+   `creator_dna`, `clip_outcomes` and the consent records. R2 media survives; the database that
+   indexes it does not. ✅ The missing **`BACKUP_HEALTHCHECK_URL`** key (the dead-man's switch, read
+   by `scripts/backup_pg.sh` + `scripts/backup_redis.sh`) is now in `.env.example` — set it when you
+   arm the cron, or a cron that stops firing is invisible.
+2. ~~**Issue 521, then Issue 520.**~~ ✅ **BOTH DONE 2026-08-17** (PRs #120, #121 — merged, deployed,
+   live-verified). The rerank eval now covers eight creator shapes instead of the one knife-edge it
+   could pass; the LightGBM switchover is a separately measured constant (`PREFERENCE_LGBM_MIN_LABELS
+   = 60`, floor 41, validated at boot); and `effective_weight()` is the single producer of the blend
+   weight, so `active` cannot claim personalization the reranker did not apply. Details in
+   `docs/DECISIONS.md` and `docs/issues.md` §520/§521.
+   ⚠️ **Expect one warn-only NDCG-ratchet event per affected creator** on their first retrain after
+   this deploy — the served model genuinely changes shape. That is the ratchet working; do not chase
+   it as a regression.
+3. **Issue 498 — items 4 and 5 remain** (items 1–3 and 6 are done; PR #119). Deliberately deferred,
+   not forgotten: **item 4** (`ci_local.sh` seed echo + the `failed: 0` vs `LOCAL CI FAILED`
+   contradiction) needs the two numbers *reconciled* rather than patched — a diagnosis, not a
+   one-liner. **Item 5** (promoting `Migration lint (Squawk)` + `Visual regression` to required)
+   mutates branch protection and wants its own change with a readback.
+4. **The rest of Lane L30.** Batch B is the highest-value remainder: **Issue 499** (four Layer-0
+   gates infer their result from stdout and never check `proc.returncode`, so a tool that runs and
+   *fails* scores a perfect `ok 0`) **before** Issue 500. This session leaned on that gate repeatedly
+   and had to re-run mypy directly to trust it — which is the argument for fixing it.
 
 **Then** resume the beta track: **#29 (Google OAuth verification)** is still the only item with a
 clock you cannot compress (1–4 weeks external review) — read the scope warning in §D before
