@@ -453,7 +453,11 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
-      - run: npm test
+      # Issue 498: test:ci pins --reporter=verbose. The same cold-run vitest flake
+      # was logged three times and the failing test's NAME was never captured any
+      # of the three, because the flag has to be set before the failure happens.
+      # Making it the default is the only shape of fix that works.
+      - run: npm run test:ci
       - run: npm run build
 
   eval:

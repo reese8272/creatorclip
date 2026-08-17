@@ -4,7 +4,41 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-14 (latest) — Catalog-sync outage, grounding honesty, and the weekly reconnect (Issues 489–495)
+## 2026-08-17 (latest) — Deep standards & process audit; 7 decisions adopted (Lane L30, Issues 498–527)
+
+**No production code changed.** A read-only standards and process audit ran across the whole repo
+(56 agents, three phases): 141 findings, 72 adversarially verified — **8 CONFIRMED, 57 CORRECTED,
+7 REFUTED**. Full output in `docs/assessment/DEEP_AUDIT_2026-08-17/` (start at `REPORT.md`).
+
+**Verdict:** the architecture and the stack are *not* the cause of the recurring snags. The missing
+service layer, the single VM and `worker/tasks.py`'s size were all independently ratified as
+correct. The diagnosis is that **this project diagnoses better than it defends** — the right root
+cause is found almost every time, written into the row that reported it, and then not built. Bounded
+honestly by the completeness critic: that explains ~40% of logged snags; the rest (especially
+third-party SDK surprise, which escapes to production every time) needs a *habit* — one real
+transaction per live integration on a schedule — not a gate.
+
+**Seven decisions approved (Phase 2) and recorded in `docs/DECISIONS.md`:** the limiter/spend-guard
+split posture (a correction — the code and the record disagreed), single-VM RPO 24 h / RTO 4 h with a
+quarterly drill, one-creator-one-login plus the `tid` JWT claim, no service layer, no circuit
+breaker, and the frontend performance budget + WCAG 2.2 AA target. **16 further drafts remain
+PROPOSED** in `DECISIONS_DRAFTS.md`, to be approved at each paired issue's CHECK phase.
+
+**Filed:** Lane **L30**, Issues **498–527**, in eight batches. Highest consequence are **#520**
+(personalization is a measured no-op across its entire ramp while the API reports it active) and
+**#521** (the gate written to guard it certifies the false property).
+
+**Tracker hygiene:** `docs/issues.md` is now the **sole authority** for the next free issue number —
+`LEFT_OFF.md` said 497, this file said 443, and `issues.md` said 498. Both stale copies removed.
+
+**Two corrections to earlier records.** The "9-day silent production outage" framing that circulated
+in handoff prose is retracted — `docs/GO_LIVE.md:82` already recorded it as an intentional owner
+poweroff. The monitoring gap is real; the outage that "proved" it was not. Separately, `render.yaml`
+was *cleared* of the suspicion that it is armed to auto-deploy.
+
+---
+
+## 2026-08-14 — Catalog-sync outage, grounding honesty, and the weekly reconnect (Issues 489–495)
 
 Started from three owner-reported symptoms — "sync intake says 0 shorts and 0 videos", "why do I
 have to reconnect YouTube every 7 days", "why can't I generate titles and hooks" — and they resolved
@@ -550,7 +584,9 @@ contract now carries `first_word`.
 
 Cleanup: `feedback_tags` persistence asserted end to end; `scripts/clip_pipeline_state.py` made
 RLS-aware (verified against prod); `style_preset["background"]` promoted to **Issue 442** with its
-dead `_BACKGROUND_STYLES` table deleted. Next free issue number **443**.
+dead `_BACKGROUND_STYLES` table deleted. *(Historical: this entry recorded a next-free-issue number.
+That field has been removed here — `docs/issues.md` is now the sole authority for it. See the
+2026-08-17 entry.)*
 
 ---
 
