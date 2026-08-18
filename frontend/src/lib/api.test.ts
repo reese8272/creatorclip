@@ -51,3 +51,49 @@ describe('api() error parsing', () => {
     expect(apiErr.message).toBe('Confirm first.')
   })
 })
+
+// Issue 522 — a Redis outage makes LLM routes return 503 with can't-verify copy
+// instead of the 429 "your budget has been reached". No component change was
+// needed for that: `deriveMessage` already surfaces a server-authored string
+// detail verbatim. These pin that contract, because the honesty of the new copy
+// depends entirely on it — server-side wording is worthless if the client
+// substitutes its own generic message.
+describe('spend-guard outage copy (Issue 522)', () => {
+  it('surfaces the 503 can’t-verify detail verbatim rather than a generic message', async () => {
+    const serverCopy =
+      "We can't check your AI budget right now, so AI features are paused for a few " +
+      'minutes. Nothing was charged. Please try again shortly.'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        status: 503,
+        ok: false,
+        json: async () => ({ detail: serverCopy }),
+      })),
+    )
+    const err = (await api('/clips/generate', { method: 'POST' }).catch(
+      (e: unknown) => e,
+    )) as ApiError
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err.status).toBe(503)
+    expect(err.message).toBe(serverCopy)
+    // The honesty assertion, mirroring tests/test_spend_guard.py: whatever the
+    // creator is shown must not claim a budget was reached that was never read.
+    expect(err.message.toLowerCase()).not.toContain('has been reached')
+  })
+
+  it('still surfaces the real 429 cap copy, so the two stay distinguishable', async () => {
+    const capCopy = "Your account's daily AI budget has been reached. It resets automatically."
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ status: 429, ok: false, json: async () => ({ detail: capCopy }) })),
+    )
+    const err = (await api('/clips/generate', { method: 'POST' }).catch(
+      (e: unknown) => e,
+    )) as ApiError
+
+    expect(err.status).toBe(429)
+    expect(err.message).toBe(capCopy)
+  })
+})

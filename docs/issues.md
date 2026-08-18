@@ -4127,7 +4127,7 @@ Issue 500's `--require` is built to escalate. Keeping the seam is what leaves #5
 
 ### Issue 500: add `--require` to every `run_layer0.py` invocation, and pin that it is present
 
-- [ ] **Status:** open · **Size:** S (~30 min) · ~~**BLOCKED BY #499**~~ **UNBLOCKED 2026-08-18** ·
+- [x] **Status:** ✅ **DONE 2026-08-18** · **Size:** S (~30 min) · ~~**BLOCKED BY #499**~~ ·
       **Lane:** L30 Batch B
 
 `static-gates` and `ci_local.sh:95` invoke `run_layer0.py` without `--require`, so a genuinely
@@ -4136,7 +4136,18 @@ this in Issue 479; these callers were not. **Order matters: #499 first** — add
 the returncode fix creates a false sense of coverage over the larger hole.
 
 **Acceptance**
-- [ ] `--require` on all invocations; `tests/test_ci_config.py` asserts every invocation carries it
+- [x] `--require` on all invocations; `tests/test_ci_config.py` asserts every invocation carries it
+
+**BUILD NOTE (2026-08-18).** `ci_local.sh` passes `--require "$gates"` — the same shell variable as
+`--gates`, not a fixed list, because `run_layer0.main()` hard-errors when `--require` names a gate
+`--gates` did not select and the fast profile drops `pip_audit`. A hardcoded list would make the
+fast profile fail to *start* rather than fail to gate. `freshness` is exempt (warn-only by design,
+with its own `--require-fresh`).
+
+The meta-test scans for invocations rather than listing them — and that caught a real hole in its
+own first draft: `ci_local.sh` invokes via `python3 "$LAYER0"`, so splitting on the literal filename
+found only the *assignment* and skipped every real call site. It now resolves the alias. A test that
+scans the wrong thing is the same vacuous-green shape Batch C exists to retire.
 
 ---
 
@@ -4715,7 +4726,7 @@ bullet in a doc. Confirmed by simulation that all four rows DO flip under the pr
 
 ### Issue 522: the rate limiter fails CLOSED with an unhandled 500 — the record says the opposite
 
-- [ ] **Status:** open · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CORRECTED (severity kept high)**
+- [x] **Status:** ✅ **DONE 2026-08-18** · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CORRECTED (severity kept high)**
 
 `slowapi 0.1.9` is constructed with neither `swallow_errors` nor `in_memory_fallback`, so any Redis
 error re-raises and **every rate-limited route returns 500 while the body never runs** — including
@@ -4741,12 +4752,47 @@ diagnosed this exact class and fixed one of the two clients.
 > entirely** — honest degraded copy for that already exists in `billing/spend_guard.py:98-102`.
 
 **Acceptance**
-- [ ] `Limiter(..., in_memory_fallback_enabled=True)` — no more unhandled 500s on `/auth/me`
-- [ ] Spend guard fails **closed** on Redis error (it currently fails open) and emits a signal when it does
-- [ ] `youtube/_redis.py` gets the same socket timeouts the other three clients use, pinned by a kwargs test —
+- [x] `Limiter(..., in_memory_fallback_enabled=True)` — no more unhandled 500s on `/auth/me`
+      — *verified against the real app: `GET /auth/me` 500 → 200 with the storage dead*
+- [x] Spend guard fails **closed** on Redis error (it currently fails open) and emits a signal when it does
+      — *scoped to the CHECK arm; `record_spend` stays fail-open, see the build note*
+- [x] `youtube/_redis.py` gets the same socket timeouts the other three clients use, pinned by a kwargs test —
       **required for the fail-closed arm to be reachable at all** (a hang is not an exception)
-- [ ] A Redis-down test lands (there are currently none, behind a 99% coverage floor)
-- [ ] All three stale documents amended: `docs/DECISIONS.md:2633-2634`, `docs/AUDIT_BRIEF.md` §5 row 1, `limiter.py` docstring lines 42-44
+- [x] A Redis-down test lands (there are currently none, behind a 99% coverage floor)
+      — *13 new tests; 6 of them fail against the pre-fix code*
+- [x] All three stale documents amended: ~~`docs/DECISIONS.md:2633-2634`~~, `docs/AUDIT_BRIEF.md` §5 row 1, `limiter.py` docstring lines 42-44
+      — *the DECISIONS citation had itself drifted (it now points at a 2026-06-28 clips entry); the real
+      claim was at `:3080` and is amended there. A live instance of what Issue 508 exists to catch.*
+
+**BUILD NOTE (2026-08-18)**
+
+**The AC was scoped down deliberately in one place.** "Spend guard fails closed" taken literally
+includes `record_spend`, which is *post-call accounting* — the money is already spent when the ledger
+records it, so refusing there breaks the pipeline after the cost was incurred and protects nothing.
+Fail-closed goes on the pre-execution checks only. Recorded in `docs/DECISIONS.md` 2026-08-18.
+
+**Two things the issue did not anticipate:**
+
+1. **The cap-reached copy would have become a lie.** The only creator-facing string said the daily
+   budget had been reached; serving it during a Redis outage states something false to every creator
+   at once and points at an action that cannot help. Added a distinct 503 + `Retry-After: 30` and its
+   own copy. No frontend change was needed — `api.ts` already surfaces server `detail` verbatim — but
+   a test now pins that contract.
+2. **Fail-open had been masking a dead-event-loop error in the test suite**, so the spend guard was
+   never actually exercised by any route test after the first one (`RuntimeError: Event loop is
+   closed` from the module-level async Redis singleton). Flipping to fail-closed surfaced it as 12
+   failures across 8 files. Fixed at the root — a per-test singleton reset in `tests/conftest.py` —
+   rather than by mocking Redis in the 12 tests, which would have left the hole for every future
+   route test. `docs/OFF_COURSE_BUGS.md` 2026-08-18.
+
+**Measured:** on the pinned redis 5.2.0 both socket timeouts default to `None` (block forever), not
+the 10 s redis.io documents for 6.x — which is what makes the timeouts load-bearing rather than
+hygiene.
+
+**Verified end-to-end against the real app, before/after:** dead Redis took
+`POST /videos/{id}/clips/generate` from **500 → 503** with the honest copy, and `GET /auth/me` from
+**500 → 200**. Suite 3212 → **3225 passed, 64 skipped, 0 failed**, stable across three
+`--randomly-seed` values (1/42/999); frontend 686/686 under node 22.
 
 ---
 

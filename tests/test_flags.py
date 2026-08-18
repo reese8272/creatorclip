@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 import flags
 from auth import get_current_creator
+from billing.spend_guard import BudgetStatus
 from db import get_session
 from main import app
 from models import Creator, FeatureFlag
@@ -199,7 +200,8 @@ def test_generate_clips_blocked_by_spend_cooldown_returns_429(client: TestClient
     app.dependency_overrides[get_session] = _override_session(AsyncMock())
 
     with patch(
-        "billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(True, 1800))
+        "billing.spend_guard.creator_block_status",
+        new=AsyncMock(return_value=BudgetStatus(True, 1800, "cap_reached")),
     ):
         resp = client.post(f"/videos/{uuid.uuid4()}/clips/generate")
     assert resp.status_code == 429
@@ -214,7 +216,10 @@ def test_generate_clips_gates_pass_when_enabled_and_under_cap(client: TestClient
     app.dependency_overrides[get_session] = _override_session(session)
 
     with (
-        patch("billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(False, 0))),
+        patch(
+            "billing.spend_guard.creator_block_status",
+            new=AsyncMock(return_value=BudgetStatus(False, 0, "ok")),
+        ),
         patch("routers.clips.check_positive_balance", new=AsyncMock()),
     ):
         resp = client.post(f"/videos/{uuid.uuid4()}/clips/generate")
@@ -266,7 +271,8 @@ def test_identity_chat_blocked_by_spend_cooldown_returns_429(client: TestClient)
     app.dependency_overrides[get_current_creator] = override_current_creator(_make_creator())
 
     with patch(
-        "billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(True, 1800))
+        "billing.spend_guard.creator_block_status",
+        new=AsyncMock(return_value=BudgetStatus(True, 1800, "cap_reached")),
     ):
         resp = client.post("/creators/me/identity/chat", json=_INTAKE_BODY)
     assert resp.status_code == 429
@@ -278,7 +284,10 @@ def test_identity_chat_gates_pass_when_enabled_and_under_cap(client: TestClient)
     app.dependency_overrides[get_current_creator] = override_current_creator(_make_creator())
 
     with (
-        patch("billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(False, 0))),
+        patch(
+            "billing.spend_guard.creator_block_status",
+            new=AsyncMock(return_value=BudgetStatus(False, 0, "ok")),
+        ),
         patch(
             "chat.intake.run_intake_turn",
             new=AsyncMock(return_value={"reply": "What's your channel about?", "proposal": None}),

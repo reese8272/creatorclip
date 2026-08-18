@@ -4,7 +4,39 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-18 (latest) — Issue 499 + tracker hygiene: two prose rules become mechanisms
+## 2026-08-18 (latest) — Issues 522 + 500: a Redis blip is no longer a sign-in outage
+
+**Issue 522 — the highest-consequence open defect, closed.** `limiter.py` passed neither
+`swallow_errors` nor `in_memory_fallback_enabled` (both default `False`), so any Redis error
+re-raised and **every rate-limited route returned 500 with its body never running** — including
+`GET /auth/me` at 120/min, which `AuthGate` calls on every page load. Nobody could sign in, and
+`/health` reported 200 throughout. Three documents stated the opposite posture, including
+`limiter.py`'s own docstring.
+
+Now: the limiter degrades to a per-process in-memory bucket (2× effective ceiling at `--workers 2`,
+accepted); the spend guard fails **closed** on its pre-execution check; `youtube/_redis.py` — the
+last of four Redis clients without a deadline — gets 2.0 s socket timeouts, which is what makes the
+fail-closed arm reachable at all (a hang is not an exception).
+
+**Two things the issue did not anticipate, both handled:**
+- The only creator-facing copy said *"your daily AI budget has been reached"*. During an outage that
+  is false for every creator at once, so the can't-verify case got its own **503** and its own words.
+- Fail-open had been **masking a dead-event-loop error in the test suite**, so the spend guard was
+  never actually exercised by any route test after the first one. Flipping it surfaced 12 failures
+  across 8 files; fixed at the root in `tests/conftest.py`, not by mocking Redis in 12 places.
+
+**Issue 500** — `--require` on every `run_layer0.py` invocation, with a meta-test that *scans* for
+call sites. The first draft of that scan missed `ci_local.sh` entirely (it invokes via `$LAYER0`),
+which would have made the assertion vacuous — caught and fixed before landing.
+
+**Verified against the real app, before/after:** dead Redis took `POST /videos/{id}/clips/generate`
+from 500 → 503 with the honest copy, and `GET /auth/me` from 500 → 200. Suite 3212 → **3225 passed,
+64 skipped, 0 failed**, stable across three random seeds; frontend 686/686 under node 22; local CI
+7 passed / 0 failed. Details in `docs/DECISIONS.md` (2026-08-18) and `docs/issues.md` §522/§500.
+
+---
+
+## 2026-08-18 — Issue 499 + tracker hygiene: two prose rules become mechanisms
 
 One PR, two commits, both instances of the same class the 2026-08-17 audit named — *a rule stored as
 prose that someone has to remember.*

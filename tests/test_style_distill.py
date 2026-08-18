@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from billing.spend_guard import BudgetStatus
 from clip_engine.scoring import score_candidates
 from config import settings
 from dna.brief import _build_request
@@ -133,7 +134,10 @@ async def test_distill_task_skips_when_spend_blocked():
 
     with (
         patch("worker.tasks.flag_enabled", new=AsyncMock(return_value=True)),
-        patch("billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(True, 60))),
+        patch(
+            "billing.spend_guard.creator_block_status",
+            new=AsyncMock(return_value=BudgetStatus(True, 60, "cap_reached")),
+        ),
         patch("worker.tasks.db") as db_mock,
     ):
         await _distill_style_prefs_async(str(uuid.uuid4()))
@@ -181,7 +185,10 @@ async def test_distill_task_debounces_below_min_new():
 
     with (
         patch("worker.tasks.flag_enabled", new=AsyncMock(return_value=True)),
-        patch("billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(False, 0))),
+        patch(
+            "billing.spend_guard.creator_block_status",
+            new=AsyncMock(return_value=BudgetStatus(False, 0, "ok")),
+        ),
         patch("worker.tasks.db") as db_mock,
         patch("worker.tasks._try_advisory_lock", new=AsyncMock(return_value=True)),
         patch("worker.tasks._rollback_then_unlock", new=AsyncMock()),
@@ -223,7 +230,10 @@ async def test_distill_task_happy_path_bills_haiku_and_upserts():
     usage = {"input_tokens": 100, "output_tokens": 50, "cache_read": 0, "cache_creation": 0}
     with (
         patch("worker.tasks.flag_enabled", new=AsyncMock(return_value=True)),
-        patch("billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(False, 0))),
+        patch(
+            "billing.spend_guard.creator_block_status",
+            new=AsyncMock(return_value=BudgetStatus(False, 0, "ok")),
+        ),
         patch("worker.tasks.db") as db_mock,
         patch("worker.tasks._try_advisory_lock", new=AsyncMock(return_value=True)),
         patch("worker.tasks._rollback_then_unlock", new=AsyncMock()),

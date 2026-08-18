@@ -5,7 +5,61 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-18 (latest) — A gate's exit-code check is an allow-list, never `!= 0` (Issue 499)
+## 2026-08-18 (latest) — Fail-closed is for the CHECK, not the accounting; and the outage needs its own words (Issue 522)
+
+Two implementation decisions taken while building the posture approved on 2026-08-17. The posture
+itself is not reopened here — only how far it extends and what the creator is told.
+
+**Decision 1 — fail-closed applies to the pre-execution CHECK arm only. `record_spend` stays
+fail-open.** Issue 522's acceptance criterion read "spend guard fails closed on Redis error", which
+taken literally includes `record_spend`. It should not. `record_spend` is *post-call accounting*:
+the money is already spent by the time the ledger records it, so refusing there would break the
+pipeline **after** the cost was incurred and protect nothing. Fail-closed belongs where a decision
+is still available — `creator_block_status` → `require_budget` / `ensure_within_budget`.
+
+**Decision 2 — the can't-verify refusal is a 503 with its own copy, not the 429 cap message.** The
+only creator-facing string was *"Your account's daily AI budget has been reached… contact support to
+raise your limit."* Serving that during a Redis outage states something false to every creator at
+once, and points them at an action that cannot help. 429 would compound it by claiming they are rate
+limited. New: **503** + `Retry-After: 30` + copy that says the budget could not be checked and
+nothing was charged. The honesty constraint in `CLAUDE.md` is not only about virality claims.
+No frontend change was needed — `frontend/src/lib/api.ts` `deriveMessage()` already surfaces a
+server-authored `detail` verbatim; a test now pins that, since server-side wording is worthless if
+the client substitutes a generic message.
+
+**Decision 3 — `youtube/_redis.py` gets 2.0 s socket timeouts, not the limiter's 0.1 s.** Different
+consequence class. The limiter degrades open, so an aggressive timeout costs it nothing; this client
+backs a fail-closed money control where an over-tight timeout turns ordinary latency into spuriously
+refused paid work. 2.0 s matches the three sibling clients (`worker/progress.py` ×2,
+`worker/tasks.py`), and the module is shared by the API process and the Celery worker.
+
+**Measured, not assumed.** On the pinned **redis 5.2.0**, `socket_timeout` and
+`socket_connect_timeout` both default to **`None`** — block until the OS gives up. redis.io's
+production guide states a 10 s default; that is redis-py **6.x** and does not apply to this pin
+(<https://redis.io/docs/latest/develop/clients/redis-py/produsage/>). This is what makes the timeouts
+load-bearing rather than hygiene: against a wedged-but-connected Redis a hang is not an exception, so
+without a deadline the fail-closed arm is unreachable.
+
+**Source for the limiter fix.** slowapi's API reference, fetched 2026-08-18
+(<https://slowapi.readthedocs.io/en/latest/api/>): `in_memory_fallback_enabled` *"simply falls back
+to in memory storage when the main storage is down and inherits the original limits."*
+`swallow_errors` was rejected — it discards the limit rather than relocating it, turning an outage
+into an unlimited-traffic window.
+
+**Evidence.** Verified end-to-end against the real app before/after: a dead Redis took
+`POST /videos/{id}/clips/generate` from **500 → 503** with the new copy, and `GET /auth/me` from
+**500 → 200**. Six tests fail against the pre-fix code. Suite 3212 → **3225 passed, 0 failed**,
+stable across three `--randomly-seed` values.
+
+**Consequence discovered while building this** (`docs/OFF_COURSE_BUGS.md` 2026-08-18): fail-open had
+been masking `RuntimeError: Event loop is closed` from the module-level async Redis singleton in the
+test suite, so the spend guard was never actually exercised by any route test after the first one.
+Flipping to fail-closed surfaced it as 12 failures. Fixed at the root with a per-test singleton
+reset in `tests/conftest.py`.
+
+---
+
+## 2026-08-18 — A gate's exit-code check is an allow-list, never `!= 0` (Issue 499)
 
 **Decision — Layer-0 static gates treat `{0, 1}` as "the tool ran" and everything else as "the tool
 did not complete", rather than checking `returncode != 0`.** `_COMPLETED_EXIT_CODES` in
@@ -3076,9 +3130,14 @@ slowapi pattern for layering a long-window cap on a short-window burst without a
 `routers/chat.py` already uses exactly this (`f"{settings.CHAT_DAILY_MESSAGE_LIMIT}/day"`). We reuse
 it verbatim (KISS/DRY) rather than hand-rolling a Redis day-counter.
 
-**Accepted risk (best-effort cap).** The daily cap is Redis-backed. Under the Issue 312
+**Accepted risk (best-effort cap).** The daily cap is Redis-backed. ~~Under the Issue 312
 bounded-socket-timeout fallback a Redis stall degrades to fail-open, so the ceiling is momentarily
-unenforced if Redis is down — accepted and consistent with every other limit in `limiter.py`. The
+unenforced if Redis is down~~ — **AMENDED 2026-08-18 (Issue 522): this was never true.** Neither
+`swallow_errors` nor `in_memory_fallback_enabled` was passed, both default to `False`, so a Redis
+stall did not degrade to fail-open — it raised, and every rate-limited route returned an unhandled
+**500**. As of Issue 522 the limiter genuinely does degrade: the count moves to a per-process
+in-memory bucket, so at `--workers 2` the ceiling is a 2× effective cap until Redis returns, rather
+than unenforced. Accepted, and consistent with every other limit in `limiter.py`. The
 "scripted loop throttled / normal session unaffected" end-to-end assertion needs cross-request Redis
 and is the staging Verify gate; the unit lane covers introspection + AST + a fake-limiter 429.
 
