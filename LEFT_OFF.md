@@ -8,8 +8,8 @@ sync with `origin/main` (0 ahead / 0 behind). All CI green; the nightly LLM E2E 
 Issue 498 items 1–3), **#120** (Issue 521 — the lying gate), **#121** (Issue 520 — the
 personalization SEV1), **#122** (this handoff). History on `main` is linear.
 
-**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3199 passed, 64 skipped, 0 xfailed**
-(was 3170 before the 2026-08-17 work).
+**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3212 passed, 64 skipped, 0 xfailed**
+(3170 before the 2026-08-17 work; 3199 before the 2026-08-18 Issue-499 + tracker-hygiene PR).
 
 **Prod:** `https://autoclip.studio`. **Running commit VERIFIED** — the container's image revision
 label reads `70ee4fa7663b94e018cd8fdf3f9f5a3ab2b26b5e`, and `/health` returns 200 over the public
@@ -77,14 +77,13 @@ is the natural next code work; **Issue 499** is its highest-value entry.
    contradiction) needs the two numbers *reconciled* rather than patched — a diagnosis, not a
    one-liner. **Item 5** (promoting `Migration lint (Squawk)` + `Visual regression` to required)
    mutates branch protection and wants its own change with a readback.
-4. **The recommended next CODE work: Issue 499**, Lane L30 Batch B. Four Layer-0 gates infer their
-   result purely from stdout and never check `proc.returncode`, so a tool that runs and *fails*
-   scores a perfect `ok 0`. It is recommended first for a concrete reason, not a theoretical one:
-   **the 2026-08-17 session could not trust the gate and had to re-run mypy by hand to believe it.**
-   Every future session pays that tax until it is fixed. It also unblocks Issue 500, which must not
-   go first (gotcha 13). ~2 h.
-   After it, Batch C ("scan, don't list", Issues 505–507) is the next-densest value — 11 of ~20
-   hand-maintained gate-scope literals had already drifted, two of them covering live defects.
+4. ~~**The recommended next CODE work: Issue 499**~~ ✅ **DONE 2026-08-18.** Layer-0 static gates now
+   verify their tool ran; the re-run-by-hand tax is gone. The measurement corrected the filed AC —
+   see gotcha 13 for the two facts worth keeping. **Issue 500 is unblocked** (~30 min, the natural
+   next pickup). Landed alongside the tracker-number fix (gotcha 14's worked example).
+   **The recommended next CODE work is now Batch C** ("scan, don't list", Issues 505–507) — the
+   next-densest value, since 11 of ~20 hand-maintained gate-scope literals had already drifted, two
+   of them covering live defects. Issue 500 first if you want the 30-minute win.
 
 **Then** resume the beta track: **#29 (Google OAuth verification)** is still the only item with a
 clock you cannot compress (1–4 weeks external review) — read the scope warning in §D before
@@ -434,23 +433,29 @@ gate. Warn the friend about two expected things so they don't read as breakage:
     `LOCAL CI FAILED` while its own summary said `failed: 0` — those disagree, and one is lying.
 12. **Before debugging anything non-trivial**, grep the cross-project log first:
     `grep -i "<symptom>" ~/.claude/ISSUES_LOG.md`.
-13. **`--require` on `run_layer0.py` does NOT make its gates honest** (audit 2026-08-17, reproduced).
-    Four of the eight gates infer their result purely from stdout and never check `proc.returncode`,
-    so a tool that runs and *fails* scores `{"status":"ok","value":0}` — a perfect score against the
-    strict baseline of 0. `--require` only escalates a `skipped` status, so it cannot see this at all.
-    **Fix the returncode check (Issue 499) before adding `--require` (Issue 500)** — doing it in the
-    other order buys a false sense of coverage. Most plausible live consequence today: pip-audit
-    reporting "0 vulnerabilities" during a PyPI/OSV outage, on a required check.
-    **Until 499 lands, do not trust a Layer-0 `ok 0` on its own** — re-run the tool directly and check
-    its exit code. The 2026-08-17 session did exactly that for mypy ("no issues found in 29 source
-    files", exit 0) because the gate's own word was not evidence. That friction is the argument for
-    fixing it.
+13. ✅ **RESOLVED 2026-08-18 (Issue 499).** Layer-0 static gates now check that their tool actually
+    ran, so a Layer-0 `ok 0` is trustworthy again — the re-run-by-hand tax is gone.
+    **Two things worth carrying forward, because re-deriving them costs a measurement pass:**
+    (a) the check is an **allow-list `{0, 1}`**, never `returncode != 0` — exit 1 is the normal
+    "ran, found things" state the baselines exist to count, and rejecting it red-walls the gate on
+    the first ruff violation; (b) **bandit is invisible to any returncode check** — a scan of a
+    missing path or an unparseable file exits **0** with `results: []` and a populated `errors[]`,
+    so that array is its only signal. Anyone "simplifying" this to a non-zero check reopens both.
+    Table + rationale: `docs/DECISIONS.md` 2026-08-18; build note at `docs/issues.md` §499.
+    **Issue 500** (`--require` on every invocation) is now **unblocked** — the ordering constraint it
+    carried was this issue.
 14. **A gate whose scope is a list literal is a vacuous-green generator by construction.** The audit
     censused 101 module-level literals in `tests/` + `scripts/`, diffed the ~20 that define a gate's
     scope, and **11 had drifted** — two covering live defects. The house rule is now **"scan, don't
     list"**; the model to copy is `tests/test_usage_coverage.py` (real AST discovery with a
     bidirectional staleness check). Applies to RLS tables, LLM route registries, ffmpeg task routing,
     and `run_layer0.py`'s own source list.
+    **Worked example, 2026-08-18:** `docs/issues.md`'s `Next free issue number` was a hand-incremented
+    literal and read 498 while 498–527 were filed above it — the next issue would have collided with
+    #520. It is now derived (`tests/test_tracker_hygiene.py` scans every `### Issue N` heading under
+    `docs/` and asserts the declaration is `max + 1`, and that it exists in exactly one file). Note
+    the shape: Issue 498 item 6 had *diagnosed* this the day before and deleted the two competing
+    copies. Making one number authoritative did not make it correct — only the scan did.
 15. **The limiter posture is decided and the code does not implement it yet.** `docs/DECISIONS.md`
     2026-08-17: the **limiter degrades to a local in-memory bucket**, the **spend guard fails
     CLOSED**, and every Redis client gets bounded socket timeouts. Today the limiter fails *closed*

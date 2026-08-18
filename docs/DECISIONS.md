@@ -5,7 +5,56 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-17 (latest) — Two numbers, not one: the personalization threshold and the LightGBM switchover are separated (Issue 520)
+## 2026-08-18 (latest) — A gate's exit-code check is an allow-list, never `!= 0` (Issue 499)
+
+**Decision — Layer-0 static gates treat `{0, 1}` as "the tool ran" and everything else as "the tool
+did not complete", rather than checking `returncode != 0`.** `_COMPLETED_EXIT_CODES` in
+`.claude/skills/production-assessment/scripts/run_layer0.py`. Additionally, `gate_bandit` fails on a
+non-empty `errors[]` regardless of exit code.
+
+**Why.** Issue 499 was filed as *"every static gate returns `fail` on non-zero returncode"*.
+Measuring the pinned binaries showed that criterion, implemented literally, would break the gates:
+
+| tool | version | exit 0 | exit 1 | exit 2 |
+|---|---|---|---|---|
+| ruff | 0.15.15 | clean | violations found | error, stdout empty |
+| mypy | 1.14.1 | no errors | errors found | fatal, stdout empty |
+| bandit | 1.9.4 | no issues **or a totally failed scan** | issues found | not observed |
+| pip-audit | 2.10.0 | no vulns | vulns found | error, stdout empty |
+
+Exit **1** is the ordinary "ran, found things" state — precisely what `baselines.json` exists to
+count. A non-zero check would red-wall the whole gate on the first ruff violation or mypy error,
+making the baselines unreachable, which is a worse failure than the one being fixed. The real
+distinction is not *did it find anything* but *did it run at all*, and that is an allow-list.
+
+**The second finding is the more important one: bandit cannot be protected by any returncode check.**
+Measured — `bandit -r /no/such/dir`, and a file bandit cannot parse, **both exit 0** with
+`results: []` and a populated `errors[]`. So a totally failed scan scores a perfect 0 HIGH / 0 MEDIUM
+against a strict baseline of 0. The issue text called this "a second route"; the measurement shows it
+is bandit's *only* route. Any implementation that had stopped at the returncode would have shipped
+believing bandit was fixed.
+
+**Alternatives ruled out.**
+- *Naive `returncode != 0`* — the literal AC. Rejected on the measurement above.
+- *Returncode check only, skipping bandit's `errors[]`* — cheaper, and would have left the
+  security-scan gate exactly as hollow as it was found.
+- *Promoting the `unparseable output` branches from `skipped` to `fail` in the same change* —
+  deliberately not done. `skipped` is what Issue 500's `--require` (Issue 479) is built to escalate;
+  keeping that seam intact is what leaves #500 a 30-minute change instead of a re-litigation.
+
+**Evidence.** Measured 2026-08-18 by running the `.venv` binaries directly. Live before/after through
+the real gate, not mocks: an unparseable file in `clip_engine/` took bandit from
+`ok {'high': 0, 'medium': 0}` (exit 0) to `fail — could not scan 1 path(s)` (exit 1); a corrupt
+`ruff.toml` took ruff from `ok 0` (exit 0) to `fail — exit 2` (exit 1). Real gates still green
+afterwards. `tests/test_layer0_gate_integrity.py` pins both directions — 5 of its 11 tests fail
+against the pre-fix script, and 4 of them exist solely to stop a future `!= 0` refactor.
+
+**Related.** This is the structural half of `docs/OFF_COURSE_BUGS.md` 2026-08-14 ("a gate that cannot
+run must never report a pass"), whose prose half closed as Issue 498 item 2.
+
+---
+
+## 2026-08-17 — Two numbers, not one: the personalization threshold and the LightGBM switchover are separated (Issue 520)
 
 **Decision — `fit()` switches to LightGBM at a new `PREFERENCE_LGBM_MIN_LABELS = 60`, derived from a
 measured non-degeneracy floor of 41, instead of at `PERSONALIZATION_THRESHOLD_LABELS`.

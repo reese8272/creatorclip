@@ -142,6 +142,37 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
 
 
+# Exit codes that mean the tool RAN. Measured 2026-08-18 (Issue 499) against the
+# pinned .venv versions — ruff 0.15.15, mypy 1.14.1, bandit 1.9.4, pip-audit 2.10.0:
+#
+#   tool        0                     1                 2
+#   ruff        clean                 violations found  error, stdout EMPTY
+#   mypy        no errors             errors found      fatal, stdout EMPTY
+#   bandit      no issues *or a       issues found      (not observed)
+#               totally failed scan*
+#   pip-audit   no vulns              vulns found       error, stdout EMPTY
+#
+# `returncode != 0` is therefore the WRONG check: 1 is the normal "ran, found
+# things" state that the baselines exist to measure, and rejecting it would
+# red-wall every gate the moment a single finding exists. Anything OUTSIDE this
+# set means the tool did not complete, and its empty stdout then parses to a
+# perfect score of 0 against a strict baseline of 0 — a gate that reports green
+# over work it never did.
+#
+# *bandit is invisible to any returncode check — a scan of a nonexistent path or
+# an unparseable file exits 0 with `results: []` and a populated `errors[]`. That
+# array is the only signal, which is why gate_bandit checks it separately.
+_COMPLETED_EXIT_CODES = {0, 1}
+
+
+def _incomplete(proc: subprocess.CompletedProcess[str]) -> str | None:
+    """Return a reason if the tool did not complete, else None (Issue 499)."""
+    if proc.returncode in _COMPLETED_EXIT_CODES:
+        return None
+    output = (proc.stderr or proc.stdout or "").strip()
+    return f"exit {proc.returncode}: {output[-300:] or 'no output'}"
+
+
 def _load_baselines() -> dict:
     if BASELINES_PATH.exists():
         data = json.loads(BASELINES_PATH.read_text())
@@ -157,6 +188,8 @@ def gate_ruff() -> dict:
     if not _have("ruff"):
         return {"status": "skipped", "detail": "ruff not installed"}
     proc = _run(["ruff", "check", ".", "--output-format", "json"])
+    if (why := _incomplete(proc)) is not None:
+        return {"status": "fail", "detail": f"ruff did not complete — {why}"}
     try:
         issues = len(json.loads(proc.stdout or "[]"))
     except json.JSONDecodeError:
@@ -168,6 +201,11 @@ def gate_mypy() -> dict:
     if not _have("mypy"):
         return {"status": "skipped", "detail": "mypy not installed"}
     proc = _run(["mypy", *_sources(), "--no-error-summary", "--no-color-output"])
+    if (why := _incomplete(proc)) is not None:
+        # The exact shape that produced a vacuous `ok 0` for three sessions: mypy
+        # cannot load the pydantic plugin under the wrong interpreter, aborts with
+        # exit 2 and no stdout, and zero lines contain ": error:".
+        return {"status": "fail", "detail": f"mypy did not complete — {why}"}
     errors = sum(1 for ln in proc.stdout.splitlines() if ": error:" in ln)
     return {"status": "ok", "value": errors, "metric": "mypy_errors", "compare": "max"}
 
@@ -225,10 +263,23 @@ def gate_bandit() -> dict:
         return {"status": "skipped", "detail": "bandit not installed"}
     dirs = [s for s in _sources() if not s.endswith(".py")]
     proc = _run(["bandit", "-r", *dirs, "-f", "json", "-q"])
+    if (why := _incomplete(proc)) is not None:
+        return {"status": "fail", "detail": f"bandit did not complete — {why}"}
     try:
-        results = json.loads(proc.stdout or "{}").get("results", [])
+        data = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError:
         return {"status": "skipped", "detail": "bandit output unparseable"}
+    # bandit reports a failed scan IN-BAND and still exits 0 (measured: a missing
+    # path or a file it cannot parse yields `results: []` + a populated errors[]).
+    # Unchecked, an unscannable tree scores a perfect 0 HIGH / 0 MEDIUM.
+    if errors := data.get("errors", []):
+        named = ", ".join(str(e.get("filename", "?")) for e in errors[:3])
+        more = f" (+{len(errors) - 3} more)" if len(errors) > 3 else ""
+        return {
+            "status": "fail",
+            "detail": f"bandit could not scan {len(errors)} path(s): {named}{more}",
+        }
+    results = data.get("results", [])
     high = sum(1 for r in results if r.get("issue_severity") == "HIGH")
     med = sum(1 for r in results if r.get("issue_severity") == "MEDIUM")
     return {
@@ -272,6 +323,12 @@ def gate_pip_audit() -> dict:
     for vuln_id in sorted(PIP_AUDIT_IGNORES):
         cmd += ["--ignore-vuln", vuln_id]
     proc = _run(cmd)
+    if (why := _incomplete(proc)) is not None:
+        # The named live consequence, reproduced 2026-08-18: with the index
+        # unreachable pip-audit exits 2 with empty stdout, which parsed to
+        # "0 vulnerabilities" on a REQUIRED check. A dependency audit that
+        # cannot reach its advisory source has not audited anything.
+        return {"status": "fail", "detail": f"pip-audit did not complete — {why}"}
     try:
         data = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError:
