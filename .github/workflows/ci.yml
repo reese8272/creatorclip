@@ -98,9 +98,16 @@ jobs:
           # there. psycopg uses the binary wheel, so only ffmpeg matters
           # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
           # if the workflow is ever run on a runner without passwordless sudo.
+          #
+          # `timeout 300` is the OTHER hang (2026-08-18): sudo -n only covers a
+          # password prompt, not a slow or unreachable apt mirror. This step
+          # normally takes ~27s; on 2026-08-17 and twice on 2026-08-18 it sat for
+          # 20-66 min with no path to finishing, and the documented remedy was a
+          # human cancelling and re-running. A bound turns that into a fast,
+          # visible failure into the warning path below.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
-          sudo -n apt-get update -q \
-            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+          timeout 300 sudo -n apt-get update -q \
+            && timeout 300 sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
             || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install Python deps
         run: pip install -r requirements.txt
@@ -129,8 +136,8 @@ jobs:
         # equally hard: no fallback, a 404 fails the lane.
         run: |
           if ! command -v ffmpeg >/dev/null 2>&1; then
-            sudo -n apt-get update -q
-            sudo -n apt-get install -y --no-install-recommends ffmpeg
+            timeout 300 sudo -n apt-get update -q
+            timeout 300 sudo -n apt-get install -y --no-install-recommends ffmpeg
           fi
           pip install -r requirements-image.txt
           pip install --force-reinstall --no-deps opencv-contrib-python==4.13.0.92
@@ -189,9 +196,16 @@ jobs:
           # there. psycopg uses the binary wheel, so only ffmpeg matters
           # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
           # if the workflow is ever run on a runner without passwordless sudo.
+          #
+          # `timeout 300` is the OTHER hang (2026-08-18): sudo -n only covers a
+          # password prompt, not a slow or unreachable apt mirror. This step
+          # normally takes ~27s; on 2026-08-17 and twice on 2026-08-18 it sat for
+          # 20-66 min with no path to finishing, and the documented remedy was a
+          # human cancelling and re-running. A bound turns that into a fast,
+          # visible failure into the warning path below.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
-          sudo -n apt-get update -q \
-            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+          timeout 300 sudo -n apt-get update -q \
+            && timeout 300 sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
             || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install Python deps
         run: pip install -r requirements.txt
@@ -230,9 +244,16 @@ jobs:
           # there. psycopg uses the binary wheel, so only ffmpeg matters
           # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
           # if the workflow is ever run on a runner without passwordless sudo.
+          #
+          # `timeout 300` is the OTHER hang (2026-08-18): sudo -n only covers a
+          # password prompt, not a slow or unreachable apt mirror. This step
+          # normally takes ~27s; on 2026-08-17 and twice on 2026-08-18 it sat for
+          # 20-66 min with no path to finishing, and the documented remedy was a
+          # human cancelling and re-running. A bound turns that into a fast,
+          # visible failure into the warning path below.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
-          sudo -n apt-get update -q \
-            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+          timeout 300 sudo -n apt-get update -q \
+            && timeout 300 sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
             || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install deps
         run: pip install -r requirements.txt -r requirements-dev.txt
@@ -310,8 +331,8 @@ jobs:
         run: |
           # Best-effort (see note in other jobs). psycopg uses the binary wheel,
           # so libpq/gcc are not actually needed to install — never hard-fail.
-          sudo -n apt-get update -q \
-            && sudo -n apt-get install -y --no-install-recommends libpq-dev gcc \
+          timeout 300 sudo -n apt-get update -q \
+            && timeout 300 sudo -n apt-get install -y --no-install-recommends libpq-dev gcc \
             || echo "::warning::libpq/gcc unavailable; psycopg binary wheel is used so this is usually fine"
       - name: Install Python deps + squawk-cli
         if: steps.filter.outputs.migrations == 'true'
@@ -529,9 +550,16 @@ jobs:
           # there. psycopg uses the binary wheel, so only ffmpeg matters
           # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
           # if the workflow is ever run on a runner without passwordless sudo.
+          #
+          # `timeout 300` is the OTHER hang (2026-08-18): sudo -n only covers a
+          # password prompt, not a slow or unreachable apt mirror. This step
+          # normally takes ~27s; on 2026-08-17 and twice on 2026-08-18 it sat for
+          # 20-66 min with no path to finishing, and the documented remedy was a
+          # human cancelling and re-running. A bound turns that into a fast,
+          # visible failure into the warning path below.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
-          sudo -n apt-get update -q \
-            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+          timeout 300 sudo -n apt-get update -q \
+            && timeout 300 sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
             || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install Python deps
         if: steps.filter.outputs.clip_engine == 'true'
@@ -710,9 +738,16 @@ jobs:
           # there. psycopg uses the binary wheel, so only ffmpeg matters
           # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
           # if the workflow is ever run on a runner without passwordless sudo.
+          #
+          # `timeout 300` is the OTHER hang (2026-08-18): sudo -n only covers a
+          # password prompt, not a slow or unreachable apt mirror. This step
+          # normally takes ~27s; on 2026-08-17 and twice on 2026-08-18 it sat for
+          # 20-66 min with no path to finishing, and the documented remedy was a
+          # human cancelling and re-running. A bound turns that into a fast,
+          # visible failure into the warning path below.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
-          sudo -n apt-get update -q \
-            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+          timeout 300 sudo -n apt-get update -q \
+            && timeout 300 sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
             || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install Python deps (including pytest-rerunfailures)
         run: pip install -r requirements.txt -r requirements-dev.txt
