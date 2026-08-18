@@ -1,15 +1,22 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-17 (late) · **Branch:** `main` @ `c342c4a` · **Working tree:** ✅ **CLEAN.**
-The 2026-08-17 audit is **committed and merged** — the "untracked, one `git clean` from gone" warning
-that stood here is resolved. Three PRs shipped this session: **#119** (the audit + Issue 498 items
-1–3), **#120** (Issue 521), **#121** (Issue 520 — the personalization SEV1). History on `main` is
-linear.
-**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3199 passed, 64 skipped, 0 xfailed**.
-**Prod:** `https://autoclip.studio`. **Running commit VERIFIED this session** — the container's image
-revision label reads `c342c4ae67dbafcdcc5d60faace60c7cd598591f`, i.e. prod is running the SEV1 fix,
-not merely a green pipeline. Re-confirm the same way after any deploy:
+**Last updated:** 2026-08-18 · **Branch:** `main` @ `70ee4fa` · **Working tree:** ✅ **CLEAN**, in
+sync with `origin/main` (0 ahead / 0 behind). All CI green; the nightly LLM E2E passed at 03:48 UTC
+**after** these merges, so the live-LLM path survived them.
+
+**Four PRs shipped 2026-08-17, all merged, deployed and live-verified:** **#119** (the audit itself +
+Issue 498 items 1–3), **#120** (Issue 521 — the lying gate), **#121** (Issue 520 — the
+personalization SEV1), **#122** (this handoff). History on `main` is linear.
+
+**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3199 passed, 64 skipped, 0 xfailed**
+(was 3170 before the 2026-08-17 work).
+
+**Prod:** `https://autoclip.studio`. **Running commit VERIFIED** — the container's image revision
+label reads `70ee4fa7663b94e018cd8fdf3f9f5a3ab2b26b5e`, and `/health` returns 200 over the public
+URL with all containers healthy. Re-confirm the same way after any deploy:
 `docker inspect autoclip-app-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
+*(Note: `curl localhost:8000/health` from inside the VM returns `000` — the app is behind
+cloudflared, so check the public URL, not localhost. That is not an outage.)*
 
 **Live-verified beyond the label** (per gotcha 4 — a green pipeline is not a working feature). Against
 the prod DB under a real `tenant_session`, the owner's scorer now reports:
@@ -17,7 +24,8 @@ the prod DB under a real `tenant_session`, the owner's scorer now reports:
 API active=False labels=10 threshold=20`. Two things that proves: `is_degenerate` computed correctly
 on a **pre-520 blob** (the lazy-recompute path is what makes the fix migration-free — it ran in
 production), and the honest sub-threshold fallback is intact. The owner has only 10 labels, so the
-*active* path could not be exercised live — that needs ≥21 clips rated.
+personalization-**active** path could not be exercised live — that needs ≥21 clips rated, and is the
+one loose end from this work.
 
 > ⚠️ **THE BRANCHING MODEL CHANGED ON 2026-08-15.** The `staging` **branch is deleted**. The model is
 > trunk-based: `feature/* → PR → main`. `main` protection is now **`enforce_admins: true`** — there
@@ -69,23 +77,34 @@ is the natural next code work; **Issue 499** is its highest-value entry.
    contradiction) needs the two numbers *reconciled* rather than patched — a diagnosis, not a
    one-liner. **Item 5** (promoting `Migration lint (Squawk)` + `Visual regression` to required)
    mutates branch protection and wants its own change with a readback.
-4. **The rest of Lane L30.** Batch B is the highest-value remainder: **Issue 499** (four Layer-0
-   gates infer their result from stdout and never check `proc.returncode`, so a tool that runs and
-   *fails* scores a perfect `ok 0`) **before** Issue 500. This session leaned on that gate repeatedly
-   and had to re-run mypy directly to trust it — which is the argument for fixing it.
+4. **The recommended next CODE work: Issue 499**, Lane L30 Batch B. Four Layer-0 gates infer their
+   result purely from stdout and never check `proc.returncode`, so a tool that runs and *fails*
+   scores a perfect `ok 0`. It is recommended first for a concrete reason, not a theoretical one:
+   **the 2026-08-17 session could not trust the gate and had to re-run mypy by hand to believe it.**
+   Every future session pays that tax until it is fixed. It also unblocks Issue 500, which must not
+   go first (gotcha 13). ~2 h.
+   After it, Batch C ("scan, don't list", Issues 505–507) is the next-densest value — 11 of ~20
+   hand-maintained gate-scope literals had already drifted, two of them covering live defects.
 
 **Then** resume the beta track: **#29 (Google OAuth verification)** is still the only item with a
 clock you cannot compress (1–4 weeks external review) — read the scope warning in §D before
 submitting — and **Issue 445** (three-pile triage UI) still needs a real CHECK phase; re-read
 `docs/issues.md` Lane L27 first, four design questions are open and the AC numbering has drifted.
 
+**One loose end from the 520 work:** the personalization-*active* path has never been exercised on
+prod, because the owner has 10 labels and it needs ≥21. If you rate ~12 more clips, that closes the
+last unverified claim in this fix — and it is also the cheapest way to see the new behaviour live.
+
 *Nothing is blocked. §B lists deferred code items if you want a quick win instead.*
 
-### → BEFORE YOU START: read these three, in this order
+### → BEFORE YOU START: read these, in this order
 
-1. `docs/assessment/DEEP_AUDIT_2026-08-17/REPORT.md` — the verdict and the reading rules below.
-2. `docs/assessment/DEEP_AUDIT_2026-08-17/SYNTHESIS_process.md` — the mechanism map + 90-day plan.
-3. `docs/issues.md` Lane **L30** (Issues 498–527), eight batches.
+1. **§🔬 THE RESEARCH BEHIND THIS WORK, below** — the measurements and the paths taken/rejected.
+   Cheapest thing in this file to read and the most expensive to re-derive.
+2. `docs/assessment/DEEP_AUDIT_2026-08-17/REPORT.md` — the verdict and the reading rules below.
+3. `docs/assessment/DEEP_AUDIT_2026-08-17/SYNTHESIS_process.md` — the mechanism map + 90-day plan.
+4. `docs/issues.md` Lane **L30** (Issues 498–527), eight batches. Note **498 items 1–3, 520 and 521
+   are now ticked** — read their build notes, not just their titles.
 
 > **Two rules for anything sourced from that audit.**
 > **(1) Use the verifier's CORRECTED statement, never the original claim.** Of 141 findings, 72 were
@@ -105,9 +124,92 @@ submitting — and **Issue 445** (three-pile triage UI) still needs a real CHECK
 
 ---
 
+## 🔬 THE RESEARCH BEHIND THIS WORK — what we measured, and where it lives
+
+Read this before touching `preference/` or any Layer-0 gate. It is the *why* behind the last two
+commits, and none of it is re-derivable cheaply.
+
+### Where the research is saved
+
+| Artifact | What it holds |
+|---|---|
+| `docs/assessment/DEEP_AUDIT_2026-08-17/` | The full read-only audit — 56 agents, three phases, **12,546 lines across 30 files**. `REPORT.md` first, then `SYNTHESIS_process.md`. This is the corpus Lane L30 was filed from. |
+| `docs/DECISIONS.md` (2026-08-17 entries) | **Eight** entries carry this date. Six are the audit's own approved decisions; **two were written on 2026-08-17 evening** — the strict-xfail rule and the two-numbers preference split. Each carries its measurements and its rejected alternatives. |
+| `docs/issues.md` §498/§520/§521 | Per-issue build notes: what was done, what departed from the filed plan, and the verification evidence. |
+
+### What was measured on 2026-08-17 (empirically, by running the repo's own code)
+
+The audit *claimed* the preference model was degenerate. We re-derived it rather than trusting the
+claim — and the measurement **corrected the audit's stated band**. The dead zone is **n = 20–39 with
+certainty**, plus ~43% of n=40 — not the "21–40" the finding said. Running `preference.model.fit` on
+lightgbm 4.6.0, 40 trials per label count:
+
+| n (labels) | trained booster | probability spread |
+|---|---|---|
+| 20–39 (every n, 40/40 trials) | 1 tree, 0 splits | **0.000000** |
+| 40 | degenerate in 17/40 trials | 0.0 or 0.9999 |
+| ≥41 | 92+ trees | 0.9999 |
+
+**41 is the measured non-degeneracy floor.** `PREFERENCE_LGBM_MIN_LABELS = 60` is that floor with a
+~1.5× margin, and `config.py` now refuses to boot below 41. If you ever change
+`PREFERENCE_LGBM_MIN_CHILD_SAMPLES`, **re-measure the floor** — the two are coupled by construction.
+
+The eval fixture was measured the same way. Its old single 20/20 split gave **92 trees, spread
+0.9999**; moving **one label** to 21/19 collapsed it to **1 tree, spread 0.000000**. That is the whole
+Issue-521 defect in two numbers.
+
+### The paths we took, and the ones we rejected
+
+1. **Issue 520 — raise the switchover (chosen) vs. tune `min_child_samples` down (rejected).**
+   Chosen because it makes `preference/model.py`'s own "LogisticRegression cold-start → LightGBM
+   warm-start" docstring *true* rather than rewriting it; because a linear model is the standard
+   choice on 20–60 rows where a shallow GBDT fits noise; and — decisively — because the rejected path
+   forces `PERSONALIZATION_THRESHOLD_LABELS` to ≥41, which moves the **creator-facing** number on the
+   Review page from 20 to 45. That is a product regression adopted to fix an implementation defect.
+2. **Landing Issue 521 as `xfail(strict=True)` (chosen) vs. narrowing the assertion until green
+   (rejected).** `main` has no bypass, so a red test cannot merge. Narrowing is the exact failure
+   class 521 exists to fix. Strict xfail kept CI green, printed the known-red reasons into the build
+   log, and — because a strict xfail that starts passing is a hard failure — made **"521 blocks 520"
+   enforced by pytest instead of by a doc bullet.** It worked exactly as designed: when 520 landed,
+   all four markers XPASSed and *failed the run*, which is what forced them to be cleared in the same
+   change. **Before committing any strict-xfail marker, simulate the intended fix and confirm the row
+   can actually XPASS** — otherwise you have written a permanent blocker. We did.
+3. **Adding a mid-ramp n=30 split the acceptance criteria did not ask for.** The issue is about the
+   *ramp*; n=30 is where a real creator sits (weight 0.25, `active: true`, model returning 0.5 for
+   every clip). Testing only n=40 would have repeated the original mistake at a different point.
+4. **Leaving the precondition test deliberately un-xfailed.** It asserts label count and blend weight
+   — things a degenerate model satisfies perfectly. It passes on all eight splits while the two
+   property tests failed on four. That gap, in one test run, *is* the defect stated as a test result.
+5. **Deferring Issue 498 items 4 and 5 rather than batching them in.** Item 4 needs the `failed: 0`
+   vs `LOCAL CI FAILED` contradiction *reconciled* — a diagnosis, not a one-liner, and burying it in
+   a docs PR would hide it. Item 5 mutates branch protection and wants its own change with a readback.
+
+### Two facts a future session cannot re-derive
+
+- **The migration-free claim was proven in production, not just in tests.** `is_degenerate` computed
+  correctly on a real pre-520 model blob on the prod box. That is what makes the lazy-recompute path
+  trustworthy; do not "tidy it up".
+- **Expect one warn-only NDCG-ratchet event per affected creator** on their first retrain after this
+  deploy. The served model genuinely changes shape. That is the ratchet working — **do not chase it
+  as a regression.**
+
+---
+
 ## WHAT WORKS NOW (verified — do not re-investigate)
 
-### Repo hygiene + branch protection (2026-08-15, this session)
+### The personalization loop is honest now (2026-08-17, PRs #120 + #121)
+
+`PERSONALIZATION_THRESHOLD_LABELS` (20) and `PREFERENCE_LGBM_MIN_LABELS` (60) are now **two separate
+numbers answering two different questions** — "enough feedback to be honest about?" and "enough rows
+for this estimator to split?". One constant answering both was the root cause of the SEV1.
+`effective_weight()` is the **single** producer of the blend weight, read by the reranker, the API
+and the offline efficacy harness, so `active ⟺ weight > 0 ⟺ the blend was applied` holds
+structurally rather than by three call sites remembering the same two conditions. The
+LogisticRegression branch is reachable at serve time **for the first time in the project's history**.
+Three vacuous-green tests were fixed in the same change (two could not even compile past the
+parameter rename).
+
+### Repo hygiene + branch protection (2026-08-15)
 
 Three PRs shipped, all rebase-merged, `main` history now genuinely linear:
 
@@ -235,7 +337,7 @@ gate. Warn the friend about two expected things so they don't read as breakage:
    deployed, and structurally *prevented* `enforce_admins: true`. Retired it; trunk-based now.
    The owner's in-flight privacy-policy edits were finished, tested, merged and live-verified in the
    same pass.
-5. **2026-08-17 (this session)** — owner asked *why the project keeps hitting one small snag after
+5. **2026-08-17 (morning)** — owner asked *why the project keeps hitting one small snag after
    another*, and commissioned a deep standards + process audit (56 agents, three phases, read-only).
    **Answer: not the architecture and not the stack** — the missing service layer, the single VM and
    `worker/tasks.py`'s size were each independently ratified as correct. The diagnosis is that **this
@@ -249,6 +351,18 @@ gate. Warn the friend about two expected things so they don't read as breakage:
    (36%)**, so defect *arrival* is not rising — with 52 of 138 off-course rows still open, the
    "snag after snag" feeling is at least partly backlog visibility.
    Seven decisions were approved and recorded; Lane L30 (Issues 498–527) filed.
+6. **2026-08-17 (late) — the audit's own top finding got built.** Owner asked what to tackle first.
+   The answer was not on the list: the audit's 12,546 lines were **untracked**, one `git clean` from
+   gone, so committing them preceded everything. Then the SEV1, in the order the audit itself
+   demanded — **the gate before the fix**, because the gate written four days earlier to catch this
+   defect *passed*, and a fix landing against a lying gate proves nothing.
+   The shape of the defect is worth remembering, because it is the audit's thesis in miniature: one
+   config constant was quietly answering two unrelated questions, and the gap between the right
+   answers was the bug. Nobody wrote a wrong number; nothing related the number to what the model
+   could actually do. That is "diagnoses better than it defends" expressed in code rather than in
+   process — and it is why the fix ends in a boot-time validator rather than a comment.
+   Batched alongside: three Issue-498 conversions, each turning a rule someone had to *remember*
+   into a mechanism that cannot be forgotten.
 
 ---
 
@@ -262,7 +376,8 @@ gate. Warn the friend about two expected things so they don't read as breakage:
 | Containers | `autoclip-app-1`, `autoclip-worker-1`, `autoclip-render-worker-1`, `autoclip-beat-1`, `autoclip-postgres-1`, `autoclip-redis-1`, `autoclip-cloudflared-1` |
 | Prod DB | `docker exec autoclip-postgres-1 psql -U creatorclip -d creatorclip` |
 | Owner creator id | `eb9af967-5d2f-4063-a05e-9f4f070ce840` ("Backboard Media", channel `UCNU5Tnt0xp7YtHNPgxDrSIw`) |
-| Deployed commit | `c260689` (confirmed from the container's image revision label) |
+| Deployed commit | `70ee4fa` (confirmed 2026-08-17 from the container's image revision label; `/health` 200 over the public URL) |
+| Health check | Use `https://autoclip.studio/health`. `curl localhost:8000/health` **on the VM returns `000`** — the app sits behind cloudflared. Not an outage. |
 | Image | `ghcr.io/reese8272/creatorclip:latest` (deploys resolve `sha-<7char>` for the staging gate) |
 | Branch model | **trunk-based**: `feature/* → PR → main`. No `staging` branch. Rebase/squash only. |
 | Deploy chain | push to `main` → **Docker publish** → (`workflow_run`) → **Deploy to production** → data-bearing staging gate → prod smoke + auto-rollback |
@@ -274,13 +389,15 @@ gate. Warn the friend about two expected things so they don't read as breakage:
 
 ## CONSTRAINTS & GOTCHAS
 
-1. **⚠️ RUN TESTS FROM `.venv`, NOT SYSTEM PYTHON.** This has now burned two consecutive sessions.
+1. **⚠️ RUN TESTS FROM `.venv`, NOT SYSTEM PYTHON.** This burned three consecutive sessions.
    System `python3.12` has **fastapi 0.115.4** against the pinned **0.137.1**, and its `mypy` cannot
    import the `pydantic` plugin — so mypy aborts before checking anything and Layer 0 reports a
    **vacuous `ok 0`**. Under system python the suite once showed 4 phantom failures and pip-audit 77
-   phantom CVEs; under `.venv` it is **3170 passed / 0 failed**, all gates 0. Use
-   `scripts/ci_local.sh --fast` (it prefixes `PATH` with `.venv/bin`). *This bit again on 2026-08-15 —
-   results happened to hold, but they were not trustworthy as first reported.*
+   phantom CVEs; under `.venv` it is **3199 passed / 0 failed**, all gates 0. Use
+   `scripts/ci_local.sh --fast` (it prefixes `PATH` with `.venv/bin`).
+   ✅ **Partly mechanised 2026-08-17 (Issue 498 item 2):** `CLAUDE.md` no longer *instructs* the bad
+   interpreter — both places that invoke one now say `.venv/bin/python`. The structural half (a gate
+   that cannot run must report `fail`, not `ok 0`) is **Issue 499, still open** — see gotcha 13.
 2. **FastAPI 0.137.1 defers `include_router`** into `_IncludedRouter` objects, so `app.routes` holds
    almost no `APIRoute`. Any test that walks routes naively iterates **zero** routes and passes
    vacuously. Resolve via `effective_route_contexts`; see `tests/test_response_models.py`.
@@ -324,6 +441,10 @@ gate. Warn the friend about two expected things so they don't read as breakage:
     **Fix the returncode check (Issue 499) before adding `--require` (Issue 500)** — doing it in the
     other order buys a false sense of coverage. Most plausible live consequence today: pip-audit
     reporting "0 vulnerabilities" during a PyPI/OSV outage, on a required check.
+    **Until 499 lands, do not trust a Layer-0 `ok 0` on its own** — re-run the tool directly and check
+    its exit code. The 2026-08-17 session did exactly that for mypy ("no issues found in 29 source
+    files", exit 0) because the gate's own word was not evidence. That friction is the argument for
+    fixing it.
 14. **A gate whose scope is a list literal is a vacuous-green generator by construction.** The audit
     censused 101 module-level literals in `tests/` + `scripts/`, diffed the ~20 that define a gate's
     scope, and **11 had drifted** — two covering live defects. The house rule is now **"scan, don't
@@ -336,6 +457,25 @@ gate. Warn the friend about two expected things so they don't read as breakage:
     with an unhandled **HTTP 500** on every rate-limited route including `GET /auth/me` — so a Redis
     latency spike is a silent total sign-in outage that `/health` reports as `200 ok`. Issue 522.
     Do not "fix" this from the three stale documents that still describe the old fail-open claim.
+16. **Stacked PRs need a rebase + force-push after each merge.** Rebase-merging rewrites the SHA, so
+    the moment PR A lands, PR B (which contained A's old commit) goes `CONFLICTING`. This is normal
+    here, not a mistake: `git rebase origin/main` on B's branch, then
+    `git push --force-with-lease`. Git will say "skipped previously applied commit" — that is correct.
+    Budget a full CI cycle per rebase; three stacked PRs cost three cycles.
+17. **The integration lane cannot run on this box.** No local Postgres running and the Docker daemon
+    is down, so `-m integration` aborts at the conftest reachability check. CI is the only
+    verification — and **say so plainly** rather than implying you ran it. To confirm a *new*
+    integration test actually executed rather than silently skipping, diff the `N passed` count
+    against the previous run's (on 2026-08-17: 190 → 191). The lane runs `-q`, so names aren't printed.
+18. **CI jobs occasionally hang in `Install system deps` (apt), not in your code.** Seen 2026-08-17:
+    the coverage job sat ~35 min on an apt step that normally takes seconds, while the identical job
+    had passed in 3m15s minutes earlier on the same branch. Cancel the run and
+    `gh run rerun <id> --failed`. Check the job's *step* states before assuming your change broke it.
+19. **`ci_local.sh`'s verdict and its own summary sometimes disagree.** On 2026-08-15 it printed
+    `LOCAL CI FAILED` alongside `failed: 0`; on 2026-08-17 the two agreed (`Local CI passed` /
+    `failed: 0`). So the contradiction is **intermittent**, which is worse than consistent — it means
+    a green local run is not self-evidently trustworthy. Reconciling the two numbers is Issue 498
+    item 4, still open.
 
 ---
 
