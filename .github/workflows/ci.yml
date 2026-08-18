@@ -430,9 +430,20 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run static gates
+        # --require (Issue 500): a gate that reports "skipped" — tool missing,
+        # output unparseable — is a hard failure here, never a green no-op. This
+        # is the second half of Issue 499, which made a gate whose tool RAN and
+        # FAILED report `fail` instead of a perfect `ok 0`; --require covers the
+        # gate whose tool never ran at all. Deliberately in that order: adding
+        # --require first would have bought a false sense of coverage over the
+        # larger hole.
+        #
+        # `freshness` is NOT required: it is warn-only by design and has its own
+        # --require-fresh flag, used by the scheduled freshness.yml job.
         run: >-
           python3 .claude/skills/production-assessment/scripts/run_layer0.py
           --gates ruff,mypy,bandit,pip_audit,freshness
+          --require ruff,mypy,bandit,pip_audit
 
   frontend:
     name: Frontend (lint, test, build)
