@@ -707,3 +707,44 @@ def test_every_layer0_invocation_requires_its_gates() -> None:
             f"so a skip of them still passes. Either add them to --require or "
             f"add them to _REQUIRE_EXEMPT_GATES with a stated reason."
         )
+
+
+# ── 2026-08-18: no CI step may hang unbounded on a package mirror ─────────────
+
+
+def test_every_apt_invocation_is_time_bounded() -> None:
+    """A stalled apt mirror must fail fast, not hang until the job timeout.
+
+    `sudo -n` (already present) only prevents a hang on a *password prompt*. It
+    does nothing for a slow or unreachable mirror. This step normally runs in
+    ~27s; on 2026-08-17 and twice on 2026-08-18 it sat for 20-66 minutes with no
+    path to finishing, and the recorded remedy was a human noticing and
+    re-running the job (LEFT_OFF gotcha 18). Three occurrences of a known failure
+    mode whose only mitigation is a manual ritual is the exact shape this lane
+    exists to retire.
+
+    Scanned rather than listed: there are 14 apt invocations across 7 steps, and
+    a hand-maintained list of them would drift the first time a job is added.
+    """
+    src = _load_workflow("ci.yml")
+    unbounded = [
+        line.strip()
+        for line in src.splitlines()
+        if "apt-get" in line and not line.lstrip().startswith("#") and "timeout " not in line
+    ]
+    assert not unbounded, (
+        "unbounded apt invocation(s) in ci.yml — prefix each with `timeout N` so "
+        f"a stalled mirror fails instead of hanging the job: {unbounded}"
+    )
+
+
+def test_apt_invocations_are_discoverable() -> None:
+    """Guard the scanner: zero apt lines would make the assertion above vacuous."""
+    src = _load_workflow("ci.yml")
+    apt_lines = [
+        line for line in src.splitlines() if "apt-get" in line and not line.lstrip().startswith("#")
+    ]
+    assert len(apt_lines) >= 10, (
+        f"expected 10+ apt invocations in ci.yml, found {len(apt_lines)}. If the "
+        "install steps moved, fix this scanner — do not delete the assertion."
+    )
