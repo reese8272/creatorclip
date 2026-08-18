@@ -91,7 +91,11 @@ gate_static() {
   local gates="mypy,bandit"; [ "$PROFILE" = "full" ] && gates="mypy,bandit,pip_audit"
   hdr "static gates (run_layer0: $gates)"
   command -v python3 >/dev/null 2>&1 || { skip "static" "python3 not found"; return; }
-  if python3 "$LAYER0" --gates "$gates"; then pass "static ($gates)"; else fail "static ($gates)"; fi
+  # --require takes the SAME variable as --gates, not a fixed list (Issue 500):
+  # run_layer0.py hard-errors when --require names a gate that --gates did not
+  # select, and this profile drops pip_audit outside --full. A hardcoded list
+  # would make the fast profile fail to start rather than fail to gate.
+  if python3 "$LAYER0" --gates "$gates" --require "$gates"; then pass "static ($gates)"; else fail "static ($gates)"; fi
 }
 
 # ── pytest unit — needs Redis (limiter) only. The unit lane mocks the DB at the

@@ -597,3 +597,113 @@ def test_local_ci_does_not_override_the_default_marker_lane() -> None:
         "transcription_live, which no dev machine can run"
     )
     assert "pytest -q" in unit_gate, "gate_unit must still actually invoke pytest"
+
+
+# ── Issue 500: every run_layer0.py invocation must carry --require ────────────
+
+
+_LAYER0_SCRIPT = "run_layer0.py"
+# Gates exempt from --require, with the reason. `freshness` is warn-only by
+# design and carries its own --require-fresh flag, so requiring it would turn a
+# scheduled advisory into a blocking PR failure.
+_REQUIRE_EXEMPT_GATES = {"freshness"}
+
+
+def _layer0_invocations() -> list[tuple[str, str]]:
+    """Every run_layer0.py invocation in the repo, as (source file, command).
+
+    Discovered by scanning rather than listed (the "scan, don't list" house
+    rule): a hand-maintained list of call sites is exactly how the coverage job
+    was hardened in Issue 479 while `static-gates` and `ci_local.sh` were left
+    behind for three months.
+    """
+    found: list[tuple[str, str]] = []
+    roots = [_REPO_ROOT / ".github" / "workflows", _REPO_ROOT / "scripts"]
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix not in {".yml", ".yaml", ".sh"}:
+                continue
+            text = path.read_text()
+            if _LAYER0_SCRIPT not in text:
+                continue
+            # Drop comment lines FIRST. Both YAML and shell use `#`, and the
+            # rationale comments around these very invocations name the script
+            # and its flags in prose — scanning them would parse English as
+            # arguments.
+            code_lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+            # Shell callers assign the path to a variable and invoke through it
+            # (ci_local.sh: LAYER0="...run_layer0.py" then `python3 "$LAYER0"`).
+            # Splitting on the literal filename alone finds the ASSIGNMENT and
+            # misses every real invocation — which made this assertion pass
+            # vacuously for ci_local.sh until it was caught here. Resolve the
+            # alias so the call sites are actually scanned.
+            aliases = [_LAYER0_SCRIPT]
+            for line in code_lines:
+                if _LAYER0_SCRIPT in line and "=" in line:
+                    name = line.split("=", 1)[0].strip()
+                    if name.isidentifier():
+                        aliases.append(f'"${name}"')
+
+            # Join continuation lines so a YAML folded block or a shell
+            # invocation reads as one command string.
+            flat = "\n".join(code_lines).replace("\\\n", " ").replace("\n", " ")
+            for alias in aliases:
+                for chunk in flat.split(alias)[1:]:
+                    if not chunk.lstrip().startswith("-"):
+                        continue  # an assignment or a bare mention, not a call
+                    # The command ends at the next step/keyword boundary.
+                    command = chunk.split(" - name:")[0].split("; then")[0]
+                    found.append((str(path.relative_to(_REPO_ROOT)), command))
+    return found
+
+
+def test_layer0_invocations_are_discoverable() -> None:
+    """Guard the scanner itself: zero hits would make every assertion below vacuous."""
+    invocations = _layer0_invocations()
+    assert len(invocations) >= 3, (
+        f"expected at least 3 run_layer0.py invocations (ci.yml coverage + "
+        f"static-gates, ci_local.sh), found {len(invocations)}. If the call "
+        "sites moved, fix this scanner — do not delete the assertion."
+    )
+
+
+def test_every_layer0_invocation_requires_its_gates() -> None:
+    """A gate that did not run must never pass silently (Issue 500).
+
+    ``--require`` escalates a `skipped` status to a hard failure. Without it a
+    missing tool or unparseable output is reported green — which is how the
+    per-module coverage floors and the patch gate went unenforced on every PR
+    from 2026-06-23 to 2026-08-12.
+    """
+    for source, command in _layer0_invocations():
+        if "--gates" not in command:
+            continue  # a bare invocation runs everything; not a scoped gate job
+        gates_arg = command.split("--gates", 1)[1].strip().split()[0]
+        gates = {g for g in gates_arg.split(",") if g}
+        must_require = gates - _REQUIRE_EXEMPT_GATES
+        if not must_require:
+            continue
+
+        # `--require-coverage` is the documented shorthand: run_layer0.main()
+        # does `if args.require_coverage: required.add("coverage")`. Treat it as
+        # satisfying that one gate rather than flagging a real call site as a gap.
+        if "--require-coverage" in command:
+            must_require -= {"coverage"}
+            if not must_require:
+                continue
+
+        assert "--require" in command, (
+            f"{source} invokes run_layer0.py with --gates {gates_arg} but no "
+            f"--require. A skipped gate there reports green (Issue 500)."
+        )
+        required_arg = command.split("--require", 1)[1].strip().split()[0]
+        # ci_local.sh passes a shell variable; it is required by construction.
+        if required_arg.startswith("$") or required_arg.startswith('"$'):
+            continue
+        required = {g for g in required_arg.split(",") if g}
+        missing = must_require - required
+        assert not missing, (
+            f"{source}: gate(s) {sorted(missing)} are selected but not required, "
+            f"so a skip of them still passes. Either add them to --require or "
+            f"add them to _REQUIRE_EXEMPT_GATES with a stated reason."
+        )
