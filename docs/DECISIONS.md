@@ -54,8 +54,11 @@ stable across three `--randomly-seed` values.
 **Consequence discovered while building this** (`docs/OFF_COURSE_BUGS.md` 2026-08-18): fail-open had
 been masking `RuntimeError: Event loop is closed` from the module-level async Redis singleton in the
 test suite, so the spend guard was never actually exercised by any route test after the first one.
-Flipping to fail-closed surfaced it as 12 failures. Fixed at the root with a per-test singleton
-reset in `tests/conftest.py`.
+Flipping to fail-closed surfaced it as 12 unit failures and then six *integration* failures. Fixed in
+`youtube/_redis.py` itself — `get_redis_client()` now binds to the running loop and rebuilds on
+mismatch, mirroring `worker/progress.py::_async_client`, which had already solved this. A first
+attempt patched it from `tests/conftest.py` and was reverted: it covered the cross-test case only,
+and it treated the harness as the defect when the module was.
 
 ---
 

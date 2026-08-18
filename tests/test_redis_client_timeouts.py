@@ -71,3 +71,65 @@ def test_youtube_redis_matches_the_sibling_client_convention() -> None:
     from youtube._redis import _SOCKET_TIMEOUTS
 
     assert _SOCKET_TIMEOUTS == {"socket_timeout": 2.0, "socket_connect_timeout": 2.0}
+
+
+# ── Loop rebinding (Issue 522) ────────────────────────────────────────────────
+
+
+def test_client_rebinds_when_the_event_loop_changes() -> None:
+    """A second `asyncio.run()` must get a client bound to ITS loop, not the dead one.
+
+    redis.asyncio binds a connection to whichever event loop first uses it, so a
+    module-level singleton reused from a later loop raises
+    ``RuntimeError: Event loop is closed``. Production never hits this — one
+    long-lived loop — but the test suite runs each ``asyncio.run()`` and each
+    TestClient on its own, and worker tasks call this client directly.
+
+    It was invisible while the spend guard failed OPEN: the RuntimeError was
+    swallowed and the caller carried on. Failing CLOSED turned the same error
+    into refused paid work, which is how six integration tests started reporting
+    a task status of 'failed' where they expected 'ready'.
+
+    ``worker/progress.py::_async_client`` already solved this; this module had
+    not, which is the drift the test pins shut.
+    """
+    import asyncio
+
+    import youtube._redis as youtube_redis
+
+    youtube_redis._REDIS_CLIENT = None  # noqa: SLF001
+    youtube_redis._REDIS_LOOP = None  # noqa: SLF001
+
+    async def _grab():
+        return youtube_redis.get_redis_client()
+
+    first = asyncio.run(_grab())
+    second = asyncio.run(_grab())
+
+    assert first is not second, (
+        "get_redis_client() returned the SAME client across two event loops. Its "
+        "connections are bound to the first loop, which is now closed, so the "
+        "next await raises RuntimeError: Event loop is closed — and with the "
+        "spend guard failing closed that refuses paid work (Issue 522)."
+    )
+
+
+def test_client_is_reused_within_one_event_loop() -> None:
+    """The rebinding must not degrade into a client-per-call.
+
+    Without this, returning a fresh client every time would satisfy the test
+    above while quietly abandoning the connection-pool singleton this module
+    exists to provide.
+    """
+    import asyncio
+
+    import youtube._redis as youtube_redis
+
+    youtube_redis._REDIS_CLIENT = None  # noqa: SLF001
+    youtube_redis._REDIS_LOOP = None  # noqa: SLF001
+
+    async def _grab_twice():
+        return youtube_redis.get_redis_client(), youtube_redis.get_redis_client()
+
+    first, second = asyncio.run(_grab_twice())
+    assert first is second, "the client must be a singleton within one loop"
