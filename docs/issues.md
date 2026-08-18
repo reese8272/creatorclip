@@ -4872,6 +4872,22 @@ whenever wanted). These need **decision entries ratifying them**, not work — s
 
 ---
 
+## Tracker hygiene
+
+This file is the **sole authority** for the next free issue number (Issue 498 item 6). The number is
+now *also* derived and enforced by `tests/test_tracker_hygiene.py`, which scans every `### Issue N`
+heading under `docs/` and fails if the declaration below is not `max + 1` — so it cannot silently
+drift again, and no second copy may exist anywhere in `docs/` or `LEFT_OFF.md`.
+
+*(It drifted once, on 2026-08-17: it read 498 while 498–527 were filed in Lane L30, which would have
+made the next filed issue collide with #520. Deleting the competing copies made one number
+authoritative without making it correct — the mechanism is the fix. `docs/OFF_COURSE_BUGS.md`,
+2026-08-18.)*
+
+- Next free issue number: **528**.
+
+---
+
 ## Source index
 
 Collected from the 2026-08-03 research pass. Cited inline above; listed here so a future pass can
@@ -5493,5 +5509,3 @@ is not contaminated by a concurrent change to the object under review.
       because the gate still reported `ok`)
 - [ ] `CLAUDE.md` → *Project Structure* updated to list `analysis/`, `chat/`, `notify/`,
       `billing/` — the stale list is the root cause of defect (2)
-
-- Next free issue number: **498**.
