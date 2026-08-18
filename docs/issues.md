@@ -4781,9 +4781,12 @@ Fail-closed goes on the pre-execution checks only. Recorded in `docs/DECISIONS.m
 2. **Fail-open had been masking a dead-event-loop error in the test suite**, so the spend guard was
    never actually exercised by any route test after the first one (`RuntimeError: Event loop is
    closed` from the module-level async Redis singleton). Flipping to fail-closed surfaced it as 12
-   failures across 8 files. Fixed at the root — a per-test singleton reset in `tests/conftest.py` —
-   rather than by mocking Redis in the 12 tests, which would have left the hole for every future
-   route test. `docs/OFF_COURSE_BUGS.md` 2026-08-18.
+   failures across 8 files, then six *integration* failures CI caught that local runs could not.
+   Fixed in `youtube/_redis.py` itself: `get_redis_client()` binds to the running loop and rebuilds on
+   mismatch, mirroring `worker/progress.py::_async_client`, which had solved this already. A first
+   attempt patched it from `tests/conftest.py` and was **reverted** — it fixed only the cross-test
+   case, and it treated the harness as the defect when the module was. `docs/OFF_COURSE_BUGS.md`
+   2026-08-18.
 
 **Measured:** on the pinned redis 5.2.0 both socket timeouts default to `None` (block forever), not
 the 10 s redis.io documents for 6.x — which is what makes the timeouts load-bearing rather than
