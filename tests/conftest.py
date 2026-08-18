@@ -109,6 +109,46 @@ def pytest_configure(config: pytest.Config) -> None:
             ) from exc
 
 
+@pytest.fixture(autouse=True)
+def _reset_async_redis_singleton():
+    """Rebind the shared async Redis client per test (Issue 522).
+
+    ``youtube._redis._REDIS_CLIENT`` is a module-level ``redis.asyncio`` client.
+    redis-py binds its connections to whichever event loop first uses them, and
+    every TestClient runs on its own short-lived portal loop. So the first API
+    test to touch Redis pins the singleton to a loop that is closed by the time
+    the next test runs, and every later ``await`` raises
+    ``RuntimeError: Event loop is closed``.
+
+    This was invisible until Issue 522. The spend guard used to fail OPEN, so a
+    dead-loop error was swallowed and the route carried on — meaning the guard
+    was never actually exercised by any route test that ran after the first one.
+    Failing CLOSED turned the same latent error into a 503 and made it visible in
+    12 tests across 8 files. The symptom was new; the defect was not.
+
+    Production is unaffected: the API process has one long-lived loop. This is a
+    test-harness fix, which is why it lives here and not in ``youtube/_redis.py``.
+    Logged in docs/OFF_COURSE_BUGS.md (2026-08-18).
+    """
+    import youtube._redis as youtube_redis
+
+    youtube_redis._REDIS_CLIENT = None  # noqa: SLF001
+    yield
+    stale = youtube_redis._REDIS_CLIENT  # noqa: SLF001
+    youtube_redis._REDIS_CLIENT = None  # noqa: SLF001
+    if stale is None:
+        return
+    # Disarm rather than aclose(): the loop that owns these connections is
+    # already closing, so awaiting a graceful close is not possible here. Same
+    # reach-in as pytest_sessionfinish below, for the same reason.
+    pool = stale.connection_pool
+    for conn in list(getattr(pool, "_available_connections", ())) + list(
+        getattr(pool, "_in_use_connections", ())
+    ):
+        conn._writer = None  # noqa: SLF001
+        conn._reader = None  # noqa: SLF001
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Disarm leftover async-Redis singletons so interpreter exit stays quiet.
 

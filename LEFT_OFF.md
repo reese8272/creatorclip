@@ -8,8 +8,8 @@ sync with `origin/main` (0 ahead / 0 behind). All CI green; the nightly LLM E2E 
 Issue 498 items 1–3), **#120** (Issue 521 — the lying gate), **#121** (Issue 520 — the
 personalization SEV1), **#122** (this handoff). History on `main` is linear.
 
-**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3212 passed, 64 skipped, 0 xfailed**
-(3170 before the 2026-08-17 work; 3199 before the 2026-08-18 Issue-499 + tracker-hygiene PR).
+**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3225 passed, 64 skipped, 0 xfailed**
+(3170 before the 2026-08-17 work; 3199 → 3212 → 3225 across the three 2026-08-18 PRs).
 
 **Prod:** `https://autoclip.studio`. **Running commit VERIFIED** — the container's image revision
 label reads `70ee4fa7663b94e018cd8fdf3f9f5a3ab2b26b5e`, and `/health` returns 200 over the public
@@ -77,13 +77,15 @@ is the natural next code work; **Issue 499** is its highest-value entry.
    contradiction) needs the two numbers *reconciled* rather than patched — a diagnosis, not a
    one-liner. **Item 5** (promoting `Migration lint (Squawk)` + `Visual regression` to required)
    mutates branch protection and wants its own change with a readback.
-4. ~~**The recommended next CODE work: Issue 499**~~ ✅ **DONE 2026-08-18.** Layer-0 static gates now
-   verify their tool ran; the re-run-by-hand tax is gone. The measurement corrected the filed AC —
-   see gotcha 13 for the two facts worth keeping. **Issue 500 is unblocked** (~30 min, the natural
-   next pickup). Landed alongside the tracker-number fix (gotcha 14's worked example).
-   **The recommended next CODE work is now Batch C** ("scan, don't list", Issues 505–507) — the
+4. ~~**Issues 499, 500 and 522**~~ ✅ **ALL DONE 2026-08-18.** Layer-0 gates verify their tool ran and
+   every invocation now carries `--require`; a Redis blip is no longer a total sign-in outage.
+   See gotchas 13 and 15 for the facts worth carrying forward from each.
+   **The recommended next CODE work is Batch C** ("scan, don't list", Issues 505–507) — the
    next-densest value, since 11 of ~20 hand-maintained gate-scope literals had already drifted, two
-   of them covering live defects. Issue 500 first if you want the 30-minute win.
+   of them covering live defects. Note **505** also carries two tenant tables with no RLS policy and
+   no recorded exemption, and **506** four LLM routes missing a burst or daily cap.
+   Batch B's remainder (**501–504**) is the cheaper alternative: 503 in particular is a weekly
+   mutation gate that has never executed a single mutant across 8 green runs.
 
 **Then** resume the beta track: **#29 (Google OAuth verification)** is still the only item with a
 clock you cannot compress (1–4 weeks external review) — read the scope warning in §D before
@@ -456,12 +458,19 @@ gate. Warn the friend about two expected things so they don't read as breakage:
     `docs/` and asserts the declaration is `max + 1`, and that it exists in exactly one file). Note
     the shape: Issue 498 item 6 had *diagnosed* this the day before and deleted the two competing
     copies. Making one number authoritative did not make it correct — only the scan did.
-15. **The limiter posture is decided and the code does not implement it yet.** `docs/DECISIONS.md`
-    2026-08-17: the **limiter degrades to a local in-memory bucket**, the **spend guard fails
-    CLOSED**, and every Redis client gets bounded socket timeouts. Today the limiter fails *closed*
-    with an unhandled **HTTP 500** on every rate-limited route including `GET /auth/me` — so a Redis
-    latency spike is a silent total sign-in outage that `/health` reports as `200 ok`. Issue 522.
-    Do not "fix" this from the three stale documents that still describe the old fail-open claim.
+15. ✅ **BUILT 2026-08-18 (Issue 522).** The limiter degrades to a per-process in-memory bucket, the
+    spend guard fails CLOSED on its pre-execution check, and all four Redis clients now have socket
+    timeouts. **Three things to carry forward:**
+    (a) fail-closed covers the CHECK arm only — `record_spend` stays fail-open on purpose, because
+    post-call accounting cannot un-spend money;
+    (b) the can't-verify case returns **503 with its own copy**, never the 429 "budget reached"
+    message, which would be false during an outage — if you touch that copy, keep the honesty
+    assertions in `tests/test_spend_guard.py` passing;
+    (c) **expect a 2× effective rate limit while Redis is down** (`--workers 2`, per-process bucket).
+    That is the accepted cost, not a bug.
+    The three stale documents that described the old fail-open claim are amended. Note one of the
+    three citations (`DECISIONS.md:2633-2634`) had itself drifted to an unrelated entry — a live
+    instance of what **Issue 508** exists to catch.
 16. **Stacked PRs need a rebase + force-push after each merge.** Rebase-merging rewrites the SHA, so
     the moment PR A lands, PR B (which contained A's old commit) goes `CONFLICTING`. This is normal
     here, not a mistake: `git rebase origin/main` on B's branch, then

@@ -33,8 +33,19 @@ Breach semantics (approved 2026-07-02, docs/DECISIONS.md):
     SETNX trip-latch (exactly-once under concurrent workers) + a
     ``spend_cap_tripped`` event. No new gate concept.
 
-FAIL-OPEN on any Redis error (warn once per surface — the flags.py posture):
-the spend guard being down must never take LLM features down with it.
+REDIS-ERROR POSTURE — SPLIT, and deliberately so (Issue 522, DECISIONS 2026-08-17):
+
+  - The pre-execution CHECKS (``creator_block_status`` → ``require_budget`` /
+    ``ensure_within_budget``) fail **CLOSED**. This is a money control: an
+    unverifiable budget must not authorise paid work. Creators see a 503 with
+    can't-verify copy, not the cap-reached copy — the cap was never read.
+  - ``record_spend`` fails **OPEN**. It is post-call accounting; the money is
+    already spent when the ledger records it, so refusing here would break the
+    pipeline after the cost was incurred and protect nothing.
+
+Warned once per surface per process, naming which arm fired. The companion
+availability control (``limiter.py``) degrades OPEN on the same outage — same
+event, opposite correct answer.
 
 Manual reset (see docs/RUNBOOKS.md "Spend guard trip & reset"):
 ``python3 scripts/flags.py enable llm_generation`` + ``redis-cli DEL`` of the
@@ -47,6 +58,7 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 import redis.asyncio as redis
 from fastapi import Depends, HTTPException
@@ -101,20 +113,61 @@ _CREATOR_BLOCK_DETAIL = (
     "Try again later or contact support to raise your limit."
 )
 
+# Issue 522 — the CAN'T-VERIFY case needs its own words. Reusing the copy above
+# when Redis is unreachable tells every creator their budget is exhausted when it
+# is not: a false statement to the user, which this project's honesty constraint
+# forbids just as firmly as a virality claim. It is also unactionable — "try again
+# later" is right, "raise your limit" is not.
+_BUDGET_UNAVAILABLE_DETAIL = (
+    "We can't check your AI budget right now, so AI features are paused for a few "
+    "minutes. Nothing was charged. Please try again shortly."
+)
+
+# Retry-After (seconds) advertised with the can't-verify 503. Short on purpose:
+# the condition is a Redis blip, not a spend window, so the client should come
+# back quickly rather than wait out a cool-down it is not actually in.
+_UNAVAILABLE_RETRY_AFTER_S = 30
+
 # Warn-once-per-process on Redis failure, per surface (flags.py posture).
-_fail_open_warned: set[str] = set()
+_degraded_warned: set[str] = set()
+
+
+class BudgetStatus(NamedTuple):
+    """Result of a pre-execution budget check.
+
+    ``reason`` is what lets the callers tell a real cap breach apart from an
+    unverifiable one, so each can pick honest copy and an honest status code.
+    Three fields rather than the old ``(blocked, retry_after)`` pair on purpose
+    (Issue 522): a stale two-tuple mock now fails loudly at ``.reason`` instead of
+    silently satisfying the new contract with the old meaning.
+    """
+
+    blocked: bool
+    retry_after_s: int
+    reason: str  # "ok" | "cap_reached" | "unavailable"
 
 
 class SpendCapExceededError(Exception):
     """Raised by the Celery-task guard when a spend cap blocks paid work."""
 
 
-def _warn_fail_open(surface: str) -> None:
-    if surface not in _fail_open_warned:
-        _fail_open_warned.add(surface)
+def _warn_degraded(surface: str, *, failing_closed: bool) -> None:
+    """Warn once per surface per process that a Redis error changed behaviour.
+
+    Issue 522 split the posture: the money control fails CLOSED (this module),
+    the availability control degrades open (``limiter.py``). The log line says
+    which arm fired so an operator reading it knows whether spend was left
+    unenforced or paid work was refused.
+    """
+    if surface not in _degraded_warned:
+        _degraded_warned.add(surface)
         logger.warning(
-            "spend guard %s hit a Redis error — failing OPEN (caps not enforced)",
+            "spend guard %s hit a Redis error — failing %s (%s)",
             surface,
+            "CLOSED" if failing_closed else "OPEN",
+            "paid work refused until Redis recovers"
+            if failing_closed
+            else "caps not enforced; cost already incurred",
             exc_info=True,
         )
 
@@ -230,7 +283,11 @@ async def record_spend(creator_id: uuid.UUID | str, usd: float) -> None:
     try:
         await _record_and_enforce(str(creator_id), amount)
     except Exception:  # noqa: BLE001 — fail-open by design; billing must not break pipelines
-        _warn_fail_open("record_spend")
+        # Issue 522 deliberately did NOT flip this arm closed. This is post-call
+        # ACCOUNTING: the money was already spent when the ledger recorded it, so
+        # refusing here would break the pipeline after the cost was incurred and
+        # protect nothing. Fail-closed belongs on the pre-execution checks below.
+        _warn_degraded("record_spend", failing_closed=False)
 
 
 async def _record_and_enforce(creator_id: str, amount: int) -> None:
@@ -353,42 +410,64 @@ async def _record_and_enforce(creator_id: str, amount: int) -> None:
                 raise
 
 
-async def creator_block_status(creator_id: uuid.UUID | str) -> tuple[bool, int]:
-    """Creator-scoped pre-execution check: ``(blocked, retry_after_s)``.
+async def creator_block_status(creator_id: uuid.UUID | str) -> BudgetStatus:
+    """Creator-scoped pre-execution check: ``(blocked, retry_after_s, reason)``.
 
     Blocked when a cool-down key is active OR the creator's daily counter has
     reached the cap. Global caps are NOT checked here — the tripped
     ``llm_generation`` flag (checked by ``require_flag`` / the task guard)
-    already covers them. FAIL-OPEN on Redis errors.
+    already covers them.
+
+    **FAILS CLOSED on Redis errors** (Issue 522, posture decided in
+    ``docs/DECISIONS.md`` 2026-08-17). This is a MONEY control: an unverifiable
+    budget must not authorise paid work, because the failure mode of guessing
+    "unblocked" is unbounded spend with no ceiling anyone can see. The
+    availability control (``limiter.py``) takes the opposite arm and degrades
+    open — same outage, different correct answer.
+
+    Reaching this arm at all requires the bounded socket timeouts on
+    ``youtube/_redis.py``'s client: against a wedged-but-connected Redis a hang
+    is not an exception, and an ``await`` that never returns can never fail
+    closed.
     """
     try:
         r = get_redis_client()
         ttl = await r.ttl(cooldown_key(creator_id))
         if ttl == -1 or (ttl is not None and ttl > 0):
-            return True, ttl if ttl > 0 else settings.SPEND_COOLDOWN_TTL_S
+            retry = ttl if ttl > 0 else settings.SPEND_COOLDOWN_TTL_S
+            return BudgetStatus(True, retry, "cap_reached")
         current = int(await r.get(creator_daily_key(creator_id)) or 0)
         if current >= usd_to_micro(settings.SPEND_CAP_CREATOR_DAILY_USD):
-            return True, settings.SPEND_COOLDOWN_TTL_S
-        return False, 0
-    except Exception:  # noqa: BLE001 — fail-open by design (flags.py posture)
-        _warn_fail_open("creator_block_status")
-        return False, 0
+            return BudgetStatus(True, settings.SPEND_COOLDOWN_TTL_S, "cap_reached")
+        return BudgetStatus(False, 0, "ok")
+    except Exception:  # noqa: BLE001 — fail-CLOSED by design (Issue 522)
+        _warn_degraded("creator_block_status", failing_closed=True)
+        return BudgetStatus(True, _UNAVAILABLE_RETRY_AFTER_S, "unavailable")
 
 
 async def require_budget(creator: Creator = Depends(get_current_creator)) -> None:
-    """FastAPI dependency: 429 when the creator's spend budget is exhausted.
+    """FastAPI dependency: refuse paid work when the budget is spent or unknown.
 
     Stacked next to ``Depends(require_flag("llm_generation"))`` on LLM routes —
     the flag covers global caps (flipped by the breaker), this covers the
     creator-scoped daily cap + cool-down.
+
+    Two distinct refusals (Issue 522), because they are not the same event:
+
+    * **429** — the cap really was reached. The creator can act on it.
+    * **503** — the cap could not be checked. Reusing 429 here would claim the
+      creator is rate-limited when they are not, and the copy would tell them a
+      budget was exhausted that was never read.
     """
-    blocked, retry_after = await creator_block_status(creator.id)
-    if blocked:
-        raise HTTPException(
-            status_code=429,
-            detail=_CREATOR_BLOCK_DETAIL,
-            headers={"Retry-After": str(retry_after)},
-        )
+    status = await creator_block_status(creator.id)
+    if not status.blocked:
+        return
+    unavailable = status.reason == "unavailable"
+    raise HTTPException(
+        status_code=503 if unavailable else 429,
+        detail=_BUDGET_UNAVAILABLE_DETAIL if unavailable else _CREATOR_BLOCK_DETAIL,
+        headers={"Retry-After": str(status.retry_after_s)},
+    )
 
 
 async def ensure_within_budget(creator_id: uuid.UUID | str) -> None:
@@ -397,14 +476,19 @@ async def ensure_within_budget(creator_id: uuid.UUID | str) -> None:
     Mirrors the router gates for work that bypasses HTTP: re-checks the
     ``llm_generation`` kill switch (which the global breaker flips) and the
     creator-scoped budget. Raises :class:`SpendCapExceededError` with safe,
-    actionable copy; fail-open on Redis/DB errors (each check fails open
-    internally).
+    actionable copy.
+
+    The flag check still fails OPEN to its env default (``flags.py``, DB-backed);
+    the budget check fails CLOSED (Issue 522). That split is deliberate — the
+    flag is an availability switch, the budget is a money control.
     """
     import db
     from flags import block_message, flag_enabled
 
     if not await flag_enabled("llm_generation", db.AdminSessionLocal):
         raise SpendCapExceededError(block_message("llm_generation"))
-    blocked, _ = await creator_block_status(creator_id)
-    if blocked:
-        raise SpendCapExceededError(_CREATOR_BLOCK_DETAIL)
+    status = await creator_block_status(creator_id)
+    if status.blocked:
+        raise SpendCapExceededError(
+            _BUDGET_UNAVAILABLE_DETAIL if status.reason == "unavailable" else _CREATOR_BLOCK_DETAIL
+        )

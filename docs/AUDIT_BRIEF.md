@@ -79,7 +79,7 @@ not llm_live and not render_env and not transcription_live"`.
 
 | Lane | How to run | Needs |
 |---|---|---|
-| unit (default) | `pytest -q` | Redis (hard requirement — the limiter has no in-memory fallback, by design) |
+| unit (default) | `pytest -q` | Redis (the limiter has an in-memory fallback as of Issue 522, but the lane still expects a live Redis) |
 | integration | `pytest -m integration` | real Postgres 16 + pgvector; **runs on every PR in CI** |
 | render_env | `pytest -m render_env` | real ffmpeg + mediapipe |
 | llm_live / transcription_live | nightly cron | real Anthropic / Deepgram keys |
@@ -165,7 +165,7 @@ oversights.
 
 | Looks like | Actually |
 |---|---|
-| Rate limiter and LLM spend guard **fail open** on Redis errors | Deliberate (`limiter.py:18-49`, `billing/spend_guard.py:104-119`). A Redis outage removes rate limits *and* cost caps simultaneously. We know. See question 5 in §8. |
+| Rate limiter degrades to an in-memory bucket; LLM spend guard **fails closed** on Redis errors | **CORRECTED 2026-08-18 (Issue 522).** The old row claimed both failed *open*. Neither did: the limiter passed neither `swallow_errors` nor `in_memory_fallback_enabled`, so a Redis error returned an unhandled **500** on every rate-limited route including `GET /auth/me` — a silent total sign-in outage that `/health` reported as 200. The posture is now split by consequence class: the limiter (availability) degrades to a per-process bucket, the spend guard (money) refuses paid work with an honest 503. See `docs/DECISIONS.md` 2026-08-17 and 2026-08-18. |
 | Session JWTs are **non-revocable** | Accepted 60-minute exposure window (`auth.py:67-90`). Logout only clears the cookie. |
 | 53 tests marked `@pytest.mark.skip` | Dead-page residue from Issue 226 (the legacy `static/*.html` app was retired for the React SPA). Not hidden failures — but they *should* be deleted rather than skipped, and that's a fair finding. |
 | Stripe uses `RequestsClient`, not `HTTPXClient` | `HTTPXClient(timeout=…)` defaults `allow_sync_methods=False` and caused a **10-week total checkout outage**. Do not revert. `billing/stripe_client.py:40-54`. |

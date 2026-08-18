@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from billing import spend_guard
 from billing.ledger import record_llm_usage
 from billing.spend_guard import (
+    BudgetStatus,
     SpendCapExceededError,
     cooldown_key,
     creator_block_status,
@@ -157,8 +158,9 @@ async def test_creator_daily_counter_at_cap_blocks_without_cooldown_key() -> Non
     r = _FakeRedis()
     r.store[creator_daily_key(CID)] = str(usd_to_micro(5.00))
     with patch("billing.spend_guard.get_redis_client", return_value=r):
-        blocked, retry_after = await creator_block_status(CID)
-    assert blocked and retry_after == 3600
+        status = await creator_block_status(CID)
+    assert status.blocked and status.retry_after_s == 3600
+    assert status.reason == "cap_reached"  # a real breach, not an unreadable one
 
 
 # ── 100% global → kill switch, exactly once ────────────────────────────────────
@@ -206,21 +208,74 @@ async def test_velocity_rolling_window_sums_last_three_buckets() -> None:
     assert "velocity_global" in mock_flip.await_args.args[0]
 
 
-# ── Fail-open ──────────────────────────────────────────────────────────────────
+# ── Redis-error posture: SPLIT (Issue 522) ────────────────────────────────────
+#
+# The two arms answer the same outage differently and both answers are correct:
+# accounting cannot un-spend money, so it fails OPEN; authorisation cannot verify
+# a budget, so it fails CLOSED. Testing them together is deliberate — the whole
+# defect class here is one arm being changed without the other being considered.
 
 
-async def test_record_spend_fails_open_on_redis_error() -> None:
+def _dead_redis() -> AsyncMock:
+    """A Redis whose every read raises, as a real outage does."""
     boom = AsyncMock()
+    boom.ttl = AsyncMock(side_effect=ConnectionError("redis down"))
+    boom.get = AsyncMock(side_effect=ConnectionError("redis down"))
     boom.eval = AsyncMock(side_effect=ConnectionError("redis down"))
-    with patch("billing.spend_guard.get_redis_client", return_value=boom):
+    return boom
+
+
+async def test_record_spend_fails_OPEN_on_redis_error() -> None:
+    """Post-call accounting: the money is already spent, so refusing protects nothing.
+
+    Issue 522 deliberately left this arm open while flipping the check arm closed.
+    """
+    with patch("billing.spend_guard.get_redis_client", return_value=_dead_redis()):
         await record_spend(CID, 1.0)  # must not raise
 
 
-async def test_block_status_fails_open_on_redis_error() -> None:
-    boom = AsyncMock()
-    boom.ttl = AsyncMock(side_effect=ConnectionError("redis down"))
-    with patch("billing.spend_guard.get_redis_client", return_value=boom):
-        assert await creator_block_status(CID) == (False, 0)
+async def test_block_status_fails_CLOSED_on_redis_error() -> None:
+    """Issue 522 — inverted from fail-open. An unverifiable budget authorises nothing.
+
+    This test asserted ``(False, 0)`` until 2026-08-18: the guard waved paid work
+    through whenever it could not read the counter, which is the failure mode a
+    money control exists to prevent.
+    """
+    with patch("billing.spend_guard.get_redis_client", return_value=_dead_redis()):
+        status = await creator_block_status(CID)
+    assert status.blocked is True
+    assert status.reason == "unavailable"
+    assert status.retry_after_s > 0
+
+
+async def test_require_budget_returns_503_not_429_when_budget_is_unreadable() -> None:
+    """A 429 would claim the creator is rate-limited. They are not — Redis is down."""
+    creator = type("C", (), {"id": CID})()
+    with (
+        patch("billing.spend_guard.get_redis_client", return_value=_dead_redis()),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await require_budget(creator)
+    assert exc.value.status_code == 503
+    assert exc.value.headers["Retry-After"]
+
+
+async def test_unreadable_budget_never_claims_the_cap_was_reached() -> None:
+    """The honesty assertion: don't tell a creator they spent a budget nobody read.
+
+    Pinned as a property of the message rather than an exact string so the copy can
+    be reworded without going vacuous.
+    """
+    creator = type("C", (), {"id": CID})()
+    with (
+        patch("billing.spend_guard.get_redis_client", return_value=_dead_redis()),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await require_budget(creator)
+    detail = str(exc.value.detail).lower()
+    assert "has been reached" not in detail
+    assert "raise your limit" not in detail
+    assert "can't check" in detail or "cannot check" in detail
 
 
 # ── require_budget pass + Celery-task guard ────────────────────────────────────
@@ -241,15 +296,35 @@ async def test_ensure_within_budget_raises_when_flag_off_or_blocked() -> None:
         await ensure_within_budget(CID)
     with (
         patch("flags.flag_enabled", new=AsyncMock(return_value=True)),
-        patch("billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(True, 60))),
+        patch(
+            "billing.spend_guard.creator_block_status",
+            new=AsyncMock(return_value=BudgetStatus(True, 60, "cap_reached")),
+        ),
         pytest.raises(SpendCapExceededError),
     ):
         await ensure_within_budget(CID)
     with (
         patch("flags.flag_enabled", new=AsyncMock(return_value=True)),
-        patch("billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(False, 0))),
+        patch(
+            "billing.spend_guard.creator_block_status",
+            new=AsyncMock(return_value=BudgetStatus(False, 0, "ok")),
+        ),
     ):
         await ensure_within_budget(CID)  # must not raise
+
+
+async def test_ensure_within_budget_uses_the_unavailable_copy_not_the_cap_copy() -> None:
+    """The Celery arm needs the same honesty as the HTTP arm (Issue 522)."""
+    with (
+        patch("flags.flag_enabled", new=AsyncMock(return_value=True)),
+        patch(
+            "billing.spend_guard.creator_block_status",
+            new=AsyncMock(return_value=BudgetStatus(True, 30, "unavailable")),
+        ),
+        pytest.raises(SpendCapExceededError) as exc,
+    ):
+        await ensure_within_budget(CID)
+    assert "has been reached" not in str(exc.value).lower()
 
 
 # ── Ledger hook never raises (Issue 290/291 backstop) ──────────────────────────

@@ -363,3 +363,104 @@ def test_creator_key_resolves_from_request_state() -> None:
         f"creator_key must return str(creator_id) == '{cid}', got {key!r}. "
         "The key_func must read request.state.creator_id, not fall back to IP."
     )
+
+
+# ── Issue 522: a Redis outage must not be a sign-in outage ────────────────────
+#
+# Until 2026-08-18 the Limiter was built with neither `swallow_errors` nor
+# `in_memory_fallback_enabled` (both default False), so ANY Redis error
+# propagated out of `_check_request_limit` and every rate-limited route returned
+# 500 with its body never running — including GET /auth/me at 120/min, which
+# AuthGate calls on every page load. Nobody could sign in, and /health reported
+# 200 throughout. There were zero tests for Redis-unavailable behaviour, behind a
+# 99% coverage floor.
+
+
+_DEAD_REDIS_URI = "redis://127.0.0.1:1"  # port 1: connection refused, immediately
+
+
+def _limiter_app(**limiter_kwargs):
+    """A minimal app wired exactly like main.py, pointed at an unreachable Redis."""
+    from fastapi import FastAPI, Request
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.middleware import SlowAPIMiddleware
+
+    from limiter import _REDIS_STORAGE_OPTIONS
+
+    lim = Limiter(
+        key_func=lambda *a, **k: "test-key",
+        storage_uri=_DEAD_REDIS_URI,
+        storage_options=_REDIS_STORAGE_OPTIONS,
+        **limiter_kwargs,
+    )
+    app = FastAPI()
+    app.state.limiter = lim
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+
+    @app.get("/me")
+    @lim.limit("120/minute")
+    async def _me(request: Request):  # pragma: no cover - exercised via TestClient
+        return {"ok": True}
+
+    return app
+
+
+def test_rate_limited_route_survives_a_dead_redis() -> None:
+    """THE regression test: with the fallback enabled, a dead Redis yields 200."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(_limiter_app(in_memory_fallback_enabled=True))
+    response = client.get("/me")
+
+    assert response.status_code == 200, (
+        f"a rate-limited route returned {response.status_code} against an "
+        "unreachable Redis. With in_memory_fallback_enabled the limit must be "
+        "counted in-process, not raised as a 500 — this is the /auth/me sign-in "
+        "outage of Issue 522."
+    )
+
+
+def test_without_the_fallback_a_dead_redis_is_a_500() -> None:
+    """The counter-test: proves the assertion above is not passing for free.
+
+    Without this, `test_rate_limited_route_survives_a_dead_redis` would still
+    pass if slowapi silently stopped limiting altogether, or if the dead-Redis
+    URI quietly resolved. It pins that the 200 is *caused by* the fallback.
+    """
+    from fastapi.testclient import TestClient
+
+    client = TestClient(_limiter_app(), raise_server_exceptions=False)
+    assert client.get("/me").status_code == 500
+
+
+def test_app_limiter_declares_the_in_memory_fallback() -> None:
+    """Pin the production Limiter's own config, not just a locally-built one.
+
+    The behavioural tests above construct their own Limiter; this asserts the
+    real module-level object carries the setting, so a future refactor cannot
+    drop the kwarg while leaving those tests green.
+    """
+    from limiter import limiter
+
+    assert limiter._in_memory_fallback_enabled is True, (
+        "limiter.py must pass in_memory_fallback_enabled=True — without it a "
+        "Redis blip 500s every rate-limited route (Issue 522)."
+    )
+    assert limiter._fallback_limiter is not None, (
+        "slowapi builds the fallback limiter in __init__ when the flag is set; "
+        "a None here means the setting did not take effect."
+    )
+
+
+def test_limiter_does_not_swallow_errors() -> None:
+    """swallow_errors would discard the limit entirely — an unlimited window.
+
+    in_memory_fallback_enabled degrades WHERE the limit is counted;
+    swallow_errors degrades WHETHER it is counted at all. Issue 522 chose the
+    former deliberately, so pin that the latter stays off.
+    """
+    from limiter import limiter
+
+    assert limiter._swallow_errors is False

@@ -1704,9 +1704,18 @@ async def _distill_style_prefs_async(creator_id: str) -> None:
     if not await flag_enabled("llm_generation"):
         logger.info("distill_style_prefs: llm_generation flag off — skip (creator %s)", cid)
         return
-    blocked, _retry_after = await creator_block_status(cid)
-    if blocked:
-        logger.info("distill_style_prefs: spend guard active — skip (creator %s)", cid)
+    budget = await creator_block_status(cid)
+    if budget.blocked:
+        # Issue 522: `reason` distinguishes a real cap breach from a Redis outage.
+        # Skipping is correct for both — this is unattended background work, and
+        # doing paid work against an unverifiable budget is the thing fail-closed
+        # exists to prevent — but the log has to say which, or an operator reading
+        # it during an outage concludes every creator hit their cap at once.
+        logger.info(
+            "distill_style_prefs: spend guard active (%s) — skip (creator %s)",
+            budget.reason,
+            cid,
+        )
         return
 
     async with db.tenant_session(cid) as session:

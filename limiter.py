@@ -39,9 +39,16 @@ Issue 312 — bounded Redis socket timeout (SEV1):
     → connection pool ``connection_kwargs``
   Verified empirically: ``pool.connection_kwargs["socket_timeout"] == 0.1``.
 
-  A Redis stall now times-out after 100 ms and raises ``RedisError`` which
-  slowapi's in-process fallback (or ``swallow_errors``) absorbs, degrading
-  ONE request instead of head-of-line-blocking the event loop.
+  A Redis stall now times-out after 100 ms and raises ``RedisError`` instead of
+  head-of-line-blocking the event loop.
+
+  CORRECTED 2026-08-18 (Issue 522): this block used to end "...which slowapi's
+  in-process fallback (or ``swallow_errors``) absorbs, degrading ONE request."
+  That was false for three months. Neither kwarg was ever passed, both default
+  to ``False``, and the ``RedisError`` propagated — so the bounded timeout
+  converted an event-loop stall into a fast 500 on every rate-limited route
+  rather than into a degraded one. The absorbing half is only true as of the
+  ``in_memory_fallback_enabled=True`` below.
 
   WHEN TO SHIP THE ASYNC PATH: upgrade slowapi to a version that ``await``s
   ``limiter.hit()`` (track upstream; not in 0.1.9).  At that point, switch the
@@ -130,6 +137,24 @@ limiter = Limiter(
     key_func=_creator_key,
     storage_uri=settings.REDIS_URL,
     storage_options=_REDIS_STORAGE_OPTIONS,  # type: ignore[arg-type]  # Dict[str,float] vs Dict[str,str] stub
+    # Issue 522 — THE line that keeps a Redis blip from being a sign-in outage.
+    # slowapi's own reference: in_memory_fallback_enabled "simply falls back to in
+    # memory storage when the main storage is down and inherits the original
+    # limits" (https://slowapi.readthedocs.io/en/latest/api/). Without it a
+    # RedisError propagates out of _check_request_limit and EVERY rate-limited
+    # route 500s with its body never running — including GET /auth/me (120/min),
+    # which AuthGate calls on every page load. Nobody could sign in, and /health
+    # reported 200 throughout.
+    #
+    # NOT swallow_errors: that discards the limit entirely, turning an outage into
+    # an unlimited-traffic window. This keeps the limits and only moves where they
+    # are counted.
+    #
+    # Accepted cost, stated in DECISIONS 2026-08-17: the fallback bucket is
+    # per-process, and prod runs `uvicorn --workers 2`
+    # (docker-compose.prod.yml:14), so effective limits are 2x while Redis is
+    # down. Two workers' worth of over-admission beats a total outage.
+    in_memory_fallback_enabled=True,
 )
 
 
@@ -145,10 +170,13 @@ limiter = Limiter(
 # per request, so the daily ceiling layers on cleanly without a bespoke Redis
 # counter — the same pattern routers/chat.py uses for CHAT_DAILY_MESSAGE_LIMIT.
 #
-# Best-effort caveat (Issue 312): the cap is Redis-backed. Under the bounded
-# socket-timeout fallback above, a Redis stall degrades to fail-open and the
-# daily ceiling is momentarily unenforced — accepted and consistent with every
-# other limit in this module (see docs/DECISIONS.md, Issue 228).
+# Best-effort caveat (Issue 312, corrected by Issue 522): the cap is Redis-backed.
+# During a Redis outage the count moves to the per-process in-memory fallback, so
+# the daily ceiling is enforced per worker rather than globally — at
+# `--workers 2` that is a 2x effective ceiling until Redis returns, NOT the
+# "degrades to fail-open" this comment previously claimed (it did not degrade at
+# all; it 500'd). Accepted and consistent with every other limit in this module
+# (see docs/DECISIONS.md, Issues 228 and 522).
 
 
 def daily_limit(cap: int) -> str:
