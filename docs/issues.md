@@ -4028,6 +4028,13 @@ one rationale.
    authority.~~ ✅ **DONE 2026-08-17** during the audit handoff. Three files disagreed (`LEFT_OFF`
    said 497, `docs/PROJECT_STATE.md` said 443, `docs/issues.md` said 498); both stale copies are
    removed and `LEFT_OFF`'s pointer table now names `docs/issues.md` as the sole authority.
+   ⚠️ **2026-08-18 — this was the only one of the six left as prose, and it drifted the next day.**
+   The surviving copy was a hand-incremented literal; it still read 498 while 498–527 were filed
+   above it, so the next issue would have collided with #520. Deleting the competing copies made one
+   number authoritative without making it correct. Now derived and enforced by
+   `tests/test_tracker_hygiene.py` (scan every `### Issue N` heading under `docs/`, assert the
+   declaration is `max + 1`, and assert it exists in exactly one file — item 6's actual requirement,
+   which nothing enforced). See `docs/OFF_COURSE_BUGS.md` 2026-08-18.
 
 **Acceptance**
 - [ ] All six landed; each verified by the mechanism failing when the condition it guards is violated
@@ -4048,7 +4055,7 @@ one rationale.
 
 ### Issue 499: `run_layer0.py` static gates must check `proc.returncode` — a failing tool currently scores a perfect 0
 
-- [ ] **Status:** open · **Size:** M (~2 h) · filed 2026-08-17 · **Lane:** L30 Batch B ·
+- [x] **Status:** ✅ **DONE 2026-08-18** · **Size:** M (~2 h) · filed 2026-08-17 · **Lane:** L30 Batch B ·
       **CORRECTED (high → medium), reproduced**
 
 **The single most important gate finding in the audit, and it inverts the obvious fix.**
@@ -4072,15 +4079,56 @@ exposed set is mypy, bandit and pip-audit. Most plausible live consequence: **pi
 `:227-231`, `:274-281`; `docs/assessment/DEEP_AUDIT_2026-08-17/02-sweep/mA-gates-exitcodes.md` §A1.
 
 **Acceptance**
-- [ ] Every static gate returns `fail` on non-zero returncode, and bandit on a non-empty `errors[]`
-- [ ] A test proves each gate goes red when its tool is made to fail
+- [x] Every static gate returns `fail` on non-zero returncode, and bandit on a non-empty `errors[]`
+      — *shipped as an exit-code **allow-list**, not a non-zero check; see the build note*
+- [x] A test proves each gate goes red when its tool is made to fail
+      — `tests/test_layer0_gate_integrity.py`, 11 tests; **5 of them fail against the pre-fix script**
 - [ ] Only then: add `--require ruff,mypy,bandit,pip_audit` to `static-gates` and `ci_local.sh:95` (Issue 500)
+      — *deliberately not done here; #500 is now **unblocked***
+
+**BUILD NOTE (2026-08-18) — the AC as written was wrong, and measuring said so.**
+
+`returncode != 0` is the **wrong check**. Measured against the pinned `.venv` binaries:
+
+| tool | version | exit 0 | exit 1 | exit 2 |
+|---|---|---|---|---|
+| ruff | 0.15.15 | clean | violations found | error, stdout **empty** |
+| mypy | 1.14.1 | no errors | errors found | fatal, stdout **empty** |
+| bandit | 1.9.4 | no issues **or a totally failed scan** | issues found | not observed |
+| pip-audit | 2.10.0 | no vulns | vulns found | error, stdout **empty** |
+
+Exit **1** is the normal "ran, found things" state these gates exist to measure against
+`baselines.json`. Rejecting it would red-wall every gate on the first ruff violation. The fix is an
+allow-list `_COMPLETED_EXIT_CODES = {0, 1}`; anything outside it means the tool did not complete.
+
+**bandit is invisible to any returncode check** — measured, `bandit -r /no/such/dir` and a file it
+cannot parse both exit **0** with `results: []` and a populated `errors[]`. The issue text called
+that "a second route"; it is bandit's *only* route. `gate_bandit` now fails on non-empty `errors[]`
+and names the unscannable paths.
+
+ruff was included even though the corrected scope excluded it (the required `lint` job guards it
+separately) — that is a fact about today's CI, not a property of the gate, and it cost three lines.
+
+**Live before/after, real binaries, not mocks:**
+
+| scenario | before | after |
+|---|---|---|
+| unparseable file in `clip_engine/` (bandit) | `ok {'high': 0, 'medium': 0}`, exit 0 | `fail — could not scan 1 path(s)`, exit 1 |
+| corrupt `ruff.toml` (ruff, real exit 2) | `ok 0`, exit 0 | `fail — did not complete — exit 2: …`, exit 1 |
+
+Real gates still green afterwards (the red-wall check): `ruff 0 · mypy 0 · bandit {high:0,medium:0} ·
+pip_audit 0 · freshness ok`. Suite 3199 → **3212 passed, 64 skipped, 0 failed**.
+
+**Deliberately out of scope:** the four `unparseable output` branches still return `skipped`, not
+`fail`. With the returncode check in front, that is a narrow residue — and `skipped` is exactly what
+Issue 500's `--require` is built to escalate. Keeping the seam is what leaves #500 a 30-minute change.
 
 ---
 
 ### Issue 500: add `--require` to every `run_layer0.py` invocation, and pin that it is present
 
-- [ ] **Status:** open · **Size:** S (~30 min) · **BLOCKED BY #499** · **Lane:** L30 Batch B
+- [ ] **Status:** open · **Size:** S (~30 min) · ~~**BLOCKED BY #499**~~ **UNBLOCKED 2026-08-18** ·
+      **Lane:** L30 Batch B
 
 `static-gates` and `ci_local.sh:95` invoke `run_layer0.py` without `--require`, so a genuinely
 skipped gate (tool missing, output unparseable) passes silently. The coverage job was hardened for

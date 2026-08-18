@@ -4,7 +4,46 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-17 (latest) — Issues 498 (items 1–3), 521 and 520: personalization actually personalizes now
+## 2026-08-18 (latest) — Issue 499 + tracker hygiene: two prose rules become mechanisms
+
+One PR, two commits, both instances of the same class the 2026-08-17 audit named — *a rule stored as
+prose that someone has to remember.*
+
+**Tracker hygiene (no issue number consumed).** `docs/issues.md` still ended with
+`Next free issue number: **498**` while issues 498–527 were filed above it, so the next issue filed
+would have collided with #520. Issue 498 item 6 had correctly diagnosed a three-way disagreement the
+day before and deleted the two competing copies — but left the survivor as a hand-incremented
+literal, and it drifted inside the same session. Corrected to **528**, moved to the end of Lane L30
+(it was sitting in Issue 497's block), and guarded by `tests/test_tracker_hygiene.py`, which scans
+every `### Issue N` heading under `docs/` and asserts the declaration is `max + 1` — plus a second
+test asserting it appears in exactly one file, which is item 6's actual requirement and was enforced
+by nothing. Both negative cases exercised. Logged and closed in `docs/OFF_COURSE_BUGS.md`.
+
+**Issue 499 — a Layer-0 static gate can no longer score work it never did.** `gate_ruff`,
+`gate_mypy`, `gate_bandit` and `gate_pip_audit` inferred their result purely from stdout, so a tool
+that ran and *failed* returned `ok 0` — a perfect score against a strict baseline of 0 — and the run
+printed "All runnable gates passed".
+
+The measurement changed the fix. `returncode != 0` is wrong: exit **1** is the normal
+"ran, found things" state the baselines exist to count, so a non-zero check would red-wall the gate on
+the first ruff violation. Shipped as an allow-list `{0, 1}`. And **bandit is invisible to any
+returncode check** — a scan of a missing path or an unparseable file exits **0** with `results: []`
+and a populated `errors[]`, so that array is its only signal. Full table and rationale in
+`docs/DECISIONS.md` (2026-08-18) and the build note at `docs/issues.md` §499.
+
+Verified live against real binaries, not mocks: an unparseable file in `clip_engine/` took bandit
+from `ok {'high': 0, 'medium': 0}` exit 0 → `fail` exit 1; a corrupt `ruff.toml` took ruff from
+`ok 0` exit 0 → `fail — exit 2` exit 1. Real gates green afterwards
+(`ruff 0 · mypy 0 · bandit {high:0,medium:0} · pip_audit 0 · freshness ok`).
+Suite **3199 → 3212 passed, 64 skipped, 0 failed**. 5 of the 11 new gate tests fail against the
+pre-fix script.
+
+**Issue 500 is now unblocked** (`--require` on every invocation, ~30 min). Issue 498 items 4 and 5
+remain deferred for their recorded reasons.
+
+---
+
+## 2026-08-17 — Issues 498 (items 1–3), 521 and 520: personalization actually personalizes now
 
 Three PRs off the back of the audit below, in dependency order.
 
