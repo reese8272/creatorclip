@@ -131,7 +131,9 @@ exhausted mid-job, Anthropic 529, Redis blip) and failures cascade into outage.
 either the limiter fails open (cost blowout) or fails closed (everyone 429'd).
 
 **Backed design:**
-- slowapi already uses real Redis (good — no in-memory fallback that fails open
+- slowapi already uses real Redis (good). Issue 522 added an in-memory fallback
+  for Redis outages: limits are still counted, but per-process, so at N workers the
+  effective ceiling is N x while Redis is down
   per-replica). Confirm limits are **per-creator**, not per-IP, for authenticated
   routes.
 - Add a **per-creator usage quota** check before each LLM/render job (a
