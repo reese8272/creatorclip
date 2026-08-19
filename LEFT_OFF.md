@@ -1,25 +1,37 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-18 · **Branch:** `main` @ `70ee4fa` · **Working tree:** ✅ **CLEAN**, in
-sync with `origin/main` (0 ahead / 0 behind). All CI green; the nightly LLM E2E passed at 03:48 UTC
-**after** these merges, so the live-LLM path survived them.
+**Last updated:** 2026-08-18 · **Branch:** `main` @ `28e591c` · **Working tree:** ✅ **CLEAN**, in
+sync with `origin/main` (0 ahead / 0 behind). All 13 CI checks green on the last merge.
 
-**Four PRs shipped 2026-08-17, all merged, deployed and live-verified:** **#119** (the audit itself +
-Issue 498 items 1–3), **#120** (Issue 521 — the lying gate), **#121** (Issue 520 — the
-personalization SEV1), **#122** (this handoff). History on `main` is linear.
+**Four PRs shipped 2026-08-17:** **#119** (the audit itself + Issue 498 items 1–3), **#120**
+(Issue 521 — the lying gate), **#121** (Issue 520 — the personalization SEV1), **#122** (handoff).
 
-**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3225 passed, 64 skipped, 0 xfailed**
-(3170 before the 2026-08-17 work; 3199 → 3212 → 3225 across the three 2026-08-18 PRs).
+**Two more shipped 2026-08-18, both merged, deployed and live-verified:** **#124** (Issue 499 —
+Layer-0 gates that scored work they never did; + the tracker-number drift) and **#125** (Issue 522 —
+a Redis blip was a total sign-in outage; + Issue 500 `--require`; + every CI apt call bounded).
+History on `main` is linear.
+
+**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3229 passed, 64 skipped, 0 xfailed**
+(3170 before the 2026-08-17 work; 3199 → 3212 → 3225 → 3229 across the 2026-08-18 PRs).
 
 **Prod:** `https://autoclip.studio`. **Running commit VERIFIED** — the container's image revision
-label reads `70ee4fa7663b94e018cd8fdf3f9f5a3ab2b26b5e`, and `/health` returns 200 over the public
+label reads `28e591ca4ddea6eb49ee3b18c7368a12a859db02`, and `/health` returns 200 over the public
 URL with all containers healthy. Re-confirm the same way after any deploy:
 `docker inspect autoclip-app-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
 *(Note: `curl localhost:8000/health` from inside the VM returns `000` — the app is behind
 cloudflared, so check the public URL, not localhost. That is not an outage.)*
 
-**Live-verified beyond the label** (per gotcha 4 — a green pipeline is not a working feature). Against
-the prod DB under a real `tenant_session`, the owner's scorer now reports:
+**Live-verified beyond the label** (per gotcha 4 — a green pipeline is not a working feature).
+
+*2026-08-18 (Issue 522), read out of the RUNNING container, not the image:*
+`in_memory_fallback_enabled=True · swallow_errors=False · fallback_limiter built ·
+youtube redis timeouts 2.0/2.0 · BudgetStatus fields ('blocked','retry_after_s','reason')`.
+Plus `GET /auth/me` returning **401, not 500** — the request passed *through* the limiter to auth,
+which is the exact route that was the outage. The in-memory fallback itself has not been exercised on
+prod, because that needs a real Redis outage; it is proven by test and by config readback, not live.
+
+*2026-08-17 (Issue 520):* against the prod DB under a real `tenant_session`, the owner's scorer
+reports:
 `LogisticRegression · label_count=10 · is_degenerate=False · effective weight 0.0 ·
 API active=False labels=10 threshold=20`. Two things that proves: `is_degenerate` computed correctly
 on a **pre-520 blob** (the lazy-recompute path is what makes the fix migration-free — it ran in
@@ -46,11 +58,14 @@ one loose end from this work.
 **backups → personalization → the Week-1 conversions**; the second and third have shipped, so
 backups stand alone at the front with nothing ahead of them and no code excuse to defer behind.
 
-The 2026-08-17 audit itself was read-only. Everything it found that jumped the queue —
-**Issue 521** (the gate that certified the wrong property) and **Issue 520** (personalization was a
-measured no-op across its entire ramp while the API reported it active) — is fixed, merged, deployed
-and live-verified on the running container. Lane L30's process track (Batches B–H) is untouched and
-is the natural next code work; **Issue 499** is its highest-value entry.
+The 2026-08-17 audit itself was read-only. Everything it found that jumped the queue is now fixed,
+merged, deployed and live-verified on the running container: **Issue 521** (the gate that certified
+the wrong property), **Issue 520** (personalization was a measured no-op across its whole ramp while
+the API reported it active), **Issue 499** (Layer-0 gates scoring work they never did), **Issue 500**
+(`--require`) and **Issue 522** (a Redis blip was a total sign-in outage).
+
+Lane L30's remaining process track is **Batch C** (505–507) and **Batch B's tail** (501–504); Batch G
+still holds four product defects (523–525) and Batch H two dead-output items.
 
 ### → NEXT ACTION
 
@@ -377,7 +392,7 @@ gate. Warn the friend about two expected things so they don't read as breakage:
 | Containers | `autoclip-app-1`, `autoclip-worker-1`, `autoclip-render-worker-1`, `autoclip-beat-1`, `autoclip-postgres-1`, `autoclip-redis-1`, `autoclip-cloudflared-1` |
 | Prod DB | `docker exec autoclip-postgres-1 psql -U creatorclip -d creatorclip` |
 | Owner creator id | `eb9af967-5d2f-4063-a05e-9f4f070ce840` ("Backboard Media", channel `UCNU5Tnt0xp7YtHNPgxDrSIw`) |
-| Deployed commit | `70ee4fa` (confirmed 2026-08-17 from the container's image revision label; `/health` 200 over the public URL) |
+| Deployed commit | `28e591c` (confirmed 2026-08-18 from the container's image revision label; `/health` 200 over the public URL) |
 | Health check | Use `https://autoclip.studio/health`. `curl localhost:8000/health` **on the VM returns `000`** — the app sits behind cloudflared. Not an outage. |
 | Image | `ghcr.io/reese8272/creatorclip:latest` (deploys resolve `sha-<7char>` for the staging gate) |
 | Branch model | **trunk-based**: `feature/* → PR → main`. No `staging` branch. Rebase/squash only. |

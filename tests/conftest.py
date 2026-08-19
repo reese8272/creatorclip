@@ -40,9 +40,14 @@ from main import app
 def pytest_configure(config: pytest.Config) -> None:
     """Fail fast, with one clear message, if a required backing service is down.
 
-    Redis guard: the suite needs a live Redis — the slowapi rate limiter has no
-    in-memory fallback by design (a fail-open limiter would be a prod cost/abuse
-    risk). When Redis is missing this otherwise surfaces as dozens of opaque 500s
+    Redis guard: the suite needs a live Redis. The limiter gained an in-memory
+    fallback in Issue 522 (so a Redis blip degrades instead of 500-ing every
+    route), but the fallback is a LAST RESORT for production availability, not a
+    test fixture — running the suite against it would silently exercise
+    per-process buckets instead of the real shared ones, which is how a limit
+    regression would slip through green.
+
+    When Redis is missing this otherwise surfaces as dozens of opaque 500s
     from every limited/health route, which is what masked a mid-session Redis death
     once (see docs/OFF_COURSE_BUGS.md, 2026-05-29). This guard runs wherever pytest
     runs — GitHub Actions, Claude-on-web, and local — so the failure is always
@@ -66,8 +71,11 @@ def pytest_configure(config: pytest.Config) -> None:
     except OSError as exc:
         raise pytest.UsageError(
             f"Redis is not reachable at {redis_host}:{redis_port} ({exc}). "
-            "The test suite requires a live Redis (the rate limiter has no "
-            "in-memory fallback). Start it with `scripts/dev_session_setup.sh`, "
+            "The test suite requires a live Redis. The limiter's in-memory "
+            "fallback (Issue 522) is a production-availability last resort, not a "
+            "substitute here — running against it would exercise per-process "
+            "buckets instead of the real shared ones. "
+            "Start it with `scripts/dev_session_setup.sh`, "
             "`docker compose up -d redis`, or "
             "`redis-server --daemonize yes --save '' --appendonly no`."
         ) from exc
@@ -175,8 +183,9 @@ def _isolate_app_state(client):
        (the StarletteDeprecationWarning), so an auth cookie set by an earlier test
        authenticates later requests.
 
-    3. The slowapi rate-limiter's Redis buckets — the limiter has no in-memory fallback
-       and its Redis state persists across modules (and even across pytest invocations
+    3. The slowapi rate-limiter's Redis buckets — the limiter falls back to memory
+       only when Redis is unreachable (Issue 522), so in a normal run its
+       Redis state persists across modules (and even across pytest invocations
        against the same Redis), so accumulated request counts intermittently tripped a
        spurious 429 in a later test (e.g. ``test_data_export``/``test_issue_113`` — a
        long-standing flake whose victim moved run-to-run). ``limiter.reset()`` clears

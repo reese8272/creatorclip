@@ -9,7 +9,8 @@
 #
 # What it guarantees when it succeeds:
 #   - a Python 3.12 venv at ./.venv with requirements.txt + requirements-dev.txt
-#   - a live Redis (the rate limiter has no in-memory fallback — the suite needs it)
+#   - a live Redis (the limiter's in-memory fallback is a prod last resort, not a
+#     test substitute — the suite needs the real shared buckets; Issue 522)
 #   - a live Postgres 16 + pgvector, with the creatorclip role/db + migrations applied
 #   - ffmpeg on PATH (clip render / audio extract)
 #
