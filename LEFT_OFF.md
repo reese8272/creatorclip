@@ -1,55 +1,65 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-20 · **Branch:** `chore/closure-integrity-audit` @ `5e2c495` ·
-**Working tree:** ✅ **CLEAN**, **2 commits ahead of `origin/main`, 0 behind.**
+**Last updated:** 2026-08-20 · **Branch:** `fix/505-derive-rls-sweep` ·
+**Working tree:** ✅ **CLEAN**
 
-> ⚠️ **YOU ARE NOT ON `main`.** One PR is open and green: **#128** (the closure-integrity audit —
-> docs only). Merging it is the first action below. `main` is at `fd8126e`, which is what production
-> is running.
+> ⚠️ **YOU ARE NOT ON `main`.** One PR is open: **#133** (Issue 505). Merging it is the first action
+> below. Everything else from this session is already merged and deployed.
 
 **Shipped 2026-08-17:** **#119** (the audit itself + Issue 498 items 1–3), **#120** (Issue 521 — the
 lying gate), **#121** (Issue 520 — the personalization SEV1), **#122** (handoff).
 
-**Shipped 2026-08-18:** **#124** (Issue 499 — Layer-0 gates that scored work they never did; + the
-tracker-number drift), **#125** (Issue 522 — a Redis blip was a total sign-in outage; + Issue 500
-`--require`; + every CI apt call bounded), **#126** (close-out).
+**Shipped 2026-08-18:** **#124** (Issue 499), **#125** (Issue 522 + Issue 500 `--require` + every CI
+apt call bounded), **#126** (close-out).
 
-**Shipped 2026-08-19:** **#127** (Issue 524 — the render never verified its own output; Issue 525 —
-"Your 0 clips are ready"). All merged, deployed and live-verified. History on `main` is linear.
+**Shipped 2026-08-19:** **#127** (Issues 524, 525).
 
-**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3259 passed, 64 skipped, 0 xfailed**
-(3170 before the 2026-08-17 work; 3199 → 3212 → 3225 → 3229 → 3259 across the 08-18/08-19 PRs).
+**Shipped 2026-08-20 — Lane L30 Batches B + C, six issues, all merged and deployed:**
+**#128** (closure-integrity audit), **#129** (**501** fail-closed coverage gate + **504** nightly
+lanes prove they executed), **#130** (**507** RENDER_TASKS from the call graph), **#131** (**506**
+route registries from the live route table), **#132** (**503** mutmut actually runs + **502** no step
+swallows its verdict). **#133 (505 — RLS from the schema) is open.**
+
+**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3296 passed, 64 skipped, 0 failed**
+(3259 at the start of the day; +37 across the six issues).
 
 **Prod:** `https://autoclip.studio`. **Running commit VERIFIED** — the container's image revision
-label reads `fd8126ec09257ba3a5f185ae42c6e0bb4933004b`, and `/health` returns 200 over the public
-URL with all containers healthy. Re-confirm the same way after any deploy:
+label reads `1dd03b84d161ccc9c2425c8f0b4e4144310b2590` (the #131 merge) and `/health` returns 200 over
+the public URL. Re-confirm the same way after any deploy:
 `docker inspect autoclip-app-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
 *(Note: `curl localhost:8000/health` from inside the VM returns `000` — the app is behind
 cloudflared, so check the public URL, not localhost. That is not an outage.)*
 
 **Live-verified beyond the label** (per gotcha 4 — a green pipeline is not a working feature).
 
-*2026-08-18 (Issue 522), read out of the RUNNING container, not the image:*
+*2026-08-20 (Issue 506), read out of the RUNNING container, not the image:*
+```
+routers.chat.post_message      ['25 per 1 day', '10 per 1 minute']
+routers.chat.regenerate        ['25 per 1 day', '10 per 1 minute']
+routers.creators.build_dna     ['120 per 1 minute', '50 per 1 day']
+routers.creators.identity_chat ['40 per 1 hour', '50 per 1 day']
+create_summary deps: [..., 'require_budget', 'require_flag_render_intake']
+```
+All four previously-uncapped LLM routes carry both ceilings in production, and `create_summary` — a
+route that enqueued an ffmpeg encode with **no spend gate at all** — now carries one on the live box.
+**This needed no owner action**: it is a read-only introspection of the running app, and it is the
+model to copy for verifying any future route-gate change.
+
+*2026-08-18 (Issue 522), read out of the RUNNING container:*
 `in_memory_fallback_enabled=True · swallow_errors=False · fallback_limiter built ·
 youtube redis timeouts 2.0/2.0 · BudgetStatus fields ('blocked','retry_after_s','reason')`.
-Plus `GET /auth/me` returning **401, not 500** — the request passed *through* the limiter to auth,
-which is the exact route that was the outage. The in-memory fallback itself has not been exercised on
-prod, because that needs a real Redis outage; it is proven by test and by config readback, not live.
+Plus `GET /auth/me` returning **401, not 500**. The in-memory fallback itself has not been exercised
+on prod, because that needs a real Redis outage.
 
-*2026-08-17 (Issue 520):* against the prod DB under a real `tenant_session`, the owner's scorer
-reports:
+*2026-08-17 (Issue 520):* against the prod DB under a real `tenant_session`:
 `LogisticRegression · label_count=10 · is_degenerate=False · effective weight 0.0 ·
-API active=False labels=10 threshold=20`. Two things that proves: `is_degenerate` computed correctly
-on a **pre-520 blob** (the lazy-recompute path is what makes the fix migration-free — it ran in
-production), and the honest sub-threshold fallback is intact. The owner has only 10 labels, so the
-personalization-**active** path could not be exercised live — that needs ≥21 clips rated, and is the
-one loose end from this work.
+API active=False labels=10 threshold=20`. The personalization-**active** path could not be exercised
+live — that needs ≥21 clips rated.
 
 > ⚠️ **THE BRANCHING MODEL CHANGED ON 2026-08-15.** The `staging` **branch is deleted**. The model is
-> trunk-based: `feature/* → PR → main`. `main` protection is now **`enforce_admins: true`** — there
-> is no bypass, including for the owner. Direct pushes to `main` are **rejected** (verified live, not
-> just read back from the API). PRs must merge via **Rebase** or **Squash**; linear history disables
-> GitHub's merge-commit button. **Merging to `main` triggers a production deploy.**
+> trunk-based: `feature/* → PR → main`. `main` protection is **`enforce_admins: true`** — there is no
+> bypass, including for the owner. PRs must merge via **Rebase** or **Squash**.
+> **Merging to `main` triggers a production deploy.**
 >
 > The staging **ENVIRONMENT** is untouched and still gates every prod deploy. Branch ≠ environment.
 
@@ -75,48 +85,80 @@ one loose end from this work.
 
 **The single active goal: work Lane L30's remaining code queue to empty.**
 
-Everything the 2026-08-17 audit found that jumped the queue is fixed, merged, deployed, and — as of
-PR #128 — **independently verified**: Issues 521, 520, 499, 500, 522, 524, 525 and 498 (items 1–3, 6).
-Read `docs/assessment/CLOSURE_INTEGRITY_2026-08-19.md` before re-checking any of them.
+**Batches B and C are DONE** (2026-08-20). Issues 501, 502, 503, 504, 505, 506, 507 are built,
+merged (505 pending) and — where a read-only introspection could reach them — live-verified.
 
-**The remaining code queue**, cheapest-first within each batch:
+**The remaining code queue**, cheapest-first:
 
 | Batch | Issues | Note |
 |---|---|---|
-| **C** — scan, don't list | **505, 506, 507** | **Recommended next.** 505: 2 of 29 tenant tables have no RLS policy (defence-in-depth gap, not an open door — every query filters explicitly). 506: the LLM-route literal lists 9 against ~15 live; two chat routes have a daily cap and no burst limit. |
-| **B** tail | 501, 502, 503, 504 | 503 is the standout: a weekly mutation gate that has never executed a single mutant across 8 green runs. |
-| **G** remainder | 523 | Stripe async-payment: take-money-grant-nothing, latent behind a Dashboard toggle. |
-| **H** | 526, 527 | Dead output — the GDPR export has no UI while the Privacy Policy says it does. |
-| **D / E / F** | 508–510 / 511–515 / 516–519 | Docs-as-schema, production truthfulness, process artifacts. |
-| *also open* | 498 items 4–5, 445, 484, 495 | 484 is the highest-impact known clip-quality defect (a clip opening on a clause that inverts the speaker's meaning). |
+| **G** remainder | 523 | Stripe async-payment: take-money-grant-nothing, latent behind a Dashboard toggle. **Recommended next** if you want a money-path fix. |
+| **H** | 526, 527 | Dead output — the GDPR export has no UI while the Privacy Policy says it does; 527 is six paid capabilities consumed by nothing (mostly delete/wire-up/keep *decisions*, not code). |
+| **D / E / F** | 508–510 / 511–515 / 516–519 | Docs-as-schema, production truthfulness, process artifacts. **508 is the natural follow-on to this session** — it is the same "derive it, don't type it" rule applied to doc citations, and this session produced fresh evidence for it. |
+| *also open* | 498 items 4–5, 445, 484, 495 | **484 is the highest-impact known clip-quality defect** (a clip opening on a clause that inverts the speaker's meaning) — the one to pick for product impact over process hygiene. |
 
-**Blocked and not workable under this decision:** 528 (needs 529).
+**Blocked and not workable under the scope decision:** 528 (needs 529).
 
 ### → NEXT ACTION
 
-1. **Merge PR #128** — open, green (13/13), `CLEAN`, and the only thing keeping this checkout off
-   `main`:
-   `gh pr merge 128 --repo reese8272/creatorclip --rebase --delete-branch`
-   then `git checkout main && git pull --ff-only origin main`.
-   Docs-only, but **merging to `main` deploys** and `docker-publish.yml` has no `paths-ignore`, so it
-   still rebuilds and redeploys (gotcha 8). Expected, not a problem.
+1. **Merge PR #133 (Issue 505)** once green, then `git checkout main && git pull --ff-only origin main`.
+   It carries **migration 0064** (RLS on `creator_identity`), so the deploy runs a migration —
+   expected. Its integration-lane half is **CI-verified only**; there is no Postgres on this box.
 
-2. **Start Lane L30 Batch C — Issue 505 first.** Run the project's issue workflow (CHECK → APPROVE →
-   BUILD → REVIEW). 505 is `M (~2 h)`: derive the RLS sweep from `pg_policies` at runtime instead of
-   two hand-written tuples, and resolve the two tenant tables that carry `creator_id` with no policy
-   and no recorded exemption. **Already confirmed independently, do not re-derive:** exactly **2 of
-   29** tenant tables (`creator_api_keys`, `creator_identity`) appear in no RLS migration, and every
-   current query filters by `creator_id` explicitly — so this is a missing defence-in-depth layer,
-   **not** an open door. It needs the integration lane, which runs in CI only.
+2. **Then pick one:**
+   - **484** — product impact. The meaning-inverting cold open. Its last AC needs a fresh upload,
+     which is parked, so everything *except* that is doable now.
+   - **523** — money path. Stripe async-payment.
+   - **508** — continues this session's thread directly.
 
-3. **Then 506, then 507** — same batch. 506's fix includes four LLM route decorators missing a burst
-   or daily cap (Celery-flood risk, not a spend hole: all four carry `Depends(require_budget)`).
+**Do NOT do:** anything on the parked operator list, or Issue 528.
 
-4. **Then pick from the queue table above.** If you want product impact over process hygiene, jump to
-   **484** (clips opening on a clause that inverts the speaker's meaning) or **523** (Stripe
-   take-money-grant-nothing) instead of finishing Batch B.
+### 🔬 WHAT BATCHES B + C ACTUALLY FOUND (read before re-deriving any of it)
 
-**Do NOT do:** anything on the parked operator list, or Issue 528. See the scope decision above.
+Six issues, one defect class: **a gate reporting green over work it never did.** Five of the seven
+findings were wrong in their filed form, and the corrections are the expensive part:
+
+1. **504's prescribed instrument would not have worked.** The issue said to copy `ci.yml`'s
+   `render_env` collect-count guard. `skipif` is evaluated **after** collection, so a fully-skipped
+   lane still reports its full collected count — copying it would have shipped a second vacuous gate.
+   The guard reads a JUnit report and counts `tests - skipped`. **Reproduced on the real command
+   line:** `RUN_LLM_LIVE=1 ANTHROPIC_API_KEY=""` → `9 skipped`, **exit 0**.
+2. **507's population was wrong in BOTH prior counts.** Filed as 3, critic measured 2; it is **3**,
+   and `backfill_video_peaks` — one of the critic's two — has no ffmpeg path at all. A call graph
+   must follow **references** (the encode is an *argument* to `asyncio.to_thread`, never `Call.func`
+   — following calls only finds **zero**) but must **not** follow `.delay` (an enqueue, where the
+   encode correctly runs in the already-routed task).
+3. **506 found a FIFTH gap nobody had counted.** `POST /videos/{video_id}/summaries` carried the
+   `render_intake` kill switch and **no `require_budget`** — an ffmpeg encode with no spend gate,
+   invisible to the old 10-entry literal. Its staleness arm also found **five ghost exemptions**
+   naming handlers that no longer exist anywhere in `routers/`.
+4. **503's fix was one missing module.** `conftest → main → event_log → shared_resources`, absent
+   from `also_copy`. mutmut strips the repo root from `sys.path` *by design*, so the sandbox could not
+   fall back — collection died and `|| true` ate it. **It now runs: 990 mutants, 536 killed, 454
+   survived (54.1%) in ~80 s.** Deleting the workflow was authorised and would have been wrong.
+5. **`mutmut results` prints only SURVIVORS** — so a run that died before mutating anything emits the
+   same empty block as a run that killed everything, and reads as a *perfect score*. Counts come from
+   `mutants/**/*.py.meta`'s `exit_code_by_key`, where **non-zero means KILLED**. Get that inversion
+   backwards and you report the exact complement of the real score.
+6. **505 is 3 of 29, not 2 of 29** (plus two more surfaced by the gate). `creator_identity` got the
+   policy — it holds free text injected into **LLM prompts**. `creator_api_keys`' exemption was
+   correct all along and simply unwritten. The **8** policied-but-never-behaviourally-swept tables
+   were measured independently and match the filing's "8 of 31".
+
+**Three traps this session hit, which will recur:**
+- **A blanket ban is almost always the wrong shape.** 502's `|| true` census: 23 occurrences, only 9
+  dangerous; the rest are `X=$(cmd || true)`, which is *capture*, not swallowing.
+- **Deriving a population from the same predicate you then assert is half circular.** 506's billed
+  routes are the **union** of the two gates for exactly this reason.
+- **A static parser that misses a syntax form does not fail — it produces confident false findings.**
+  505's first draft handled `Assign` but not `AnnAssign` and reported five real policies as missing.
+
+**What was deliberately NOT derived, and why:** `_TENANT_TABLES` in the RLS integration test **seeds
+a row per table**. Auto-adding a table with no seed makes the clean-deny assertion pass **vacuously**.
+Deriving that loop would swap a visible gap for an invisible one — so it is *reconciled* against the
+schema instead, with the 8 unswept tables listed as a ratchet. Same reasoning kept 507's three
+ffmpeg-reaching tasks **exempted rather than routed**: routing `ingest_video` to the concurrency-1
+render queue would serialize the entire ingestion pipeline.
 
 ### → BEFORE YOU START: read these, in this order
 
@@ -438,6 +480,19 @@ gate. Warn the friend about two expected things so they don't read as breakage:
    `docs/assessment/CLOSURE_INTEGRITY_2026-08-19.md`, and it is why the next session should read
    rather than re-derive.
 
+10. **2026-08-20 — the owner asked for a phase of pure code/verification work, and Batches B + C
+    went from filed to shipped in one pass.** Six issues, one defect class: *a gate reporting green
+    over work it never did*. The striking result is not that they were fixable — it is that **five of
+    the seven findings were wrong in their filed form**, and every correction pointed the same way:
+    the instrument someone reached for could not have measured the thing. 504's prescribed
+    collect-count guard cannot see a skip. 507's regex could not see an `asyncio.to_thread` argument
+    and its critic's correction named a task with no ffmpeg path. 506's registry was blind to a route
+    that took money and granted nothing. `mutmut results` reports an aborted run and a flawless one
+    identically. The lane's own thesis — *this project diagnoses better than it defends* — turns out
+    to have a sharper edge: **the diagnosis is often right about the disease and wrong about the
+    test.** Which is why every fix in this batch ends in a mechanism that fails loudly when it stops
+    working, and why each one was checked by reverting it and naming the test that goes red.
+
 ---
 
 ## KEY COORDINATES & FACTS
@@ -576,6 +631,31 @@ gate. Warn the friend about two expected things so they don't read as breakage:
     false finding in the 2026-08-19 closure audit. When reading a tenant table by hand, either set
     the GUC or query through `db.tenant_session` — and treat an empty result as "unproven", never as
     "empty". (Incidentally the cleanest live confirmation that tenant isolation works.)
+
+22. **A pipeline's exit status is the LAST command's — `cmd | tee log` discards `cmd`'s verdict.**
+    Written by hand *while fixing* `|| true` (Issue 502), which is how easily it recurs. Capture the
+    status explicitly (`set +e; cmd > log 2>&1; STATUS=$?; set -e; cat log; exit $STATUS`) or set
+    `pipefail`. The same trap bit a shell one-liner in this session: `script | tail -3; echo $?`
+    reported the exit code of `tail`, not the script, and briefly read as a passing check.
+
+23. **`mutmut results` prints ONLY survivors, so an aborted run looks like a perfect score.**
+    Never assert "the gate ran" from a report that is empty in both the best and worst case. Counts
+    live in `mutants/**/*.py.meta` → `exit_code_by_key`, where **non-zero = KILLED** (the tests failed
+    against the mutant). Backwards reports the exact complement. `mutants/` is a gitignored COPY of
+    the first-party tree with each mutated function present ~990 times — any repo-wide `rglob` sweep
+    must exclude it or the suite reds for anyone who has run mutmut.
+
+24. **Deriving a gate's population from the same predicate the gate then asserts is half circular.**
+    Issue 506: finding billed routes by `require_flag_llm_generation` and *then* asserting
+    flag-AND-budget makes the flag half a tautology — and the half it destroys is the one that
+    matters, a route with one gate and not the other. Take the **union** of the gates so the
+    asymmetry itself is the failure. Corollary: a scope literal is not the only vacuity source; the
+    *discovery predicate* can be one too.
+
+25. **A static parser that misses a syntax form does not fail — it produces confident false
+    findings.** Issue 505's first draft handled `ast.Assign` but not `ast.AnnAssign`, so migration
+    0040's `_CHILD_TABLES: list[...] = [...]` was invisible and five real RLS policies were reported
+    as missing. When a sweep says something alarming, check the parser before believing it.
 
 21. **`git add -A` at commit time will silently merge two issues into one commit.** Happened twice in
     one day — the 522 commit swallowed the 500 work, the 524 commit swallowed 525 — and both needed
