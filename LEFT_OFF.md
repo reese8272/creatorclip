@@ -11,8 +11,8 @@ Layer-0 gates that scored work they never did; + the tracker-number drift) and *
 a Redis blip was a total sign-in outage; + Issue 500 `--require`; + every CI apt call bounded).
 History on `main` is linear.
 
-**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3229 passed, 64 skipped, 0 xfailed**
-(3170 before the 2026-08-17 work; 3199 → 3212 → 3225 → 3229 across the 2026-08-18 PRs).
+**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3259 passed, 64 skipped, 0 xfailed**
+(3170 before the 2026-08-17 work; 3199 → 3212 → 3225 → 3229 → 3259 across the 2026-08-18 PRs).
 
 **Prod:** `https://autoclip.studio`. **Running commit VERIFIED** — the container's image revision
 label reads `28e591ca4ddea6eb49ee3b18c7368a12a859db02`, and `/health` returns 200 over the public
@@ -92,15 +92,27 @@ still holds four product defects (523–525) and Batch H two dead-output items.
    contradiction) needs the two numbers *reconciled* rather than patched — a diagnosis, not a
    one-liner. **Item 5** (promoting `Migration lint (Squawk)` + `Visual regression` to required)
    mutates branch protection and wants its own change with a readback.
-4. ~~**Issues 499, 500 and 522**~~ ✅ **ALL DONE 2026-08-18.** Layer-0 gates verify their tool ran and
+4. ⚠️ **NEW AND UNRESOLVED — notifications have never worked in production.** Found while building
+   Issue 525 by reading the live container: `ENV=production`, `NOTIFY_BACKEND=console`, no Resend
+   key, and **17 `notification_deliveries` rows every one of which says `status='sent'` — none
+   delivered.** No creator has ever received an email from this product, and the dedupe
+   short-circuit only retries `failed` rows, so those 17 are permanently latched. Issue 525 made the
+   failure *visible* (startup warning + `handled_by` on new rows); it cannot make anything deliver.
+   **That is Issue 529 — operator-only, ~30 min, and it blocks #28**: a friend who uploads today gets
+   no email while the database claims one was sent. `docs/GO_LIVE.md` carries it as an OPEN Stage-A
+   row. **Issue 528** (hard-reject the bad backend at boot) is gated on 529 and must not land first.
+5. ~~**Issues 499, 500, 522, 524 and 525**~~ ✅ **ALL DONE 2026-08-18.** Layer-0 gates verify their tool ran and
    every invocation now carries `--require`; a Redis blip is no longer a total sign-in outage.
    See gotchas 13 and 15 for the facts worth carrying forward from each.
-   **The recommended next CODE work is Batch C** ("scan, don't list", Issues 505–507) — the
-   next-densest value, since 11 of ~20 hand-maintained gate-scope literals had already drifted, two
-   of them covering live defects. Note **505** also carries two tenant tables with no RLS policy and
-   no recorded exemption, and **506** four LLM routes missing a burst or daily cap.
+   **The recommended next CODE work is Batch C** ("scan, don't list", Issues 505–507). Independently
+   confirmed this session: exactly **2 of 29 tenant tables** (`creator_api_keys`, `creator_identity`)
+   are named in no RLS migration — every current query filters by `creator_id` explicitly, so it is a
+   missing defence-in-depth layer, not an open door. And **506**'s `_LLM_ROUTES` literal lists 9
+   routes against ~15 live, with the two chat routes carrying a daily cap and no burst limit.
    Batch B's remainder (**501–504**) is the cheaper alternative: 503 in particular is a weekly
    mutation gate that has never executed a single mutant across 8 green runs.
+   Batch G still holds **523** (Stripe async-payment: take-money-grant-nothing, latent behind a
+   Dashboard toggle).
 
 **Then** resume the beta track: **#29 (Google OAuth verification)** is still the only item with a
 clock you cannot compress (1–4 weeks external review) — read the scope warning in §D before

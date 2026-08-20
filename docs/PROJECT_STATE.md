@@ -4,7 +4,42 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-18 (latest) — Issues 522 + 500: a Redis blip is no longer a sign-in outage
+## 2026-08-18 (latest) — Issues 524 + 525: the pipeline stops claiming success it did not earn
+
+**524 — the render now verifies its own output.** ffmpeg exits 0 after writing a truncated file
+(measured: 0.400 s / 28 KB against a 0.6 s request); the clip was uploaded, marked
+`render_status=done` and announced "Clip ready." All three entry points now ffprobe the output
+against the requested duration, and ffmpeg's stderr — which carried the "partial file" warning — is
+no longer discarded on the success path.
+
+Reproduced with **real ffmpeg 8.1.2**, not a mock: a 10 s request against a 5 s source writes 2.0 s
+and exits 0. The guard catches a *short* output, not a *corrupt* one — a `+faststart` mp4 keeps its
+moov atom, so byte-truncation still probes as full length. Stated in the test and in DECISIONS so
+the boundary is not mistaken for coverage.
+
+**525 — and a much bigger finding underneath it.** The zero-clip case emailed "Your 0 clips … are
+ready for review" with a CTA into an empty queue; it now has its own `no_clips_found` event carrying
+the `skip_reason` the API already computes.
+
+But the issue called the live notify backend "unknowable from this repo", and it was knowable from
+the VM: **`ENV=production`, `NOTIFY_BACKEND=console`, no Resend key, and 17
+`notification_deliveries` rows every one of which says `status='sent'`. None were delivered. No
+creator has ever received an email from prod**, and because the dedupe short-circuit only retries
+`failed` rows, those 17 are permanently latched.
+
+Shipped: a startup warning naming the trap (rows still say `sent`), and `handled_by` on every new
+delivery row (migration 0063) so a console no-op is distinguishable from a delivery. **Deliberately
+NOT fixed:** delivery itself, which needs credentials only the owner can provision — **Issue 529**,
+now an OPEN Stage-A row in `docs/GO_LIVE.md` because #28 depends on it. The hard reject that
+`STORAGE_BACKEND` gets is **Issue 528**, gated on 529 so it lands the day it can pass.
+
+Suite 3229 → **3259 passed, 64 skipped, 0 failed**; `render_env` lane 3 → 5 passed with its 4
+pre-existing mediapipe errors unchanged. Detail in `docs/DECISIONS.md` (2026-08-18) and
+`docs/issues.md` §524/§525.
+
+---
+
+## 2026-08-18 — Issues 522 + 500: a Redis blip is no longer a sign-in outage
 
 **Issue 522 — the highest-consequence open defect, closed.** `limiter.py` passed neither
 `swallow_errors` nor `in_memory_fallback_enabled` (both default `False`), so any Redis error

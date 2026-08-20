@@ -5,7 +5,60 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-18 (latest) — Fail-closed is for the CHECK, not the accounting; and the outage needs its own words (Issue 522)
+## 2026-08-18 (latest) — Verifying an output fails CLOSED; a non-delivering notify backend warns, for now (Issues 524, 525)
+
+**Decision 1 — output verification fails closed, and does not reuse the source-probe helper.**
+`clip_engine/render.py` now has two ffprobe wrappers with deliberately opposite postures:
+`_source_duration_s` returns `float("inf")` on failure (unknown *source* duration → allow the render
+through) and `_probe_output_duration_s` returns `None` (unknown *output* duration → fail the render).
+Reusing the lenient one would reinstate exactly the defect being fixed: an output nobody can probe is
+a render with no evidence, not a passing one. Same consequence-class split as Issue 522's limiter
+(degrade open) versus spend guard (fail closed).
+
+**Why a duration check and not a size check.** The reported failure is a 28 KB / 0.400 s file against
+a 0.6 s request. `st_size > 0` passes it. Only the duration distinguishes it.
+
+**Two floors, both load-bearing.** The output must clear an absolute floor (reusing
+`_DURATION_OVERSHOOT_EPS_S = 1.0`, the repo's existing duration-noise figure) **and** a 90% relative
+floor. The absolute binds on long clips, the ratio on short ones — for a 0.6 s request the absolute
+floor alone is −0.4 s, which nothing can fail. Written as `min()` in the first draft and caught by
+its own regression test; `max()` is correct.
+
+**Scope boundary, found while testing and recorded so it is not mistaken for coverage.** This catches
+a **short** output, not a **corrupt** one. An mp4 written with `+faststart` keeps its moov atom at the
+front, so byte-truncating it leaves ffprobe reporting the full duration and this guard passes it.
+Detecting that requires a decode pass; out of scope for the reported defect.
+
+**Evidence.** Real ffmpeg 8.1.2: requesting a 10 s window that overruns a 5 s source writes **2.0 s
+and exits 0** — the reported shape, reproduced in the `render_env` lane rather than mocked.
+
+---
+
+**Decision 2 — `NOTIFY_BACKEND != resend` in production WARNS; the hard reject is deferred.**
+`STORAGE_BACKEND != "r2"` raises at startup, and the same treatment is the right end state here.
+It is not the right change today.
+
+**Why.** Measured on the running prod container 2026-08-18: `ENV=production`,
+`NOTIFY_BACKEND=console`, **no** `RESEND_API_KEY`, **no** `EMAIL_FROM`, and **17
+`notification_deliveries` rows, every one `status='sent'`, none of them delivered.** Raising would
+therefore fail the next deploy's boot — a self-inflicted outage to fix a silent one. The warning
+names the specific trap (delivery rows still say `sent`), which is the half that kept this invisible
+for 17 rows. The reject is Issue 528, gated on Issue 529 (operator: provision Resend).
+
+**Decision 3 — the 17 historical delivery rows are neither backfilled nor re-sent.**
+`notification_deliveries.handled_by` (migration 0063) is nullable and stamped only on new rows. NULL
+honestly means "written before this column existed". Re-sending was rejected: the rows are weeks old,
+and firing "your clips are ready" for a three-week-old video is worse than silence. Owner decision.
+
+**Decision 4 — zero clips gets its own event type, not `clips_ready` with `clip_count=0`.**
+Zero clips is a designed outcome (the five-code `skip_reason` taxonomy; Issue 458 made it more
+common), so it gets `no_clips_found` carrying the same `skip_reason` the clips API already surfaces.
+A count-shaped variant of the success copy is what produced "Your 0 clips … are ready for review"
+with a CTA into an empty queue.
+
+---
+
+## 2026-08-18 — Fail-closed is for the CHECK, not the accounting; and the outage needs its own words (Issue 522)
 
 Two implementation decisions taken while building the posture approved on 2026-08-17. The posture
 itself is not reopened here — only how far it extends and what the creator is told.

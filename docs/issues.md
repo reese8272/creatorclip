@@ -4829,7 +4829,7 @@ spendable. Issue 208 decided refunds *we* initiate; it says nothing about refund
 
 ### Issue 524: the render never verifies its own output
 
-- [ ] **Status:** open · **Size:** M (~3 h) · **Lane:** L30 Batch G · **CORRECTED, reproduced**
+- [x] **Status:** ✅ **DONE 2026-08-18** · **Size:** M (~3 h) · **Lane:** L30 Batch G · **CORRECTED, reproduced**
 
 Reproduced on the real production function: a silently **short** clip (0.400 s against a 0.6 s
 request, 28 KB) is uploaded, marked `render_status=done`, and announced **"Clip ready."** ffmpeg's
@@ -4841,14 +4841,45 @@ remains unguarded on `render_cleaned_clip_file` ("Clean ready.") and `render_sum
 **Evidence:** `clip_engine/render.py:94-127`, `:941`, `:1105`, `:1288`; `worker/tasks.py:2666-2699`.
 
 **Acceptance**
-- [ ] ffprobe the output duration against the requested window on all three entry points
-- [ ] ffmpeg stderr surfaced on the success path
+- [x] ffprobe the output duration against the requested window on all three entry points
+- [x] ffmpeg stderr surfaced on the success path
+
+**BUILD NOTE (2026-08-18)**
+
+`_verify_rendered_output` is deliberately **not** built on the existing
+`_source_duration_s`: that helper returns `float("inf")` on a probe failure so an unknown *source*
+duration allows the render through. Applying the same leniency to an *output* would reinstate the
+defect — an output nobody can probe is a render with no evidence, not a passing one. Same ffprobe
+call, opposite posture, both documented in their docstrings. (Same consequence-class split as
+Issue 522.)
+
+**Two floors, and the code was wrong before its own test caught it.** The check must clear both an
+absolute floor (`_DURATION_OVERSHOOT_EPS_S`, the repo's existing 1 s duration-noise figure) and a
+relative one (90%). The first draft used `min()` where the comment said "must clear BOTH" — for a
+0.6 s request that yields a floor of **−0.4 s**, which nothing can fail. `max()` is correct; the
+regression test caught it immediately.
+
+**Verified against real ffmpeg 8.1.2, not a mock.** Asking for a 10 s window that overruns a 5 s
+source makes ffmpeg write **2.0 s and exit 0** — the reported shape exactly. Test in the
+`render_env` lane.
+
+**SCOPE, discovered while testing:** a duration check catches a **short** file, not a **corrupt**
+one. Byte-truncating an mp4 written with `+faststart` leaves the moov atom at the front, so ffprobe
+still reports the full duration and this guard passes it. Catching that needs a decode pass and is
+out of scope here — the reported and reproduced defect is the short output. Stated in the test so
+the boundary is not mistaken for coverage.
+
+**Test churn, and why it is safe:** 46 existing tests patch `subprocess.run` wholesale to assert the
+ffmpeg *argv*, so no output file exists for the verifier to check. They opt into a
+`stub_render_verification` fixture rather than being rewritten. That would be a hole — so three
+tests assert each entry point *calls* the verifier with the right expected duration, and all three
+fail when the call sites are removed.
 
 ---
 
 ### Issue 525: `clips_ready` tells the creator "Your 0 clips are ready for review."
 
-- [ ] **Status:** open · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CORRECTED (high → medium), reproduced**
+- [x] **Status:** ✅ **DONE 2026-08-18** · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CORRECTED (high → medium), reproduced**
 
 `clips_ready` is enqueued with **no reference to how many clips exist**, so a zero-clip video emails
 *"Your 0 clips from "&lt;title&gt;" are ready for review."* with a "Review your clips" CTA, and writes
@@ -4875,9 +4906,43 @@ fail-safe, `DECISIONS.md:12800`.)*
 `notify/mailer.py:183-222`.
 
 **Acceptance**
-- [ ] Zero-case copy carrying the `skip_reason` the API already computes
-- [ ] `NOTIFY_BACKEND != resend` under `ENV=production` rejected or warned — the exact treatment `STORAGE_BACKEND=local` already gets
-- [ ] The handling backend stamped on the delivery row so console-era rows are re-sendable
+- [x] Zero-case copy carrying the `skip_reason` the API already computes
+      — new `no_clips_found` event: paired `.txt`/`.html` templates, `notify/copy.py` entry, in-app map entry
+- [x] `NOTIFY_BACKEND != resend` under `ENV=production` rejected or warned — the exact treatment `STORAGE_BACKEND=local` already gets
+      — **warned**, not rejected; see the build note for why rejecting today would fail the next deploy's boot
+- [x] The handling backend stamped on the delivery row so console-era rows are re-sendable
+      — `notification_deliveries.handled_by` (migration 0063). Re-sending the *existing* rows is deliberately not attempted
+
+**BUILD NOTE (2026-08-18) — the stated unknown is resolved, and it is worse than the issue assumed.**
+
+The issue says the live `NOTIFY_BACKEND` "is unknowable from this repo." It is knowable from the VM,
+and it was checked:
+
+| On the running prod container | Value |
+|---|---|
+| `ENV` | `production` |
+| `NOTIFY_BACKEND` | **`console`** |
+| `RESEND_API_KEY` set | **False** |
+| `EMAIL_FROM` set | **False** |
+| `notification_deliveries` | **17 rows, every one `status='sent'`** |
+
+**Production has recorded 17 successful notification deliveries and delivered zero of them.** No
+creator has ever received an email from prod. Because the dedupe short-circuit only retries rows
+whose status is `failed`, those 17 are permanently latched — flipping to `resend` cannot backfill
+them.
+
+**Why warn and not reject.** Prod has no Resend key, so the `STORAGE_BACKEND`-style hard raise would
+fail the next deploy's boot — a self-inflicted outage. The warning names the specific trap ("delivery
+rows will still say `sent`"), which is the half that kept this invisible. The hard reject is
+**Issue 528**, gated on Resend being provisioned.
+
+**Correction to this issue's own wording:** it says `clips_ready` is enqueued "with no reference to
+how many clips exist." Not so — `clip_count` was always in the payload. Nothing *branched* on it.
+Do not go hunting for a missing field.
+
+**Not fixed by this change, and it must be said plainly:** notifications still do not deliver. That
+needs `RESEND_API_KEY` + `EMAIL_FROM` provisioned — operator-only, filed as **Issue 529** and added
+to `docs/GO_LIVE.md` as an OPEN Stage-A row, because #28's friend beta depends on it.
 
 ---
 
@@ -4943,6 +5008,55 @@ nothing. Each needs a **delete / wire-up / keep** decision, not a fix:
 
 ---
 
+### Issue 528: hard-reject `NOTIFY_BACKEND != resend` in production
+
+- [ ] **Status:** open · **Size:** XS (~20 min) · **BLOCKED BY #529** · **Lane:** L30 Batch G · filed 2026-08-18
+
+Issue 525 shipped a startup **warning** where `STORAGE_BACKEND` gets a hard raise. That was the
+right call at the time and the wrong end state: prod had no `RESEND_API_KEY`, so raising would have
+failed the next deploy's boot.
+
+Promote the warning in `config.py` to a `ValueError`, matching the `STORAGE_BACKEND != "r2"` block
+directly above it. **Land it the same day #529 is done, not before** — this is the one change that
+turns a misconfigured notify backend from a silent no-op into an unmissable failure, and it is only
+safe once the correct value is actually available.
+
+**Acceptance**
+- [ ] `ENV=production` + `NOTIFY_BACKEND != resend` raises at startup
+- [ ] A test asserts the raise, and that `resend` constructs cleanly
+
+---
+
+### Issue 529: OPERATOR — provision Resend so notifications actually deliver
+
+- [ ] **Status:** open · **Size:** S (operator, ~30 min) · **Lane:** L30 Batch G · filed 2026-08-18
+
+**Measured on prod 2026-08-18: `NOTIFY_BACKEND=console`, no `RESEND_API_KEY`, no `EMAIL_FROM`, and
+17 `notification_deliveries` rows every one of which says `status='sent'`. Not one was delivered.**
+No creator has ever received an email from this product.
+
+Issue 525 made the failure *visible* (a startup warning; `handled_by` on every new row) and made the
+zero-clip copy *honest*. It cannot make anything deliver. That needs credentials only the owner can
+provision:
+
+1. Create a Resend API key and verify the sending domain.
+2. Set `RESEND_API_KEY`, `EMAIL_FROM`, and `NOTIFY_BACKEND=resend` in the VM `.env`.
+3. Redeploy and confirm the Issue-525 startup warning is **gone** (that is the readback).
+4. Confirm a new `notification_deliveries` row carries `handled_by='resend'`.
+
+**The 17 existing rows are deliberately NOT re-sent** (decision 2026-08-18): they are weeks old, and
+firing "your clips are ready" for a three-week-old video is worse than silence. They keep
+`handled_by = NULL`, which honestly means "written before the column existed".
+
+**Blocks #28** — a friend who uploads today gets no email and the database claims one was sent.
+
+**Acceptance**
+- [ ] Resend provisioned; the startup warning no longer appears in prod logs
+- [ ] A real notification delivered end-to-end, with `handled_by='resend'` on the row
+- [ ] `docs/GO_LIVE.md` row flipped to GREEN with the evidence
+
+---
+
 ### L30 — deliberately NOT filed
 
 Recorded so a future pass does not re-derive them. Full reasoning in
@@ -4981,7 +5095,7 @@ made the next filed issue collide with #520. Deleting the competing copies made 
 authoritative without making it correct — the mechanism is the fix. `docs/OFF_COURSE_BUGS.md`,
 2026-08-18.)*
 
-- Next free issue number: **528**.
+- Next free issue number: **530**.
 
 ---
 
