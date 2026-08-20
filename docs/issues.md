@@ -4829,7 +4829,7 @@ spendable. Issue 208 decided refunds *we* initiate; it says nothing about refund
 
 ### Issue 524: the render never verifies its own output
 
-- [x] **Status:** ✅ **DONE 2026-08-18** · **Size:** M (~3 h) · **Lane:** L30 Batch G · **CORRECTED, reproduced**
+- [x] **Status:** ✅ **DONE 2026-08-19** · **Size:** M (~3 h) · **Lane:** L30 Batch G · **CORRECTED, reproduced**
 
 Reproduced on the real production function: a silently **short** clip (0.400 s against a 0.6 s
 request, 28 KB) is uploaded, marked `render_status=done`, and announced **"Clip ready."** ffmpeg's
@@ -4879,7 +4879,7 @@ fail when the call sites are removed.
 
 ### Issue 525: `clips_ready` tells the creator "Your 0 clips are ready for review."
 
-- [x] **Status:** ✅ **DONE 2026-08-18** · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CORRECTED (high → medium), reproduced**
+- [x] **Status:** ✅ **DONE 2026-08-19** · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CORRECTED (high → medium), reproduced**
 
 `clips_ready` is enqueued with **no reference to how many clips exist**, so a zero-clip video emails
 *"Your 0 clips from "&lt;title&gt;" are ready for review."* with a "Review your clips" CTA, and writes
