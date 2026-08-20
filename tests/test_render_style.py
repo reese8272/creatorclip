@@ -3,6 +3,8 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
 from clip_engine.render import render_clip_file
@@ -10,6 +12,10 @@ from db import get_session
 from main import app
 from models import Clip, Creator, RenderStatus
 from tests._helpers import stub_get_owned
+
+# Issue 524: these assert the ffmpeg COMMAND and patch subprocess.run wholesale,
+# so no output file exists for the render-output verifier to check.
+pytestmark = pytest.mark.usefixtures("stub_render_verification")
 
 
 def _mock_creator() -> MagicMock:

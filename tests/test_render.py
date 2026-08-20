@@ -30,6 +30,10 @@ from clip_engine.render import (
     render_summary_file,
 )
 
+# Issue 524: these assert the ffmpeg COMMAND and patch subprocess.run wholesale,
+# so no output file exists for the render-output verifier to check.
+pytestmark = pytest.mark.usefixtures("stub_render_verification")
+
 # A representative loudnorm JSON block as printed to stderr by
 # `loudnorm=...:print_format=json`. input_i is well above the silence floor.
 _LOUDNORM_JSON = """[Parsed_loudnorm_0 @ 0x55]

@@ -19,6 +19,10 @@ import pytest
 
 from clip_engine.captions import VALID_STYLES, build_ass_subtitles
 
+# Issue 524: these assert the ffmpeg COMMAND and patch subprocess.run wholesale,
+# so no output file exists for the render-output verifier to check.
+pytestmark = pytest.mark.usefixtures("stub_render_verification")
+
 
 def _segments(words_per_seg: int = 3) -> list[dict]:
     """Two segments × N words each, contiguous time. Easy to slice on time."""
