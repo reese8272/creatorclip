@@ -2658,7 +2658,13 @@ async def _active_summary(
     status_code=202,
     response_model=SummaryQueuedOut,
     # Kill switch (Issue 284): 503 when the render_intake flag is off.
-    dependencies=[Depends(require_flag("render_intake"))],
+    # Issue 506 — `require_budget` was missing. This enqueues `render_summary`,
+    # an ffmpeg encode on the render queue, exactly like its sibling
+    # POST /videos/{id}/clips — which carries both gates and says why. Found by
+    # the derived sweep on its first run: the old 10-entry literal could not see
+    # this route at all, and the spend breaker is the only thing standing between
+    # a creator past their cap and unbounded encode time.
+    dependencies=[Depends(require_flag("render_intake")), Depends(require_budget)],
 )
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)

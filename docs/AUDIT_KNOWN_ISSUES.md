@@ -230,6 +230,13 @@ families fall back to **Opus rates** so a misconfiguration can never under-bill.
 LLM-reaching endpoint carries both `require_flag("llm_generation")` and `require_budget` —
 that gating is complete and CI-enforced.
 
+> **Corrected 2026-08-20 (Issue 506).** "CI-enforced" was true of the *routes someone had
+> remembered to list*, not of the route table: the enforcing test named 10 of 17 live LLM routes and
+> could not detect a new one. It is now derived from the live route table. Fixing it surfaced four
+> LLM routes with a daily cap but no burst limit (or the reverse), and one render route —
+> `POST /videos/{video_id}/summaries` — carrying the `render_intake` kill switch with **no
+> `require_budget` at all**. All five are fixed; the claim above is now accurate.
+
 **Where we'd still look:**
 
 - **`improvement/brief.py`** is the highest-risk path — it uses server-side `web_search`

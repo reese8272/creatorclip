@@ -34,6 +34,11 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 _DAILY_LIMIT = f"{settings.CHAT_DAILY_MESSAGE_LIMIT}/day"
+# Issue 506 — the daily cap shipped WITHOUT a burst limit, so all 25 messages
+# could be spent in one second and 25 Celery jobs enqueued at once. Per-minute
+# rather than per-hour on purpose: the harm is a flood, and a human in a real
+# conversation never approaches 10/minute, so this binds only on abuse.
+_BURST_LIMIT = "10/minute"
 _TITLE_MAX = 60
 
 
@@ -114,6 +119,7 @@ async def _enqueue_reply(
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
     dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
+@limiter.limit(_BURST_LIMIT, key_func=creator_key)
 @limiter.limit(_DAILY_LIMIT, key_func=creator_key)
 async def post_message(
     request: Request,
@@ -158,6 +164,7 @@ async def post_message(
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
     dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
+@limiter.limit(_BURST_LIMIT, key_func=creator_key)
 @limiter.limit(_DAILY_LIMIT, key_func=creator_key)
 async def regenerate(
     request: Request,

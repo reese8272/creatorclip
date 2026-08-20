@@ -4319,7 +4319,7 @@ gate whose fix replaced a 2-item literal with a 17-item literal).
 
 ### Issue 506: derive the quota / spend-guard / kill-switch route sets from the live route table
 
-- [ ] **Status:** open · **Size:** M (~2 h) · **Lane:** L30 Batch C · **CORRECTED, reproduced**
+- [x] **Status:** ✅ **DONE 2026-08-20** · **Size:** M (~2 h) · **Lane:** L30 Batch C · **CORRECTED, reproduced**
 
 Three sibling registries are frozen as literals while the route table moved:
 
@@ -4343,8 +4343,63 @@ detect a new uncapped LLM route. **The model to copy is `tests/test_usage_covera
 repo-wide AST sweep with a bidirectional staleness check.
 
 **Acceptance**
-- [ ] All three registries derived from the resolver / live route table
-- [ ] The four uncapped decorators fixed; `CLAUDE.md` and `AUDIT_KNOWN_ISSUES.md` claims made true
+- [x] All three registries derived from the resolver / live route table
+- [x] The four uncapped decorators fixed; `CLAUDE.md` and `AUDIT_KNOWN_ISSUES.md` claims made true
+
+**BUILD NOTE (2026-08-20)**
+
+**Every number in the filing reproduced exactly** — 17 live routes behind `require_flag('llm_generation')`,
+and the same four uncapped decorators. Measured, not assumed. A fifth registry nobody had counted,
+`_RENDER_ROUTES`, had drifted the same way: 4 listed against 6 live, and it named
+`routers.clips.ingest_clip`, which is not behind the render flag at all.
+
+**FIVE gaps fixed, not four. The derived gate found the fifth on its first run:**
+`POST /videos/{video_id}/summaries` (`create_summary`) carries the `render_intake` kill switch and
+**no `require_budget`** — it enqueues `render_summary`, an ffmpeg encode on the render queue, exactly
+like its sibling `POST /videos/{id}/clips`, which carries both gates *and a comment explaining why*.
+The old 10-entry literal could not see this route at all. That is the issue's thesis arriving as
+evidence rather than argument.
+
+The other four: `chat.post_message` + `chat.regenerate` gained a **per-minute** burst
+(`10/minute` — the harm is a flood inside one second, and no human in a real conversation approaches
+it; an hourly cap would have degraded normal use); `creators.build_dna` and `creators.identity_chat`
+gained the shared `LLM_DAILY_LIMIT`. `40/hour` unstacked permits 960 billed calls a day.
+
+**The obvious derivation is half circular — do not "simplify" it back.** Deriving the billed-route
+population from `require_flag_llm_generation` and then asserting flag-AND-budget makes the flag half
+a tautology, and the half it destroys is the one that matters: a route with one gate and not the
+other. The population is the **union** of the two gates, which makes that asymmetry itself the
+failure. Nor is the rule "every billed route has the LLM flag" — the render routes are correctly
+gated by `render_intake`, and asserting the LLM flag over the union fails five correct routes. The
+invariant is *spend-gate ⟺ some kill switch*, plus *llm_generation → spend gate*.
+
+**Also corrected: the burst assertion itself was a literal.** The old test asserted the word
+`"hour"`, which would have **rejected the correct chat fix**. It now accepts any sub-daily window.
+
+**Third registry.** `_LLM_RENDER_ROUTERS` is derived from the live route table (9 modules, was 6),
+so `chat.py` and `creators.py` enter the sweep. `_FLOOR_EXEMPT_HANDLERS` gained 11 entries in two
+reasoned classes — LLM routes bounded by the spend cap rather than the minute ledger, and free
+profile writes — and gained a **staleness arm**, which immediately found **five ghost entries**
+(`delete_insight`, `get_chapters`, `get_hook_analysis`, `get_video_analysis`, `list_insights`).
+None exists anywhere in `routers/`; the GET variants were replaced by `start_*` POSTs and
+`list_insights` was renamed `list_saved_insights`. A ghost exemption is worse than a missing one: it
+silently pre-approves any future handler that reuses the name.
+
+Staleness is checked against **existence, not sweep membership** — several exemptions name GET
+handlers the write-route sweep never selects, which is harmless; a name matching no function at all
+is the real ghost.
+
+**Shared resolver.** The `_IncludedRouter` walker was a nested closure inside one test; it now lives
+once in `tests/_helpers.py` (`discover_routes`, `discover_billed_routes`, `kill_switches`). Every
+consumer asserts a discovery floor, because "found nothing" is this walker's own failure mode —
+that is exactly how `tests/test_response_models.py` went vacuous (`OFF_COURSE_BUGS`, 2026-08-04).
+
+**Non-vacuity verified:** stripping `generate_clips`'s daily cap reds the quota gate; removing
+`create_summary`'s `require_budget` reds the flags gate naming the route.
+
+One off-course finding logged (`docs/OFF_COURSE_BUGS.md`, 2026-08-20): a doc guard asserting against
+a fixed 1000-character slice of `CLAUDE.md`, which fails when an unrelated bullet grows and blames
+the wrong row.
 
 ---
 
