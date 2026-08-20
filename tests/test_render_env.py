@@ -244,3 +244,95 @@ def test_sendcmd_reframe_chain_parses_and_inits(testsrc_source, tmp_path):
     assert (width, height) == (1080, 1920)
     assert abs(stream_dur - 10.0) <= _FRAME_S
     assert track == {"version": 1}  # the reframe track is returned to the caller
+
+
+# ── Issue 524: a truncated output must fail, against REAL ffmpeg ─────────────
+#
+# The unit tests stub the probe, which proves the decision logic but cannot
+# prove the thing that actually went wrong: ffmpeg exiting **0** after writing a
+# short file. This is the lane where that is demonstrable.
+
+
+def test_verifier_rejects_a_genuinely_short_ffmpeg_output(tmp_path: Path) -> None:
+    """The production shape, with real ffmpeg: exit 0 and a short file.
+
+    Asking for a 10 s window that overruns the end of a 5 s source makes ffmpeg
+    write 2 s and **exit 0** — measured here, not assumed. That is precisely the
+    reported failure (0.400 s delivered against a 0.6 s request) and precisely
+    what shipped as "Clip ready."
+
+    SCOPE, found while writing this test and worth stating: a duration check
+    catches a SHORT file, not a corrupt one. Byte-truncating an mp4 written with
+    `+faststart` leaves the moov atom at the front, so ffprobe still reports the
+    full duration and this guard passes it. Catching that needs a decode pass,
+    which is deliberately out of scope for Issue 524 — the reported and
+    reproduced defect is the short output.
+    """
+    from clip_engine.render import _probe_output_duration_s, _verify_rendered_output
+
+    _require_binaries()
+    source = tmp_path / "src.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=30:duration=5",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=300,
+    )
+
+    out = tmp_path / "short.mp4"
+    proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "3",
+            "-i",
+            str(source),
+            "-t",
+            "10",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            str(out),
+        ],
+        capture_output=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, "the whole point is that ffmpeg SUCCEEDS here"
+    assert out.stat().st_size > 0, "and writes a non-empty file, so st_size cannot catch it"
+
+    actual = _probe_output_duration_s(out)
+    assert actual is not None and actual < 5.0, f"expected a short output, probed {actual}"
+
+    with pytest.raises(RuntimeError, match="short output"):
+        _verify_rendered_output(out, 10.0, "render")
+
+
+def test_render_clip_file_raises_on_a_short_output(testsrc_source: Path, tmp_path: Path) -> None:
+    """End-to-end through the production entry point with real ffmpeg.
+
+    Forces the verifier's input to a short duration rather than corrupting the
+    encode, so the assertion is about the ENTRY POINT refusing to return success —
+    the behaviour that let a truncated clip reach the creator.
+    """
+    from clip_engine import render
+
+    out = tmp_path / "out.mp4"
+    with (
+        patch.object(render, "_probe_output_duration_s", return_value=0.4),
+        pytest.raises(RuntimeError, match="short output"),
+    ):
+        render.render_clip_file(testsrc_source, 5.0, 15.0, out)

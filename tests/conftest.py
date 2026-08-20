@@ -293,3 +293,25 @@ def creator_cookie() -> dict[str, str]:
 
 
 # override_current_creator helper lives in tests/_helpers.py — importable from any test.
+
+
+@pytest.fixture
+def stub_render_verification():
+    """Neutralise the Issue-524 output check for command-construction tests.
+
+    Those tests patch ``subprocess.run`` wholesale to inspect the ffmpeg argv, so
+    no output file is ever written and ``_verify_rendered_output`` correctly
+    refuses the render. They are asserting the COMMAND, not the delivery.
+
+    This does not weaken the guard's coverage. The verifier has its own direct
+    tests (``tests/test_render_output_verification.py``), each entry point has an
+    explicit test that it CALLS the verifier with the right expected duration —
+    so removing a call site still fails — and the real ffmpeg behaviour is
+    covered in the ``render_env`` lane. Opt in per module with::
+
+        pytestmark = pytest.mark.usefixtures("stub_render_verification")
+    """
+    from unittest.mock import patch
+
+    with patch("clip_engine.render._verify_rendered_output"):
+        yield

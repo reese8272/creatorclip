@@ -27,6 +27,10 @@ from clip_engine.filler import (
 )
 from tests._helpers import stub_get_owned
 
+# Issue 524: these assert the ffmpeg COMMAND and patch subprocess.run wholesale,
+# so no output file exists for the render-output verifier to check.
+pytestmark = pytest.mark.usefixtures("stub_render_verification")
+
 
 def _w(word: str, start: float, end: float) -> dict:
     return {"word": word, "start": start, "end": end}

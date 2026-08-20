@@ -123,7 +123,18 @@ def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
                 f"[{shlex.join(cmd)}]: {result.stderr[-500:]}"
             )
         raise RuntimeError(f"ffmpeg {label} failed [{shlex.join(cmd)}]: {result.stderr[-500:]}")
-    vlog("ffmpeg_done", label=label, duration_ms=int(now_ms() - _t0))
+    # Issue 524: carry the stderr TAIL on the success path too. ffmpeg exits 0 while
+    # printing "partial file" / "Decoding error" for a truncated output, and this
+    # log line was the only place that warning ever existed — it was dropped here,
+    # so the one clue that a clip was short died before anyone could read it.
+    # Tail-only (matching the failure path) because a clean render's stderr is
+    # verbose progress output nobody needs.
+    vlog(
+        "ffmpeg_done",
+        label=label,
+        duration_ms=int(now_ms() - _t0),
+        stderr_tail=result.stderr[-500:] if result.stderr else "",
+    )
 
 
 # ── Loudness normalization (Issue 181) ────────────────────────────────────────
@@ -391,6 +402,99 @@ def _source_duration_s(source_path: Path) -> float:
         return float(result.stdout.strip())
     except (subprocess.TimeoutExpired, ValueError, OSError):
         return float("inf")  # unknown → caller allows through
+
+
+# Issue 524 — how short an output may be before it is a failed render.
+#
+# One-sided on purpose: too SHORT is the defect; slightly long is not. Cutting on
+# keyframe boundaries and encoder padding both legitimately overshoot, and
+# _DURATION_OVERSHOOT_EPS_S already encodes that a ~1 s discrepancy is noise.
+#
+# Two floors, because neither alone works across the range. The absolute floor
+# would let a 0.400 s output pass for a 0.6 s request (0.2 s < 1.0 s); the
+# relative floor alone would reject a 74.6 s clip cut from a 75 s window if it
+# were tight. A render must clear BOTH.
+_OUTPUT_SHORTFALL_ABS_S = _DURATION_OVERSHOOT_EPS_S  # same scale, same reasoning
+_OUTPUT_SHORTFALL_RATIO = 0.90  # keep >= 90% of the requested duration
+
+
+def _verify_rendered_output(out_path: Path, expected_s: float, label: str) -> None:
+    """Raise unless ``out_path`` is a real media file of about ``expected_s`` (Issue 524).
+
+    **Fails CLOSED, and that is the whole point.** Note the deliberate contrast
+    with :func:`_source_duration_s` directly above, which returns ``inf`` on a
+    probe failure so an unknown *source* duration allows the render through.
+    Applying that leniency here would reinstate the defect this function exists
+    to catch: an output nobody could probe is not a passing render, it is a
+    render with no evidence. Same ffprobe call, opposite posture, because the two
+    answer different questions — "may we proceed?" versus "did we deliver?".
+
+    The motivating failure: ffmpeg exits **0** after writing a truncated file
+    (measured: 0.400 s / 28 KB against a 0.6 s request), printing "partial file"
+    to a stderr the success path discarded. The clip was uploaded, marked
+    ``render_status=done`` and announced "Clip ready." A ``st_size > 0`` check
+    does not catch it — 28 KB is not zero.
+    """
+    if not out_path.exists():
+        raise RuntimeError(f"ffmpeg {label} reported success but wrote no file at {out_path}")
+
+    size = out_path.stat().st_size
+    if size == 0:
+        raise RuntimeError(f"ffmpeg {label} reported success but wrote an empty file at {out_path}")
+
+    actual_s = _probe_output_duration_s(out_path)
+    if actual_s is None:
+        raise RuntimeError(
+            f"ffmpeg {label} reported success but the output at {out_path} "
+            f"({size} bytes) has no probeable duration — treating an unverifiable "
+            f"render as failed, not as passing"
+        )
+
+    # max(), not min(): the output must clear BOTH floors, so the binding one is
+    # the higher. (min() here is a silent no-op for short requests — for a 0.6 s
+    # clip it yields a floor of -0.4 s, which nothing can fail. Caught by
+    # test_rejects_the_measured_truncation_case.) The absolute floor binds on long
+    # clips, the ratio on short ones.
+    floor_s = max(expected_s - _OUTPUT_SHORTFALL_ABS_S, expected_s * _OUTPUT_SHORTFALL_RATIO)
+    if actual_s < floor_s:
+        raise RuntimeError(
+            f"ffmpeg {label} produced a short output: {actual_s:.3f}s against "
+            f"{expected_s:.3f}s requested ({size} bytes). ffmpeg exited 0 — this is "
+            f"the silent-truncation case (Issue 524), not a transient failure."
+        )
+
+
+def _probe_output_duration_s(path: Path) -> float | None:
+    """Duration of ``path`` in seconds, or ``None`` when it cannot be determined.
+
+    ``None`` rather than ``inf`` (the sibling source-probe's sentinel) so callers
+    cannot accidentally treat "unknown" as "fine" — see
+    :func:`_verify_rendered_output`.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return None
 
 
 def _detect_face_box(keyframe_path: Path) -> tuple[int, int, int, int] | None:
@@ -940,6 +1044,9 @@ def render_clip_file(
         # Clean up the per-frame reframe sendcmd temp file if it was written.
         if sendcmd_path is not None:
             sendcmd_path.unlink(missing_ok=True)
+    # Issue 524: prove the deliverable before claiming it. Until this, a truncated
+    # clip was uploaded, marked render_status=done and announced "Clip ready."
+    _verify_rendered_output(out_path, end_s - start_s, "render")
     logger.info(
         "Rendered clip %s→%s style=%s (%s)", source_path.name, out_path.name, style_preset, vf
     )
@@ -1133,6 +1240,10 @@ def render_cleaned_clip_file(
         )
     finally:
         script_path.unlink(missing_ok=True)
+    # Issue 524: the concatenated result must be about as long as the kept ranges
+    # sum to. This entry point announces "Clean ready." and had no guard at all,
+    # not even against a wholly empty exit-0 output.
+    _verify_rendered_output(out_path, sum(e - s for s, e in keep_ranges), "clean render")
     logger.info(
         "Cleaned clip %s→%s segments=%d",
         source_path.name,
@@ -1292,6 +1403,9 @@ def render_summary_file(
         )
     finally:
         script_path.unlink(missing_ok=True)
+    # Issue 524: same guard as the other two entry points — the stitched recap must
+    # be about as long as its segments sum to.
+    _verify_rendered_output(out_path, sum(e - s for s, e in segments), "summary render")
     logger.info(
         "Recap %s→%s segments=%d",
         source_path.name,
