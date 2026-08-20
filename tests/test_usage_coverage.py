@@ -103,6 +103,15 @@ _SWEEP_EXCLUDE_DIRS = {
     "docs",
     "node_modules",
     ".git",
+    # mutmut's sandbox (Issue 503): a gitignored COPY of the first-party tree,
+    # rewritten so every mutated function exists ~990 times over as
+    # `x_<name>__mutmut_N`. Sweeping it reports every one of those as an unbilled
+    # Anthropic call site, so the whole suite reds for anyone who has run
+    # `mutmut run` locally — which nobody could, until 503 made it work. Any
+    # repo-wide rglob sweep needs this exclusion; the sweeps in
+    # test_celery_routing.py and test_mutation_config.py get it for free by
+    # filtering on first-party package names instead.
+    "mutants",
 }
 
 # Shared transport helpers (worker/anthropic_stream.py). Calling one of these IS

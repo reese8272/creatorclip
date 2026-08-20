@@ -648,9 +648,16 @@ jobs:
 
   visual:
     # Issue 272: visual regression baselines on stable routes (login, pricing,
-    # empty-dashboard). GATING since 2026-07-29 (ready-pass W2) — baselines
-    # committed from the ubuntu-latest visual-baselines artifact (run
-    # 30482627526).
+    # empty-dashboard). Baselines committed from the ubuntu-latest
+    # visual-baselines artifact (run 30482627526).
+    #
+    # This job does NOT gate merges (corrected 2026-08-20, Issue 502). The comment
+    # here used to claim it had gated since 2026-07-29, but `Visual regression` has
+    # never been one of the 8 required contexts on `main` (docs/BRANCHING.md), so a
+    # regression here has never blocked anything. The claim is corrected rather than
+    # made true: adding a required context changes what can merge, which is an
+    # operator action, not a code one. Pinned by
+    # test_no_ci_job_claims_to_be_gating_without_being_required.
     # CRITICAL: Baselines must be generated on this ubuntu-latest runner —
     # local WSL2/macOS font anti-aliasing differs from Linux and causes false
     # positives. Regenerate: gh workflow run ci.yml -f update_snapshots=true,

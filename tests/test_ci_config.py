@@ -814,3 +814,239 @@ def test_apt_invocations_are_discoverable() -> None:
         f"expected 10+ apt invocations in ci.yml, found {len(apt_lines)}. If the "
         "install steps moved, fix this scanner — do not delete the assertion."
     )
+
+
+# ── No load-bearing CI step may swallow its exit code (Issue 502) ─────────────
+#
+# The mutation gate — the only mechanism measuring whether the tests ASSERT
+# rather than merely execute — was `mutmut run || true`. It reported success on
+# 8/8 weekly runs having never executed a single mutant.
+#
+# A blanket ban would be wrong and would be deleted the first time someone hit a
+# legitimate use, so the rule is narrower: a `|| true` that DISCARDS a verdict
+# needs a written reason. Two forms are exempt by construction:
+#
+#   1. Capture — `X=$(cmd || true)`. The failure is not swallowed, it is turned
+#      into an empty string that the next line inspects. Handling, not hiding.
+#   2. An allowlisted step, each carrying a reason below.
+
+_SWALLOWED_EXIT_ALLOWLIST: dict[tuple[str, str], str] = {
+    ("ci.yml", "--tb=no -q || true"): (
+        "The flake-detection job is non-gating by design and by name: it re-runs the "
+        "suite with --reruns 1 purely to surface tests that pass only on retry. A red "
+        "test there must not fail the job, or the flake report becomes a second gate. "
+        "RESIDUAL, logged not fixed: if pytest dies at COLLECTION the report file is "
+        "absent and the summary step prints 'No flake report found' and exits 0 — the "
+        "same empty-report-reads-as-clean shape as the mutmut defect this issue fixed."
+    ),
+    ("deploy.yml", "logs --tail 200 app worker || true"): (
+        "Diagnostic dump on the failure path. If log collection fails we still want "
+        "the real error from the step that actually failed, not this one."
+    ),
+    ("deploy.yml", "stop app worker || true"): (
+        "Best-effort teardown of the staging stack. Stopping an already-stopped "
+        "container is not a deploy failure."
+    ),
+    ("deploy.yml", 'docker pull "${PREV_IMAGE}" || true'): (
+        "Rollback path. Every step here is best-effort by necessity: we are already "
+        "in a failure, and a rollback that aborts halfway is worse than one that "
+        "pushes on. The health check after it is the real verdict."
+    ),
+    ("deploy.yml", 'docker tag "${PREV_IMAGE}" ghcr.io/reese8272/creatorclip:rollback || true'): (
+        "Rollback path — see the docker pull entry above. Tagging may fail if the "
+        "pull did; the subsequent health check is what decides the outcome."
+    ),
+    ("deploy.yml", "down --timeout 30 || true"): (
+        "Rollback path. Bringing down a stack that is already down must not abort "
+        "the rollback before it brings the previous image back up."
+    ),
+    ("deploy.yml", "IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml up -d || true"): (
+        "Rollback path. A failure here is caught by the post-rollback health check, "
+        "which reports the true state; aborting on this line would skip that check."
+    ),
+    ("staging-drills.yml", "logs --tail 150 app worker || true"): (
+        "Diagnostic dump on the failure path — same reasoning as deploy.yml's."
+    ),
+    ("staging-drills.yml", "stop app worker || true"): (
+        "Best-effort teardown of the staging stack — same reasoning as deploy.yml's."
+    ),
+}
+
+
+def _swallows_exit_code(line: str) -> bool:
+    """True if this line discards a command's verdict via `|| true`.
+
+    False for the capture form `X=$(cmd || true)`, including the multi-line
+    spelling where the closing paren lands on this line.
+    """
+    if "|| true" not in line or line.strip().startswith("#"):
+        return False
+    if "|| true)" in line:
+        return False
+    before = line[: line.index("|| true")]
+    return before.count("$(") <= before.count(")")
+
+
+def _bare_swallows() -> list[tuple[str, int, str]]:
+    out: list[tuple[str, int, str]] = []
+    for wf in sorted(_WORKFLOWS.glob("*.yml")):
+        for lineno, line in enumerate(wf.read_text().splitlines(), 1):
+            if _swallows_exit_code(line):
+                out.append((wf.name, lineno, line.strip()))
+    return out
+
+
+def test_no_load_bearing_step_swallows_its_exit_code() -> None:
+    """Every `|| true` outside a capture must be on the allowlist, with a reason.
+
+    `mutmut run || true` is why this exists: the run crashed during stats
+    collection and the workflow reported success on 8/8 weekly runs, having never
+    executed a mutant.
+    """
+    unexplained: list[str] = []
+    for name, lineno, line in _bare_swallows():
+        if not any(wf == name and needle in line for (wf, needle) in _SWALLOWED_EXIT_ALLOWLIST):
+            unexplained.append(f"{name}:{lineno}: {line}")
+
+    assert not unexplained, (
+        "CI step(s) discarding a command's exit code with no recorded reason:\n  "
+        + "\n  ".join(unexplained)
+        + "\n\nEither stop swallowing it, or add an entry to "
+        "_SWALLOWED_EXIT_ALLOWLIST explaining why the verdict does not matter. "
+        "'It was failing' is not a reason."
+    )
+
+
+def test_the_swallow_scan_finds_the_known_sites() -> None:
+    """Anti-vacuity: a scanner matching nothing would approve everything."""
+    found = _bare_swallows()
+    assert len(found) >= 9, (
+        f"the `|| true` scan found only {len(found)} site(s) — it has stopped "
+        "matching, and an empty scan passes the test above vacuously"
+    )
+
+
+def test_no_stale_swallowed_exit_allowlist_entry() -> None:
+    """The reverse arm: an allowlist entry no workflow line matches any more."""
+    lines = _bare_swallows()
+    stale = [
+        f"{wf}: {needle}"
+        for (wf, needle) in _SWALLOWED_EXIT_ALLOWLIST
+        if not any(name == wf and needle in line for name, _lineno, line in lines)
+    ]
+    assert not stale, (
+        f"allowlist entr(ies) matching no workflow line: {stale}. Remove them — a "
+        "stale entry pre-approves any future step that happens to match."
+    )
+
+
+def test_every_swallow_allowlist_entry_carries_a_reason() -> None:
+    """Membership is not a justification. Each entry must explain itself."""
+    for key, reason in _SWALLOWED_EXIT_ALLOWLIST.items():
+        assert len(reason.strip()) >= 60, f"{key}'s reason is too thin to be a decision"
+
+
+# ── The required-context list must name real jobs (Issue 502) ────────────────
+#
+# Nothing machine-checked this. `docs/BRANCHING.md` carries the 8 required
+# contexts TWICE — a bullet list and the restore-it-verbatim JSON — and both are
+# hand-maintained, so a job rename in ci.yml silently turns a required check into
+# a context that can never report. GitHub treats a never-reported required check
+# as pending, so the practical failure is a permanently unmergeable branch; the
+# quieter one is a context removed from protection while the docs still promise it.
+
+_BRANCHING_DOC = _REPO_ROOT / "docs" / "BRANCHING.md"
+
+# Contexts that are NOT ci.yml jobs, with the reason each is posted differently.
+_NON_JOB_CONTEXTS: dict[str, str] = {
+    "eval/clip-quality": (
+        "A commit status posted via the GitHub API, not a job name (Issue 265): a "
+        "SKIPPED required job reports 'success' to branch protection, so a path-"
+        "filtered eval gate had to become a status to report its real outcome."
+    ),
+}
+
+
+def _declared_required_contexts() -> list[str]:
+    """The contexts from BRANCHING.md's restore-it-verbatim protection JSON."""
+    import json
+
+    src = _BRANCHING_DOC.read_text()
+    start = src.index('"required_status_checks"')
+    block = src[src.index("{", src.rindex("<<'JSON'", 0, start)) :]
+    depth, end = 0, None
+    for i, ch in enumerate(block):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    assert end is not None, "could not find the protection JSON block in BRANCHING.md"
+    return json.loads(block[:end])["required_status_checks"]["contexts"]
+
+
+def test_every_required_context_names_a_real_ci_job() -> None:
+    """A required context that matches no job name can never report."""
+    workflow = yaml.safe_load(_load_workflow("ci.yml"))
+    job_names = {job.get("name") for job in workflow["jobs"].values()}
+
+    contexts = _declared_required_contexts()
+    assert len(contexts) >= 8, f"expected >=8 required contexts, parsed {contexts}"
+
+    orphans = [c for c in contexts if c not in job_names and c not in _NON_JOB_CONTEXTS]
+    assert not orphans, (
+        f"required status check(s) matching no ci.yml job name: {orphans}. A renamed "
+        f"job leaves the context permanently pending and the branch unmergeable. "
+        f"Known job names: {sorted(n for n in job_names if n)}"
+    )
+
+
+def test_the_two_copies_of_the_required_context_list_agree() -> None:
+    """BRANCHING.md states the contexts twice; drift between them is the whole risk."""
+    src = _BRANCHING_DOC.read_text()
+    # Each bullet leads with the context in backticks; trailing prose varies
+    # (`eval/clip-quality` carries "(commit status, not job) — Issue 265: ...").
+    bulleted = set(re.findall(r"^- `([^`]+)`", src, re.MULTILINE))
+    declared = set(_declared_required_contexts())
+
+    missing = declared - bulleted
+    assert not missing, (
+        f"context(s) in BRANCHING.md's protection JSON but absent from its bullet "
+        f"list: {sorted(missing)} — the two copies have drifted"
+    )
+
+
+def test_no_ci_job_claims_to_be_gating_without_being_required() -> None:
+    """A comment saying GATING over a job nothing requires is a false claim.
+
+    `Visual regression` carried "GATING since 2026-07-29" while sitting outside the
+    required-context set, so a regression there blocked nothing. Documented-but-
+    unenforced is the exact posture Lane L30 exists to retire.
+    """
+    src = _load_workflow("ci.yml")
+    workflow = yaml.safe_load(src)
+    required = set(_declared_required_contexts())
+
+    lines = src.splitlines()
+    offenders: list[str] = []
+    for key, job in workflow["jobs"].items():
+        name = job.get("name")
+        if not name or name in required:
+            continue
+        # The job's own comment block: lines between its key and its `name:`.
+        try:
+            start = next(i for i, ln in enumerate(lines) if ln.strip() == f"{key}:")
+            end = next(i for i in range(start, len(lines)) if lines[i].strip().startswith("name:"))
+        except StopIteration:  # pragma: no cover - malformed workflow fails elsewhere
+            continue
+        block = "\n".join(lines[start:end])
+        if re.search(r"\bGATING\b", block):
+            offenders.append(f"{key} ({name})")
+
+    assert not offenders, (
+        f"job(s) whose comment claims GATING but which are not required contexts: "
+        f"{offenders}. Either add the context to branch protection and to "
+        f"docs/BRANCHING.md, or delete the claim."
+    )
