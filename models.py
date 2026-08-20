@@ -1744,6 +1744,17 @@ class NotificationDelivery(Base):
     dedupe_key: Mapped[str] = mapped_column(sa.String(64), nullable=False, unique=True)
     # Resend message id returned on success (no PII — provider-side opaque id).
     provider_message_id: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    # Issue 525: WHICH backend handled this row. Without it, a row written while
+    # NOTIFY_BACKEND=console is indistinguishable from a real delivery — status is
+    # 'sent' either way, and _send_console only logs. Prod carried 17 such rows,
+    # every one claiming a delivery that never left the box.
+    #
+    # Nullable with no backfill, by decision: the pre-existing rows stay as the
+    # honest historical artifact of the console era. NULL here means "written
+    # before this column existed", which is exactly what it is. Re-sending them is
+    # deliberately NOT attempted — they are weeks old, and firing "your clips are
+    # ready" for a three-week-old video is worse than silence.
+    handled_by: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
     status: Mapped[NotificationDeliveryStatus] = mapped_column(
         sa.Enum(NotificationDeliveryStatus, name="notification_delivery_status_enum"),
         nullable=False,

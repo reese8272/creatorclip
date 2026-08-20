@@ -1217,6 +1217,29 @@ class Settings(BaseSettings):
                     "Set METRICS_TOKEN to enable authenticated scraping."
                 )
                 self.METRICS_ENABLED = False
+            # Issue 525: notifications in production must actually leave the box.
+            # NOTIFY_BACKEND defaults to "console", whose _send_console logs and
+            # returns None — yet the NotificationDelivery row is committed
+            # status=sent BEFORE the send, so a no-op is indistinguishable from a
+            # delivery. Measured on prod 2026-08-18: ENV=production,
+            # NOTIFY_BACKEND=console, 17 delivery rows, every one 'sent', not one
+            # of them delivered. The dedupe short-circuit only retries rows whose
+            # status is 'failed', so those rows are latched and can never be
+            # re-sent — which is why this stayed invisible.
+            #
+            # WARN, not raise, deliberately: the hard reject that STORAGE_BACKEND
+            # gets below is the right end state, but prod has no RESEND_API_KEY
+            # today, so raising here would fail the next deploy's boot. The reject
+            # is filed as its own issue, gated on Resend being provisioned.
+            if self.NOTIFY_BACKEND != "resend":
+                logging.getLogger(__name__).warning(
+                    "NOTIFY_BACKEND=%r in production — notifications are a NO-OP. "
+                    "Delivery rows will still be written status='sent', so the "
+                    "database will claim messages were delivered that never left "
+                    "the box. Set NOTIFY_BACKEND=resend (with RESEND_API_KEY and "
+                    "NOTIFY_FROM_EMAIL) to actually deliver.",
+                    self.NOTIFY_BACKEND,
+                )
             # LOCAL_MEDIA_DIR must be absolute in production WHEN it's actually
             # used (i.e. STORAGE_BACKEND=local). With STORAGE_BACKEND=r2 the
             # local-disk path is dead config, so we don't crash-loop prod over

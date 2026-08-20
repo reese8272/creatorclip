@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>No clips from this video</title>
+</head>
+<body style="font-family: sans-serif; color: #1a1a1a; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <h2 style="font-size: 20px; margin-bottom: 8px;">No clips from this video</h2>
+  <p>Hi {{ creator_name }},</p>
+  <p>
+    We processed &ldquo;{{ video_title }}&rdquo; and did not find any clips worth
+    recommending.
+  </p>
+  <p style="background: #f3f4f6; border-radius: 6px; padding: 12px 16px;">
+    <strong>Why:</strong> {{ skip_reason_label }}
+  </p>
+  <p>
+    That is a real result, not an error &mdash; we would rather send you nothing than
+    send you a clip your audience would not watch. Your minutes for this video are
+    unaffected.
+  </p>
+  <p style="margin: 24px 0;">
+    <a href="{{ dashboard_url }}"
+       style="background: #4f46e5; color: #fff; text-decoration: none;
+              padding: 12px 24px; border-radius: 6px; font-weight: 600;">
+      See your videos
+    </a>
+  </p>
+  <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;">
+  <p style="font-size: 12px; color: #999;">AutoClip &mdash; autoclip.studio</p>
+</body>
+</html>

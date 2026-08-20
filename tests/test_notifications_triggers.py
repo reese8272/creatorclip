@@ -132,6 +132,75 @@ class TestClipsReadyTrigger:
         assert "video_title" in payload
 
     @pytest.mark.asyncio
+    async def test_zero_clips_does_not_claim_clips_are_ready(self) -> None:
+        """Issue 525 — the same run with ZERO clips must not send clips_ready.
+
+        Sibling of the test above, differing in exactly one input: the persisted
+        clip list is empty. Before this, the identical `clips_ready` fired and the
+        template rendered "Your 0 clips ... are ready for review" with a CTA into
+        an empty queue. `clip_count` was already in the payload; nothing read it.
+        """
+        creator_uuid = _make_creator_uuid()
+        video_id = str(uuid.uuid4())
+
+        mock_video = MagicMock()
+        mock_video.creator_id = creator_uuid
+        mock_creator = MagicMock()
+        mock_creator.channel_title = "Test Channel"
+        mock_signals = MagicMock()
+        mock_signals.timeline_jsonb = {}
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(
+            side_effect=[mock_video, mock_creator, mock_signals, None, None]
+        )
+        mock_session.scalar = AsyncMock(return_value=None)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("db.AdminSessionLocal", return_value=mock_session),
+            patch("db.AsyncSessionLocal", return_value=mock_session),
+            patch("worker.progress.aemit", new_callable=AsyncMock),
+            patch(
+                "clip_engine.ranking.load_existing_clips",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "clip_engine.ranking.score_and_rank",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "clip_engine.ranking.persist_ranked_clips",
+                new_callable=AsyncMock,
+                return_value=[],  # ← the whole difference: zero clips persisted
+            ),
+            patch("dna.profile.get_active", new_callable=AsyncMock, return_value=None),
+            patch("dna.profile.get_style_notes", new_callable=AsyncMock, return_value=None),
+            patch("worker.tasks.send_notification") as mock_send_notif,
+            patch("worker.tasks.render_clip.delay"),
+        ):
+            from worker.tasks import _generate_clips_async
+
+            await _generate_clips_async(video_id, str(uuid.uuid4()))
+
+        mock_send_notif.delay.assert_called_once()
+        call_args = mock_send_notif.delay.call_args.args
+        assert call_args[1] == "no_clips_found", (
+            f"a zero-clip video enqueued {call_args[1]!r} — sending clips_ready here "
+            "is what emailed 'Your 0 clips are ready for review' (Issue 525)"
+        )
+        payload = call_args[3]
+        assert payload["skip_reason"], "the creator must be told WHY there were no clips"
+        assert payload["skip_reason_label"]
+        assert "clip_count" not in payload, (
+            "the zero-case payload has no count to report — carrying one invites the "
+            "'0 clips' phrasing back"
+        )
+
+    @pytest.mark.asyncio
     async def test_clips_ready_not_enqueued_on_error(self) -> None:
         """If clip generation raises, no clips_ready notification is enqueued."""
         video_id = str(uuid.uuid4())
