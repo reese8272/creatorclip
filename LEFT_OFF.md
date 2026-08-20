@@ -1,7 +1,7 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-20 · **Branch:** `chore/closure-integrity-audit` @ `86e287e` ·
-**Working tree:** ✅ **CLEAN**, **1 commit ahead of `origin/main`, 0 behind.**
+**Last updated:** 2026-08-20 · **Branch:** `chore/closure-integrity-audit` @ `5e2c495` ·
+**Working tree:** ✅ **CLEAN**, **2 commits ahead of `origin/main`, 0 behind.**
 
 > ⚠️ **YOU ARE NOT ON `main`.** One PR is open and green: **#128** (the closure-integrity audit —
 > docs only). Merging it is the first action below. `main` is at `fd8126e`, which is what production
@@ -60,85 +60,63 @@ one loose end from this work.
 
 ## CURRENT FOCUS
 
-**Every closure since the 2026-08-17 report has been independently verified (PR #128); the critical
-path is now two owner-only actions — arm backups, and make notifications actually deliver.**
+> 🚦 **SCOPE DECISION, 2026-08-20 — CODE ONLY. The operator track is PARKED.**
+> The owner has deferred every owner-only action until the L30 code queue is finished. **Do not
+> propose operator work as "the next action", and do not re-raise it each session** — it is recorded
+> in `docs/DECISIONS.md` (2026-08-20) with the accepted risk written down. Parked: Issues 255,
+> 256/257/258, 288, 286, 246, **529**, 29, 28, plus rating clips and driving an upload.
+>
+> **Two consequences you will otherwise rediscover the hard way:**
+> **(a) Issue 528 is parked by transitivity** — it is gated on 529, and landing it without Resend
+> provisioned would fail the next deploy's boot. It is a code issue this decision nonetheless blocks.
+> **(b) "Code complete" will still leave four fixes unproven in production** (520's active path,
+> 522's fallback, 524's render guard, 525's delivery). Each needs a live trigger only the owner can
+> pull. That is known and accepted, not an oversight.
 
-**Durability is still the top of that path.** The owner's chosen order was
-**backups → personalization → the Week-1 conversions**; the second and third have shipped, so
-backups stand alone at the front with nothing ahead of them and no code excuse to defer behind.
+**The single active goal: work Lane L30's remaining code queue to empty.**
 
-The 2026-08-17 audit itself was read-only. Everything it found that jumped the queue is now fixed,
-merged, deployed and live-verified on the running container: **Issue 521** (the gate that certified
-the wrong property), **Issue 520** (personalization was a measured no-op across its whole ramp while
-the API reported it active), **Issue 499** (Layer-0 gates scoring work they never did), **Issue 500**
-(`--require`) and **Issue 522** (a Redis blip was a total sign-in outage).
+Everything the 2026-08-17 audit found that jumped the queue is fixed, merged, deployed, and — as of
+PR #128 — **independently verified**: Issues 521, 520, 499, 500, 522, 524, 525 and 498 (items 1–3, 6).
+Read `docs/assessment/CLOSURE_INTEGRITY_2026-08-19.md` before re-checking any of them.
 
-Lane L30's remaining process track is **Batch C** (505–507) and **Batch B's tail** (501–504); Batch G
-still holds four product defects (523–525) and Batch H two dead-output items.
+**The remaining code queue**, cheapest-first within each batch:
+
+| Batch | Issues | Note |
+|---|---|---|
+| **C** — scan, don't list | **505, 506, 507** | **Recommended next.** 505: 2 of 29 tenant tables have no RLS policy (defence-in-depth gap, not an open door — every query filters explicitly). 506: the LLM-route literal lists 9 against ~15 live; two chat routes have a daily cap and no burst limit. |
+| **B** tail | 501, 502, 503, 504 | 503 is the standout: a weekly mutation gate that has never executed a single mutant across 8 green runs. |
+| **G** remainder | 523 | Stripe async-payment: take-money-grant-nothing, latent behind a Dashboard toggle. |
+| **H** | 526, 527 | Dead output — the GDPR export has no UI while the Privacy Policy says it does. |
+| **D / E / F** | 508–510 / 511–515 / 516–519 | Docs-as-schema, production truthfulness, process artifacts. |
+| *also open* | 498 items 4–5, 445, 484, 495 | 484 is the highest-impact known clip-quality defect (a clip opening on a clause that inverts the speaker's meaning). |
+
+**Blocked and not workable under this decision:** 528 (needs 529).
 
 ### → NEXT ACTION
 
-0. **Merge PR #128 first** — it is open, green (13/13) and `CLEAN`, and it is the only thing keeping
-   this checkout off `main`:
+1. **Merge PR #128** — open, green (13/13), `CLEAN`, and the only thing keeping this checkout off
+   `main`:
    `gh pr merge 128 --repo reese8272/creatorclip --rebase --delete-branch`
    then `git checkout main && git pull --ff-only origin main`.
-   Docs-only, but **merging to `main` deploys**, and `docker-publish.yml` has no `paths-ignore`, so a
-   docs merge still rebuilds and redeploys (gotcha 8). Harmless; just expected.
-1. **Arm backups — operator track §A, starting with Issue 255 (secrets escrow).** Now the **#1 item
-   with nothing ahead of it**, and the only thing on the critical path that nobody but the owner can
-   do. It has a recorded definition of done: `docs/DECISIONS.md` 2026-08-17 commits to **RPO 24 h /
-   RTO 4 h with a quarterly drill**. Losing the droplet today means **total loss** of the billing
-   ledgers, `preference_models` (the trained taste — irreplaceable, it *is* the product),
-   `creator_dna`, `clip_outcomes` and the consent records. R2 media survives; the database that
-   indexes it does not. ✅ The missing **`BACKUP_HEALTHCHECK_URL`** key (the dead-man's switch, read
-   by `scripts/backup_pg.sh` + `scripts/backup_redis.sh`) is now in `.env.example` — set it when you
-   arm the cron, or a cron that stops firing is invisible.
-2. ~~**Issue 521, then Issue 520.**~~ ✅ **BOTH DONE 2026-08-17** (PRs #120, #121 — merged, deployed,
-   live-verified). The rerank eval now covers eight creator shapes instead of the one knife-edge it
-   could pass; the LightGBM switchover is a separately measured constant (`PREFERENCE_LGBM_MIN_LABELS
-   = 60`, floor 41, validated at boot); and `effective_weight()` is the single producer of the blend
-   weight, so `active` cannot claim personalization the reranker did not apply. Details in
-   `docs/DECISIONS.md` and `docs/issues.md` §520/§521.
-   ⚠️ **Expect one warn-only NDCG-ratchet event per affected creator** on their first retrain after
-   this deploy — the served model genuinely changes shape. That is the ratchet working; do not chase
-   it as a regression.
-3. **Issue 498 — items 4 and 5 remain** (items 1–3 and 6 are done; PR #119). Deliberately deferred,
-   not forgotten: **item 4** (`ci_local.sh` seed echo + the `failed: 0` vs `LOCAL CI FAILED`
-   contradiction) needs the two numbers *reconciled* rather than patched — a diagnosis, not a
-   one-liner. **Item 5** (promoting `Migration lint (Squawk)` + `Visual regression` to required)
-   mutates branch protection and wants its own change with a readback.
-4. ⚠️ **NEW AND UNRESOLVED — notifications have never worked in production.** Found while building
-   Issue 525 by reading the live container: `ENV=production`, `NOTIFY_BACKEND=console`, no Resend
-   key, and **17 `notification_deliveries` rows every one of which says `status='sent'` — none
-   delivered.** No creator has ever received an email from this product, and the dedupe
-   short-circuit only retries `failed` rows, so those 17 are permanently latched. Issue 525 made the
-   failure *visible* (startup warning + `handled_by` on new rows); it cannot make anything deliver.
-   **That is Issue 529 — operator-only, ~30 min, and it blocks #28**: a friend who uploads today gets
-   no email while the database claims one was sent. `docs/GO_LIVE.md` carries it as an OPEN Stage-A
-   row. **Issue 528** (hard-reject the bad backend at boot) is gated on 529 and must not land first.
-5. ~~**Issues 499, 500, 522, 524 and 525**~~ ✅ **ALL DONE 2026-08-18.** Layer-0 gates verify their tool ran and
-   every invocation now carries `--require`; a Redis blip is no longer a total sign-in outage.
-   See gotchas 13 and 15 for the facts worth carrying forward from each.
-   **The recommended next CODE work is Batch C** ("scan, don't list", Issues 505–507). Independently
-   confirmed this session: exactly **2 of 29 tenant tables** (`creator_api_keys`, `creator_identity`)
-   are named in no RLS migration — every current query filters by `creator_id` explicitly, so it is a
-   missing defence-in-depth layer, not an open door. And **506**'s `_LLM_ROUTES` literal lists 9
-   routes against ~15 live, with the two chat routes carrying a daily cap and no burst limit.
-   Batch B's remainder (**501–504**) is the cheaper alternative: 503 in particular is a weekly
-   mutation gate that has never executed a single mutant across 8 green runs.
-   Batch G still holds **523** (Stripe async-payment: take-money-grant-nothing, latent behind a
-   Dashboard toggle).
+   Docs-only, but **merging to `main` deploys** and `docker-publish.yml` has no `paths-ignore`, so it
+   still rebuilds and redeploys (gotcha 8). Expected, not a problem.
 
-**Then** resume the beta track: **#29 (Google OAuth verification)** is still the only item with a
-clock you cannot compress (1–4 weeks external review) — read the scope warning in §D before
-submitting — and **Issue 445** (three-pile triage UI) still needs a real CHECK phase; re-read
-`docs/issues.md` Lane L27 first, four design questions are open and the AC numbering has drifted.
+2. **Start Lane L30 Batch C — Issue 505 first.** Run the project's issue workflow (CHECK → APPROVE →
+   BUILD → REVIEW). 505 is `M (~2 h)`: derive the RLS sweep from `pg_policies` at runtime instead of
+   two hand-written tuples, and resolve the two tenant tables that carry `creator_id` with no policy
+   and no recorded exemption. **Already confirmed independently, do not re-derive:** exactly **2 of
+   29** tenant tables (`creator_api_keys`, `creator_identity`) appear in no RLS migration, and every
+   current query filters by `creator_id` explicitly — so this is a missing defence-in-depth layer,
+   **not** an open door. It needs the integration lane, which runs in CI only.
 
-**One loose end from the 520 work:** the personalization-*active* path has never been exercised on
-prod, because the owner has 10 labels and it needs ≥21. If you rate ~12 more clips, that closes the
-last unverified claim in this fix — and it is also the cheapest way to see the new behaviour live.
+3. **Then 506, then 507** — same batch. 506's fix includes four LLM route decorators missing a burst
+   or daily cap (Celery-flood risk, not a spend hole: all four carry `Depends(require_budget)`).
 
-*Nothing is blocked. §B lists deferred code items if you want a quick win instead.*
+4. **Then pick from the queue table above.** If you want product impact over process hygiene, jump to
+   **484** (clips opening on a clause that inverts the speaker's meaning) or **523** (Stripe
+   take-money-grant-nothing) instead of finishing Batch B.
+
+**Do NOT do:** anything on the parked operator list, or Issue 528. See the scope decision above.
 
 ### → BEFORE YOU START: read these, in this order
 
@@ -338,7 +316,16 @@ Full detail: `docs/issues.md` §489–496, `docs/DECISIONS.md`, `docs/PROJECT_ST
 GREEN "ToS + Privacy Policy live, linked, and accurate" row (`GO_LIVE.md:46`) — arguably that row was
 not fully accurate before, since two pages carried a retired brand name.
 
-### A. Operator track — the real critical path (nobody but the owner can do these)
+### A. Operator track — ⏸️ **PARKED 2026-08-20 until the code queue is empty**
+
+> Deferred by owner decision (`docs/DECISIONS.md`, 2026-08-20). Everything in this section is real and
+> still required for the beta — it is **sequenced after** the code track, not cancelled. Do not pull
+> items from here into a session's next-action list.
+>
+> **The one item whose cost grows while parked:** backups. Nothing is backed up today, and the
+> 2026-08-19 deploy logged *"Migrating WITHOUT a safety dump"*. Losing the droplet during the code
+> track is permanent loss of `preference_models` — the trained taste, which is the product. Every
+> other row here merely waits. This is recorded as accepted risk; it does not need re-raising.
 
 Ordered by consequence, per `docs/runbooks/255-258-dr-durability.md`:
 

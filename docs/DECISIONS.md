@@ -5,7 +5,48 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-18 (latest) — Verifying an output fails CLOSED; a non-delivering notify backend warns, for now (Issues 524, 525)
+## 2026-08-20 (latest) — The operator track is parked until the code track is complete
+
+**Decision (owner, 2026-08-20).** All owner-only/operator work is deferred until the L30 code queue
+is finished. Nothing on the operator list gets picked up in the meantime, and no session should
+propose it as "the next action". This **reverses** the standing order recorded since 2026-08-17,
+where Issue 255 (secrets escrow) was the #1 critical-path item with nothing ahead of it.
+
+**What is parked:** Issue 255 (secrets escrow) · Issues 256/257/258 (backups, restore drill, Object
+Lock) · Issue 288 (Redis durability) · Issue 286 (Cloudflare edge rate limit) · Issue 246
+(`MAILING_ADDRESS`) · **Issue 529** (provision Resend) · Issue 29 (Google OAuth verification) ·
+Issue 28 (the friend smoke) · rating clips · driving an upload.
+
+**Two consequences, stated so they are not discovered later.**
+
+1. **Issue 528 is parked by transitivity.** It hard-rejects a non-delivering `NOTIFY_BACKEND` at
+   boot and is gated on 529 being done first. With 529 parked, 528 cannot land — attempting it would
+   fail the next deploy's boot. It is a code issue that this decision nonetheless blocks.
+2. **Four verified-in-code fixes stay unproven in production.** 520's personalization-active path,
+   522's in-memory limiter fallback, 524's render guard, and 525's delivery each need a live trigger
+   only the owner can pull. "Code complete" will therefore still mean "four fixes correct by test and
+   readback, never exercised by a real event". That is a known, accepted gap — see
+   `docs/assessment/CLOSURE_INTEGRITY_2026-08-19.md`.
+
+**Accepted risk, recorded once rather than re-raised each session.** Backups are the only parked item
+that is **irreversible if it fires**. There are no database backups today, and the 2026-08-19 deploy
+logged *"Migrating WITHOUT a safety dump"*. Losing the droplet during the code track means permanent
+loss of the billing ledgers, `preference_models` (the trained taste — it *is* the product),
+`creator_dna`, `clip_outcomes` and the consent records. R2 media survives; the database that indexes
+it does not. Every other parked item merely waits. The owner has weighed this and chosen focus; the
+risk grows with the length of the code track and with nothing else.
+
+**Why this is a reasonable trade despite the above.** Context-switching between code and dashboard
+work has repeatedly cost this project half-finished threads, and the operator items are a contiguous
+block that is cheaper to do in one sitting than piecemeal. The decision is about sequencing, not
+about whether the work matters.
+
+**Revisit when:** the L30 code queue is empty, or the risk profile changes (real users onboarded, or
+a near-miss on the VM).
+
+---
+
+## 2026-08-18 — Verifying an output fails CLOSED; a non-delivering notify backend warns, for now (Issues 524, 525)
 
 **Decision 1 — output verification fails closed, and does not reuse the source-probe helper.**
 `clip_engine/render.py` now has two ffprobe wrappers with deliberately opposite postures:
