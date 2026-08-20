@@ -1,21 +1,27 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-18 · **Branch:** `main` @ `28e591c` · **Working tree:** ✅ **CLEAN**, in
-sync with `origin/main` (0 ahead / 0 behind). All 13 CI checks green on the last merge.
+**Last updated:** 2026-08-20 · **Branch:** `chore/closure-integrity-audit` @ `86e287e` ·
+**Working tree:** ✅ **CLEAN**, **1 commit ahead of `origin/main`, 0 behind.**
 
-**Four PRs shipped 2026-08-17:** **#119** (the audit itself + Issue 498 items 1–3), **#120**
-(Issue 521 — the lying gate), **#121** (Issue 520 — the personalization SEV1), **#122** (handoff).
+> ⚠️ **YOU ARE NOT ON `main`.** One PR is open and green: **#128** (the closure-integrity audit —
+> docs only). Merging it is the first action below. `main` is at `fd8126e`, which is what production
+> is running.
 
-**Two more shipped 2026-08-18, both merged, deployed and live-verified:** **#124** (Issue 499 —
-Layer-0 gates that scored work they never did; + the tracker-number drift) and **#125** (Issue 522 —
-a Redis blip was a total sign-in outage; + Issue 500 `--require`; + every CI apt call bounded).
-History on `main` is linear.
+**Shipped 2026-08-17:** **#119** (the audit itself + Issue 498 items 1–3), **#120** (Issue 521 — the
+lying gate), **#121** (Issue 520 — the personalization SEV1), **#122** (handoff).
+
+**Shipped 2026-08-18:** **#124** (Issue 499 — Layer-0 gates that scored work they never did; + the
+tracker-number drift), **#125** (Issue 522 — a Redis blip was a total sign-in outage; + Issue 500
+`--require`; + every CI apt call bounded), **#126** (close-out).
+
+**Shipped 2026-08-19:** **#127** (Issue 524 — the render never verified its own output; Issue 525 —
+"Your 0 clips are ready"). All merged, deployed and live-verified. History on `main` is linear.
 
 **Suite at handoff:** `.venv/bin/python -m pytest -q` → **3259 passed, 64 skipped, 0 xfailed**
-(3170 before the 2026-08-17 work; 3199 → 3212 → 3225 → 3229 → 3259 across the 2026-08-18 PRs).
+(3170 before the 2026-08-17 work; 3199 → 3212 → 3225 → 3229 → 3259 across the 08-18/08-19 PRs).
 
 **Prod:** `https://autoclip.studio`. **Running commit VERIFIED** — the container's image revision
-label reads `28e591ca4ddea6eb49ee3b18c7368a12a859db02`, and `/health` returns 200 over the public
+label reads `fd8126ec09257ba3a5f185ae42c6e0bb4933004b`, and `/health` returns 200 over the public
 URL with all containers healthy. Re-confirm the same way after any deploy:
 `docker inspect autoclip-app-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
 *(Note: `curl localhost:8000/health` from inside the VM returns `000` — the app is behind
@@ -54,7 +60,10 @@ one loose end from this work.
 
 ## CURRENT FOCUS
 
-**Durability is now the only thing left on the critical path.** The owner's chosen order was
+**Every closure since the 2026-08-17 report has been independently verified (PR #128); the critical
+path is now two owner-only actions — arm backups, and make notifications actually deliver.**
+
+**Durability is still the top of that path.** The owner's chosen order was
 **backups → personalization → the Week-1 conversions**; the second and third have shipped, so
 backups stand alone at the front with nothing ahead of them and no code excuse to defer behind.
 
@@ -69,6 +78,12 @@ still holds four product defects (523–525) and Batch H two dead-output items.
 
 ### → NEXT ACTION
 
+0. **Merge PR #128 first** — it is open, green (13/13) and `CLEAN`, and it is the only thing keeping
+   this checkout off `main`:
+   `gh pr merge 128 --repo reese8272/creatorclip --rebase --delete-branch`
+   then `git checkout main && git pull --ff-only origin main`.
+   Docs-only, but **merging to `main` deploys**, and `docker-publish.yml` has no `paths-ignore`, so a
+   docs merge still rebuilds and redeploys (gotcha 8). Harmless; just expected.
 1. **Arm backups — operator track §A, starting with Issue 255 (secrets escrow).** Now the **#1 item
    with nothing ahead of it**, and the only thing on the critical path that nobody but the owner can
    do. It has a recorded definition of done: `docs/DECISIONS.md` 2026-08-17 commits to **RPO 24 h /
@@ -161,6 +176,7 @@ commits, and none of it is re-derivable cheaply.
 
 | Artifact | What it holds |
 |---|---|
+| `docs/assessment/CLOSURE_INTEGRITY_2026-08-19.md` | **Independent verification of all 10 closures since the audit** — four layers each (ledger / code / non-vacuity / live). Read this BEFORE re-verifying any of 498, 499, 500, 520, 521, 522, 524, 525. |
 | `docs/assessment/DEEP_AUDIT_2026-08-17/` | The full read-only audit — 56 agents, three phases, **12,546 lines across 30 files**. `REPORT.md` first, then `SYNTHESIS_process.md`. This is the corpus Lane L30 was filed from. |
 | `docs/DECISIONS.md` (2026-08-17 entries) | **Eight** entries carry this date. Six are the audit's own approved decisions; **two were written on 2026-08-17 evening** — the strict-xfail rule and the two-numbers preference split. Each carries its measurements and its rejected alternatives. |
 | `docs/issues.md` §498/§520/§521 | Per-issue build notes: what was done, what departed from the filed plan, and the verification evidence. |
@@ -224,6 +240,30 @@ Issue-521 defect in two numbers.
 ---
 
 ## WHAT WORKS NOW (verified — do not re-investigate)
+
+### Every closure since the audit has been independently verified (2026-08-19, PR #128)
+
+`docs/assessment/CLOSURE_INTEGRITY_2026-08-19.md` audits all ten closures in `a57749f..fd8126e`
+against four layers: ledger, code, **non-vacuity** (revert the fix, does a named test go red), and
+live production readback. **Verdict: 10 of 10 real.** Do not re-verify these — read the report.
+
+Three results worth carrying:
+
+1. **No gate was loosened to make a fix pass.** `baselines.json` has **zero commits** touching it in
+   the range; `SCENARIO_FLOOR` unchanged; no coverage floor moved. This was the likeliest place for a
+   silent integrity failure and it is clean.
+2. **Issue 520's measurement reproduces exactly.** Re-run independently at 40 trials per label count
+   on a fresh seed: degenerate 40/40 at *every* n in 20–39, **first clean n = 41** — the recorded
+   floor. The boot validator refuses 20 and 40, boots at 41 and 60. (The build note's "17/40
+   degenerate at n=40" measured 11/40 here — different seed, same conclusion, left uncorrected.)
+3. **All seven testable mechanisms are non-vacuous** — each was surgically reverted and a specific
+   named test went red. The test names are in the report's summary table.
+
+**Four tails remain, none of them defects.** They need a trigger, not a fix: 520's
+personalization-*active* path (owner has **11** labels, needs 21), 522's in-memory fallback (needs a
+real Redis outage), 524's render guard (**0 renders** since deploy), 525's delivery (Issue 529).
+**One upload would collapse three of the four** — it exercises the render guard, produces a
+notification, and adds clips to rate.
 
 ### The personalization loop is honest now (2026-08-17, PRs #120 + #121)
 
@@ -391,6 +431,25 @@ gate. Warn the friend about two expected things so they don't read as breakage:
    process — and it is why the fix ends in a boot-time validator rather than a comment.
    Batched alongside: three Issue-498 conversions, each turning a rule someone had to *remember*
    into a mechanism that cannot be forgotten.
+7. **2026-08-18 — the gate track, then the outage nobody had noticed.** Issue 499 first, because a
+   session that cannot trust its own gate re-runs mypy by hand; then Issue 500 on top of it. The
+   tracker's next-free-issue number had drifted the day after being made the sole authority — fixed
+   by deriving it. Then **Issue 522**, which turned out to be the day's real finding: the limiter
+   passed neither fallback kwarg, so a Redis blip was a **total sign-in outage** that `/health`
+   reported as 200. Fixing it surfaced a latent event-loop defect that fail-open had been hiding for
+   months, and CI caught the half of that fix a local green run could not.
+8. **2026-08-19 — two defects where the product claimed success it had not earned.** Issue 524: the
+   render shipped a silently truncated clip and announced "Clip ready." Issue 525: a zero-clip video
+   was told its 0 clips were ready. Building 525 meant reading the live container rather than the
+   repo, which produced the worst finding of the week — **notifications have never worked in
+   production**: 17 delivery rows saying `sent`, none delivered, no creator ever emailed.
+9. **2026-08-19 (late) — the owner asked whether any of it was actually done.** Ten closures had
+   landed since the audit; the obvious question was whether they were closed or only said so. The
+   answer, verified four ways per closure: **all ten real, no gate loosened, Issue 520's measurement
+   reproduces exactly.** The audit found one bookkeeping error of its own author's making and one
+   near-miss (an RLS-filtered empty result that read as an empty table). That check is now
+   `docs/assessment/CLOSURE_INTEGRITY_2026-08-19.md`, and it is why the next session should read
+   rather than re-derive.
 
 ---
 
@@ -404,7 +463,7 @@ gate. Warn the friend about two expected things so they don't read as breakage:
 | Containers | `autoclip-app-1`, `autoclip-worker-1`, `autoclip-render-worker-1`, `autoclip-beat-1`, `autoclip-postgres-1`, `autoclip-redis-1`, `autoclip-cloudflared-1` |
 | Prod DB | `docker exec autoclip-postgres-1 psql -U creatorclip -d creatorclip` |
 | Owner creator id | `eb9af967-5d2f-4063-a05e-9f4f070ce840` ("Backboard Media", channel `UCNU5Tnt0xp7YtHNPgxDrSIw`) |
-| Deployed commit | `28e591c` (confirmed 2026-08-18 from the container's image revision label; `/health` 200 over the public URL) |
+| Deployed commit | `fd8126e` (confirmed 2026-08-19 from the container's image revision label; `/health` 200 over the public URL). **Note `main` may be ahead once PR #128 merges — re-confirm after any deploy.** |
 | Health check | Use `https://autoclip.studio/health`. `curl localhost:8000/health` **on the VM returns `000`** — the app sits behind cloudflared. Not an outage. |
 | Image | `ghcr.io/reese8272/creatorclip:latest` (deploys resolve `sha-<7char>` for the staging gate) |
 | Branch model | **trunk-based**: `feature/* → PR → main`. No `staging` branch. Rebase/squash only. |
@@ -508,7 +567,12 @@ gate. Warn the friend about two expected things so they don't read as breakage:
     verification — and **say so plainly** rather than implying you ran it. To confirm a *new*
     integration test actually executed rather than silently skipping, diff the `N passed` count
     against the previous run's (on 2026-08-17: 190 → 191). The lane runs `-q`, so names aren't printed.
-18. **CI jobs occasionally hang in `Install system deps` (apt), not in your code.** Seen 2026-08-17:
+18. ✅ **RESOLVED 2026-08-18 — apt hangs are now bounded.** All 14 apt invocations in `ci.yml`
+    carry `timeout 300`, pinned by `test_every_apt_invocation_is_time_bounded`, so a stalled mirror
+    fails fast into the existing warning path instead of hanging to the 6-hour job timeout. It had
+    recurred three times with only a manual cancel-and-rerun as mitigation, and it blocked a merge
+    the day it was fixed (`Integration tests` is a required context with no admin bypass).
+    *Historical, for context:* Seen 2026-08-17:
     the coverage job sat ~35 min on an apt step that normally takes seconds, while the identical job
     had passed in 3m15s minutes earlier on the same branch. Cancel the run and
     `gh run rerun <id> --failed`. Check the job's *step* states before assuming your change broke it.
@@ -518,6 +582,19 @@ gate. Warn the friend about two expected things so they don't read as breakage:
     a green local run is not self-evidently trustworthy. Reconciling the two numbers is Issue 498
     item 4, still open.
 
+20. **An empty psql result is NOT an empty table — RLS is `FORCE`d on tenant tables.** Querying
+    `preference_models` on the prod box as `creatorclip` returned **zero rows**, which reads as "no
+    trained model exists". The table has **5**. RLS is `ENABLE`d *and* `FORCE`d and the query ran
+    without `app.creator_id` set, so the policy correctly returned nothing. This nearly became a
+    false finding in the 2026-08-19 closure audit. When reading a tenant table by hand, either set
+    the GUC or query through `db.tenant_session` — and treat an empty result as "unproven", never as
+    "empty". (Incidentally the cleanest live confirmation that tenant isolation works.)
+
+21. **`git add -A` at commit time will silently merge two issues into one commit.** Happened twice in
+    one day — the 522 commit swallowed the 500 work, the 524 commit swallowed 525 — and both needed
+    `git reset --soft HEAD~1` and a re-split. If a change covers two issues, stage explicitly by
+    path. The commit messages are the durable record of *why*; one commit describing two unrelated
+    fixes destroys that.
 ---
 
 ## POINTERS
