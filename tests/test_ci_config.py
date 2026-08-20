@@ -20,6 +20,7 @@ call an external email provider (Issue 242).
 """
 
 import pathlib
+import re
 
 import pytest
 import yaml
@@ -493,7 +494,14 @@ def test_nightly_runs_transcription_live_leg() -> None:
     (Issue 481) — the marker + addopts exclusion alone would leave the live
     ASR test executing NOWHERE, the exact silent-empty-lane failure mode of
     Issue 478. Pins the file path, the marker, the gate env var, and the
-    real secret."""
+    real secret.
+
+    BOUNDARY (Issue 504): this pins WIRING, not EXECUTION. Every assertion here
+    is a YAML string literal, and a workflow whose secret expands to "" satisfies
+    all of them while skipping every test. Execution is asserted by
+    ``test_every_live_lane_asserts_a_minimum_executed_count`` below; neither test
+    is sufficient alone.
+    """
     nightly = _load_workflow("llm-e2e-nightly.yml")
     assert "tests/ingestion/test_transcription_live.py" in nightly, (
         "llm-e2e-nightly.yml must run the transcription_live test file"
@@ -533,6 +541,64 @@ def test_llm_nightly_runs_scoring_behavioral_lane() -> None:
     assert "Scoring behavioral lane" in src, (
         "llm-e2e-nightly.yml's step summary must include the '## Scoring "
         "behavioral lane' section so the nightly posts the Issue-476 margins."
+    )
+
+
+# ── The live lanes must prove they EXECUTED, not merely exit 0 (Issue 504) ────
+
+
+def test_nightly_fails_loudly_on_an_empty_api_key_secret() -> None:
+    """`${{ secrets.X }}` expands to "" when the secret is unset/renamed/blanked.
+
+    Both live lanes gate on bool(KEY), so an empty secret skips every test,
+    pytest exits 0, and the nightly goes green having made zero live calls —
+    while docs/GO_LIVE.md cites it as proof the external APIs are live. A
+    preflight `test -n` turns that into a loud, early failure.
+    """
+    src = _load_workflow("llm-e2e-nightly.yml")
+    for key in ("ANTHROPIC_API_KEY", "DEEPGRAM_API_KEY"):
+        assert f'[ -n "${key}" ]' in src, (
+            f"llm-e2e-nightly.yml must assert {key} is non-empty before running "
+            "the live lanes — an empty secret is a silently green nightly"
+        )
+
+
+def test_every_live_lane_asserts_a_minimum_executed_count() -> None:
+    """Every pytest invocation in the nightly must be paired with the guard.
+
+    Derived, not listed (the house rule): the lanes are DISCOVERED by scanning
+    the workflow for `python -m pytest`, so adding a third live lane without an
+    executed-count guard fails here instead of shipping a third way to report
+    green over zero live calls.
+
+    A collect-only count would NOT do: skipif is evaluated after collection, so
+    a fully-skipped lane still reports its full collected count. Only the JUnit
+    report separates "ran and passed" from "skipped and exited 0".
+    """
+    src = _load_workflow("llm-e2e-nightly.yml")
+
+    lanes = src.count("python -m pytest")
+    assert lanes >= 2, (
+        f"expected at least the LLM and ASR live lanes, found {lanes} pytest "
+        "invocations — did a lane get renamed or dropped?"
+    )
+
+    guarded = src.count("scripts/assert_tests_executed.py")
+    assert guarded == lanes, (
+        f"{lanes} pytest lane(s) but {guarded} executed-count guard(s) — every "
+        "live lane must assert what it EXECUTED, not just its exit code"
+    )
+
+    junit = src.count("--junitxml=")
+    assert junit == lanes, (
+        f"{lanes} pytest lane(s) but {junit} --junitxml flag(s) — the guard reads "
+        "the JUnit report, so a lane without one cannot be checked"
+    )
+
+    floors = re.findall(r"scripts/assert_tests_executed\.py\s+\S+\s+(\d+)", src)
+    assert len(floors) == lanes, "every guard invocation must pass an explicit floor"
+    assert all(int(f) >= 1 for f in floors), (
+        f"a floor of 0 asserts nothing — floors found: {floors}"
     )
 
 

@@ -4,7 +4,37 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-18 (latest) — Issues 524 + 525: the pipeline stops claiming success it did not earn
+## 2026-08-20 (latest) — Issues 501 + 504: two gates that could pass without doing work
+
+Lane L30 Batch B, first half. Both are the same defect at different altitudes: a gate reporting
+green over work it never performed.
+
+**501 — the per-module coverage gate failed OPEN.** When `_module_line_rate` could not resolve a
+floored module the loop `continue`d, `_failures` stayed empty, the gate evaluated `ok`, and
+`--require` accepted it. Now an unresolvable module is a failure: a floor with no evidence is not a
+passing floor. Its "anti-hollowing" test never parsed a coverage report at all despite its name — it
+now runs against `tests/fixtures/coverage_report_real_shape.xml`, a **real** trimmed pytest-cov
+document, because a hand-built element tree shares the resolver's blind spot and Issue 368's defect
+lived exactly in that gap.
+
+**504 — the nightly live-LLM/ASR lanes reported green with zero tests executed.** Both gate on
+`bool(API_KEY)`, and `${{ secrets.X }}` expands to `""` when a secret is unset, renamed or blanked →
+every test skips → pytest exits 0 → green, while `docs/GO_LIVE.md` cited the nightly as proof the
+external APIs were live. Reproduced on the real command line: `9 skipped`, **exit 0**.
+
+The instrument the issue proposed — `ci.yml`'s `render_env` collect-count guard — **would not have
+caught it**, and copying it would have shipped a second vacuous gate: `skipif` is evaluated after
+collection, so a fully-skipped lane still reports its full collected count. New
+`scripts/assert_tests_executed.py` reads a JUnit report and counts `tests - skipped`, plus a
+preflight `test -n` on both secrets. The meta-test that enforces it is derived, not listed — it
+scans the workflow for pytest invocations and requires a guard for each.
+
+Suite **3272 passed / 64 skipped / 0 failed** (3259 before). Both fixes non-vacuity-checked by
+surgical revert.
+
+---
+
+## 2026-08-18 — Issues 524 + 525: the pipeline stops claiming success it did not earn
 
 **524 — the render now verifies its own output.** ffmpeg exits 0 after writing a truncated file
 (measured: 0.400 s / 28 KB against a 0.6 s request); the clip was uploaded, marked

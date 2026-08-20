@@ -4153,7 +4153,7 @@ scans the wrong thing is the same vacuous-green shape Batch C exists to retire.
 
 ### Issue 501: `gate_module_coverage` fails OPEN when a floored module cannot be measured
 
-- [ ] **Status:** open · **Size:** S (~30 min) · **Lane:** L30 Batch B · **CORRECTED, reproduced**
+- [x] **Status:** ✅ **DONE 2026-08-20** · **Size:** S (~30 min) · **Lane:** L30 Batch B · **CORRECTED, reproduced**
 
 When `_module_line_rate` returns `None` the loop `continue`s, `_failures` stays empty, and the gate
 evaluates `ok` — which `--require` accepts. Its anti-hollowing test never parses a coverage report
@@ -4168,7 +4168,37 @@ exact Issue-368 cause, pinned by nothing), a package rename, an `omit` addition,
 **Evidence:** `run_layer0.py:396-413`, `:479-481`; `tests/test_layer0_module_coverage.py:86-95`.
 
 **Acceptance**
-- [ ] `rate is None` → failure; the guard test asserts resolution against a real coverage report
+- [x] `rate is None` → failure; the guard test asserts resolution against a real coverage report
+
+**BUILD NOTE (2026-08-20)**
+
+**The guard test could not be written against a hand-built element tree, and that is the whole
+point.** The three pre-existing tests construct `<coverage>` documents by hand, and they are fine for
+the *resolution* rule — but a fixture written from the same assumptions as the resolver shares its
+blind spot, and Issue 368's defect lived precisely in the gap between the shapes coverage.py emits
+and the shapes the resolver anticipated. So the new arm runs against
+`tests/fixtures/coverage_report_real_shape.xml` — a **real** pytest-cov report (coverage.py 7.14.1)
+trimmed to the packages/classes backing `MODULE_COVERAGE_FLOORS`. The full report is 689 KB and
+gitignored, hence the trim; `<lines>` and `<sources>` are dropped because the resolver reads neither.
+
+`routers/auth.py` is kept in the fixture deliberately: it is what makes the exact-over-suffix rule
+observable *in a real document*, since `auth` matches both it and root `auth.py`.
+
+**Two traps worth recording.** (a) A double hyphen is illegal inside an XML comment, so the fixture's
+provenance header cannot write `--cov` — it silently made the whole fixture unparseable on first
+write. (b) `ASSESS_DIR` is module-level, so the gate tests must monkeypatch it rather than write a
+report into the repo's own `docs/assessment/`.
+
+**The asymmetry is now documented in code.** `_module_line_rate` returns `None` rather than guessing
+on an ambiguous suffix; `gate_module_coverage` now refuses to pass without a number. Same reading,
+opposite postures — the same consequence-class split as Issue 524's `_verify_rendered_output` vs
+`_source_duration_s`, and both docstrings say so, so a future "simplification" has to argue with the
+reason rather than discover it.
+
+**Non-vacuity verified:** reverting the `continue` to the old fail-open makes
+`test_gate_fails_closed_when_a_floored_module_cannot_be_measured` go red (1 failed / 7 passed). The
+real gate still passes against the real report — all five modules resolve (clip_engine 93.31,
+preference 94.04, crypto/limiter/auth 100.0).
 
 ---
 
@@ -4207,7 +4237,7 @@ cannot report is worse than no report — it is the thing this audit is about.
 
 ### Issue 504: the nightly live-LLM and live-ASR lanes report green with zero tests executed
 
-- [ ] **Status:** open · **Size:** S (~1 h) · **Lane:** L30 Batch B · **CORRECTED (latent, not firing)**
+- [x] **Status:** ✅ **DONE 2026-08-20** · **Size:** S (~1 h) · **Lane:** L30 Batch B · **CORRECTED (latent, not firing)**
 
 Both lanes gate on `bool(ANTHROPIC_API_KEY)`. `${{ secrets.X }}` expands to `""` if the secret is
 unset, renamed or blanked → every test `skipif`-skips → pytest exits 0 → both steps go green — and
@@ -4223,7 +4253,42 @@ Latent: the 2026-08-17 run genuinely made 9 live calls. The in-repo pattern to c
 `tests/test_ci_config.py:491,513`.
 
 **Acceptance**
-- [ ] `test -n "$KEY"` fails loudly on an empty secret; a minimum executed-count is asserted, not a YAML string
+- [x] `test -n "$KEY"` fails loudly on an empty secret; a minimum executed-count is asserted, not a YAML string
+
+**BUILD NOTE (2026-08-20)**
+
+**The in-repo pattern the issue named — `ci.yml:130-141`'s `render_env` collect-count guard — does
+NOT work here, and copying it would have shipped a second vacuous gate.** `--collect-only` counts
+*collected* tests, but `skipif` is evaluated **after** collection, so a lane where every test skipped
+still reports its full collected count. The render_env lane's defect was an empty *selection* (a
+hyphenated marker that could never be applied); this one is a full selection that *skips*. Different
+failure, different instrument: the guard reads a `--junitxml` report and counts
+`tests - skipped`.
+
+**Reproduced against real pytest output, not a mock.** `RUN_LLM_LIVE=1 ANTHROPIC_API_KEY=""` on the
+actual nightly command line gives `9 skipped, 1 deselected` and **exit 0** — the silently-green
+nightly, exactly as filed. The new guard exits 1 on that same report:
+`executed=0 (collected=9, skipped=9) minimum=9`.
+
+**Failures and errors count as EXECUTED, deliberately.** A failing live test made the call and got an
+answer, which is the signal this guard exists to confirm; the run's own exit code judges the failure.
+Conflating the two would make a red lane indistinguishable from an absent one.
+
+**New:** `scripts/assert_tests_executed.py` (+ `tests/test_assert_tests_executed.py`, 8 tests). Floors
+are ratchets: **9** for the LLM lane (matching the 9 live calls the 2026-08-17 run made), **1** for the
+ASR lane.
+
+**The meta-tests were amended, not replaced.** The two existing ones do real work — they pin that the
+lanes are *wired in* — so deleting them would have lost coverage. What they could not do is prove
+*execution*, so each now states that boundary in its docstring and points at the new
+`test_every_live_lane_asserts_a_minimum_executed_count`, which is **derived, not listed**: it scans
+the workflow for `python -m pytest` and requires a matching guard, junitxml and non-zero floor for
+each. A third live lane added without a guard fails there.
+
+`docs/GO_LIVE.md`'s "LLM E2E nightly green daily" cell is annotated with what that green now means.
+
+**Non-vacuity verified:** dropping the ASR lane's guard reds the executed-count meta-test; breaking
+the `DEEPGRAM_API_KEY` preflight reds the secret meta-test.
 
 ---
 
