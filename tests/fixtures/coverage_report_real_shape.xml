@@ -1,0 +1,40 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+  A REAL pytest-cov report, trimmed - not a synthetic document.
+
+  Produced by this repo's own coverage run on 2026-08-17 (coverage.py 7.14.1,
+  single-root cov of the repo root) and reduced to the elements the resolver reads:
+  the packages and classes backing MODULE_COVERAGE_FLOORS, plus `routers/auth.py`.
+
+  `routers/auth.py` is load-bearing and must not be removed. It is what makes the
+  exact-over-suffix rule observable in a real document: `auth` matches both root
+  `auth.py` and `routers/auth.py`, and Issue 368 was the gate silently reading
+  whichever one the XML happened to list first.
+
+  <lines> elements and <sources> are dropped; the resolver reads neither, and the
+  full report is 689 KB.
+
+  Regenerate: see tests/test_layer0_module_coverage.py's module docstring.
+-->
+<coverage version="7.14.1" timestamp="1787000051790" lines-valid="15666" lines-covered="13292" line-rate="0.8485" branches-valid="3788" branches-covered="2919" branch-rate="0.7706" complexity="0">
+  <packages>
+    <package name="." line-rate="0.9389" branch-rate="0.8512" complexity="0">
+      <classes>
+        <class name="auth.py" filename="auth.py" complexity="0" line-rate="1" branch-rate="1" />
+        <class name="crypto.py" filename="crypto.py" complexity="0" line-rate="1" branch-rate="1" />
+        <class name="limiter.py" filename="limiter.py" complexity="0" line-rate="1" branch-rate="1" />
+      </classes>
+    </package>
+    <package name="clip_engine" line-rate="0.9331" branch-rate="0.8788" complexity="0">
+      <classes />
+    </package>
+    <package name="preference" line-rate="0.9404" branch-rate="0.8812" complexity="0">
+      <classes />
+    </package>
+    <package name="routers" line-rate="0.8871" branch-rate="0.7745" complexity="0">
+      <classes>
+        <class name="auth.py" filename="routers/auth.py" complexity="0" line-rate="0.9223" branch-rate="0.875" />
+      </classes>
+    </package>
+  </packages>
+</coverage>

@@ -59,6 +59,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Issue 504 — `${{ secrets.X }}` expands to "" when the secret is unset,
+      # renamed or blanked. Both lanes below gate on bool(KEY), so an empty
+      # secret skips every test, pytest exits 0, and the whole nightly reports
+      # green having made zero live calls — while docs/GO_LIVE.md cites it as
+      # proof the external APIs are live. Fail here instead, loudly, BEFORE the
+      # lanes get a chance to look successful. Never echo the values.
+      - name: Verify live-API secrets are present
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+        run: |
+          missing=""
+          [ -n "$ANTHROPIC_API_KEY" ] || missing="$missing ANTHROPIC_API_KEY"
+          [ -n "$DEEPGRAM_API_KEY" ] || missing="$missing DEEPGRAM_API_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Empty repository secret(s):$missing — the live lanes would" \
+                 "skip every test and report green. Set them in Settings > Secrets."
+            exit 1
+          fi
+          echo "Both live-API secrets are non-empty."
+
       - name: Run llm_live tests
         env:
           RUN_LLM_LIVE: "1"
@@ -85,9 +106,18 @@ jobs:
             -s \
             --tb=short \
             --no-header \
+            --junitxml=llm_e2e_junit.xml \
             2>&1 | tee llm_e2e_results.txt
           EXIT_CODE=${PIPESTATUS[0]}
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          # Issue 504 — assert what RAN, not what was collected. skipif is
+          # evaluated after collection, so a fully-skipped lane still reports its
+          # full --collect-only count; only the JUnit report separates the two.
+          # Runs before the exit below so an empty lane fails even when pytest
+          # itself was perfectly happy. Floor is a ratchet: 9 live tests as of
+          # 2026-08-20 (the 2026-08-17 run made 9 live calls). Raise it when the
+          # lane grows; lowering it needs a reason in the commit message.
+          python scripts/assert_tests_executed.py llm_e2e_junit.xml 9
           exit $EXIT_CODE
 
       - name: Run transcription_live tests (Issue 481)
@@ -118,8 +148,13 @@ jobs:
             -v \
             --tb=short \
             --no-header \
+            --junitxml=transcription_live_junit.xml \
             2>&1 | tee transcription_live_results.txt
-          exit "${PIPESTATUS[0]}"
+          EXIT_CODE=${PIPESTATUS[0]}
+          # Issue 504 — same executed-count guard as the LLM lane above. One
+          # metered ~5 s Deepgram transcription per night; floor 1.
+          python scripts/assert_tests_executed.py transcription_live_junit.xml 1
+          exit "$EXIT_CODE"
 
       - name: Post result summary
         if: always()
