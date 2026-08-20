@@ -834,3 +834,107 @@ async def test_worker_render_plan_end_to_end_under_app_role(
         assert status_b == "pending", "creator B's clip must be untouched"
     finally:
         await _cleanup(db_session, [a["creator_id"], b["creator_id"]])
+
+
+# ── Schema-derived coverage: pg_policies, not a literal (Issue 505) ───────────
+
+
+@pytest.mark.asyncio
+async def test_every_tenant_table_has_rls_enabled_forced_and_policied(admin_engine):
+    """Ask the SERVER which tables are protected, rather than a tuple in this file.
+
+    Nothing in the repo had ever referenced ``pg_policies`` or
+    ``pg_class.relrowsecurity`` — zero hits — so four hand-written copies of the
+    table list could agree with each other and all be wrong about the database.
+    This is the only assertion here that can catch a policy which exists in a
+    migration but did not actually apply.
+
+    ENABLE alone is not enough: without FORCE, the table OWNER bypasses RLS, and
+    migrations run as an owner. `relforcerowsecurity` is what makes deny-by-default
+    real for the app role.
+
+    The static sibling (tests/test_rls_coverage.py) runs in the unit lane and
+    catches an unpoliced tenant table at commit time; this catches the deployment
+    reality. Neither replaces the other.
+    """
+    from tests.test_rls_coverage import _RLS_EXEMPT, tenant_tables
+
+    expected = sorted(tenant_tables() - set(_RLS_EXEMPT))
+    assert len(expected) >= 25, f"tenant-table sweep collapsed to {expected}"
+
+    async with admin_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT c.relname,
+                           c.relrowsecurity,
+                           c.relforcerowsecurity,
+                           COUNT(p.polname) AS policies
+                      FROM pg_class c
+                      JOIN pg_namespace n ON n.oid = c.relnamespace
+                      LEFT JOIN pg_policy p ON p.polrelid = c.oid
+                     WHERE n.nspname = 'public' AND c.relkind = 'r'
+                     GROUP BY c.relname, c.relrowsecurity, c.relforcerowsecurity
+                    """
+                )
+            )
+        ).all()
+
+    state = {r[0]: (r[1], r[2], r[3]) for r in rows}
+    assert state, "pg_class returned no public tables — the query, not the schema, is wrong"
+
+    problems: list[str] = []
+    for table in expected:
+        if table not in state:
+            problems.append(f"{table}: table not present in the database")
+            continue
+        enabled, forced, policies = state[table]
+        if not enabled:
+            problems.append(f"{table}: RLS not ENABLED")
+        elif not forced:
+            problems.append(f"{table}: RLS enabled but not FORCED (the owner bypasses it)")
+        elif not policies:
+            problems.append(f"{table}: RLS forced but ZERO policies — denies everything")
+
+    assert not problems, (
+        "tenant table(s) not actually protected in the live schema:\n  "
+        + "\n  ".join(problems)
+        + "\n\nA policy that exists in a migration but not in pg_policy never applied."
+    )
+
+
+@pytest.mark.asyncio
+async def test_rls_exemptions_are_still_unpolicied_in_the_live_schema(admin_engine):
+    """The reverse arm, against the server: an exemption that gained a policy.
+
+    If a table on the exemption list turns out to be policied in the real schema,
+    the recorded reasoning is false and the registry is lying about the database.
+    """
+    from tests.test_rls_coverage import _RLS_EXEMPT
+
+    # Fetched unparameterised and filtered in Python on purpose: binding a list
+    # into `= ANY(:names)` is driver-specific, and the integration lane is the one
+    # lane that cannot be run on the dev box (no local Postgres), so a binding
+    # quirk would only surface in CI. The table count here is trivial.
+    async with admin_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT c.relname, COUNT(p.polname)
+                      FROM pg_class c
+                      JOIN pg_namespace n ON n.oid = c.relnamespace
+                      LEFT JOIN pg_policy p ON p.polrelid = c.oid
+                     WHERE n.nspname = 'public' AND c.relkind = 'r'
+                     GROUP BY c.relname
+                    """
+                )
+            )
+        ).all()
+
+    contradicted = [name for name, count in rows if count and name in _RLS_EXEMPT]
+    assert not contradicted, (
+        f"table(s) recorded as RLS-exempt but policied in the live schema: "
+        f"{contradicted}. Remove the exemption — its stated reason is no longer true."
+    )
