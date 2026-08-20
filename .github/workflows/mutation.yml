@@ -44,18 +44,41 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run mutmut (scoped to the load-bearing core)
-        # Non-gating: surface the score, never fail the run on survivors.
-        run: mutmut run || true
+        # Issue 502/503 — this was `mutmut run || true`, which reported success on
+        # 8/8 weekly runs having never executed a single mutant: the run crashed in
+        # stats collection (a missing module in `also_copy`) and `|| true` ate it.
+        #
+        # Survivors must still not fail the job — this workflow is REPORT-only
+        # (Issue 273) and must never gate a merge. So the exit code is captured and
+        # deliberately not propagated: "ran and found survivors" and "could not run"
+        # are DIFFERENT states, and only the second is a failure. Same split as
+        # run_layer0.py's `_COMPLETED_EXIT_CODES` allow-list (Issue 499) — a non-zero
+        # exit is the normal "found things" state there too.
+        run: |
+          set +e
+          mutmut run --max-children 4
+          echo "mutmut exit: $?  (survivors are expected and non-fatal)"
       - name: Publish mutation score to the job summary
         if: always()
+        # Reads mutants/**/*.py.meta and FAILS if zero mutants ran. `mutmut results`
+        # cannot be trusted for this: it prints only SURVIVORS, so a run that died
+        # before mutating anything emits the same empty block as a run that killed
+        # every mutant — which reads as a perfect score.
+        #
+        # No pipe into `tee` here: a pipeline's exit status is the LAST command's,
+        # so `script | tee` would discard the very failure this step exists to
+        # raise — the same swallowing as `|| true`, wearing a different hat.
         run: |
-          mutmut results | tee mutmut_results.txt
-          {
-            echo "## Mutation score (Issue 273)"
-            echo '```'
-            mutmut results
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          python scripts/mutation_score.py --min 500 --summary "$GITHUB_STEP_SUMMARY" \
+            > mutmut_results.txt 2>&1
+          SCORE_STATUS=$?
+          set -e
+          cat mutmut_results.txt
+          echo "" >> mutmut_results.txt
+          echo "--- surviving mutants ---" >> mutmut_results.txt
+          mutmut results >> mutmut_results.txt
+          exit $SCORE_STATUS
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -5,7 +5,67 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-20 (latest) — The operator track is parked until the code track is complete
+## 2026-08-20 (latest) — Keep the mutation gate: it runs in ~80 s and scores 54%
+
+**Decision.** Issue 503 offered an explicit either/or — *"make `mutmut` actually run, or delete the
+workflow"* — on the grounds that "a weekly report that cannot report is worse than no report".
+**Keep it, and make it run.** The delete branch was authorised but is not warranted.
+
+**Why (measured, not assumed).** The blocker was one missing entry in `[tool.mutmut] also_copy`.
+`tests/conftest.py` imports `main`, `main` imports `event_log`, `event_log` imports
+`shared_resources` — which was never copied into the sandbox. mutmut removes the repo root from
+`sys.path` precisely so the original code cannot shadow a mutant, so the sandbox could not fall back
+to the real tree: collection died, mutmut aborted before mutating anything, and `mutmut run || true`
+reported success on 8/8 weekly runs.
+
+With `shared_resources.py` plus seven packages added (`analysis`, `chat`, `flags.py`, `improvement`,
+`ingestion`, `notify`, `verbose.py` — the same stale module list that seeded the `run_layer0.py`
+`_CANDIDATE_SOURCES` gap logged on 2026-08-15), a full local run gives:
+
+| | |
+|---|---|
+| mutants generated | **990** |
+| killed | **536** |
+| survived | **454** |
+| score | **54.1%** |
+| wall clock | **~80 s** at 12.3 mutations/second |
+
+Both directions are demonstrated on real data, which is what the acceptance criteria asked for: 536
+mutants demonstrably killed, 454 demonstrably surviving. Per module: `clip_engine/scoring.py` 53.4%,
+`preference/decay.py` 74.4%, `crypto.py` 33.3% (2 of 6).
+
+At 80 seconds a week, "cannot be made to run cheaply" is simply false, and the report is
+*informative* — 54% against the job's own ">80% target" is a real finding about test quality in the
+load-bearing core, which is exactly what the workflow exists to surface. Deleting it would have
+discarded a working instrument because it had been misconfigured.
+
+**Alternatives rejected.**
+- *Delete the workflow* (offered by the issue). Rejected on the measurement above.
+- *Make survivors fail the job.* Rejected: Issue 273 deliberately made this REPORT-only and
+  non-gating, and a 54% score would red-wall it permanently. The distinction that matters is
+  **"ran and found survivors" vs "could not run"**, and only the second is a failure — the same
+  split as `run_layer0.py`'s `_COMPLETED_EXIT_CODES` allow-list (Issue 499), where a non-zero exit
+  is also the normal "found things" state.
+- *Assert `checked > 0` by parsing `mutmut results`.* Rejected, and this is the trap worth
+  recording: **`mutmut results` prints only SURVIVORS.** A run that died before mutating anything
+  emits the same empty block as a run that killed every mutant — an empty list under a "Mutation
+  score" heading reads as a perfect score. The counts come from `mutants/**/*.py.meta`'s
+  `exit_code_by_key` instead, where a NON-ZERO exit means the mutant was killed. That inversion is
+  easy to get backwards, and getting it backwards reports the exact complement of the real score.
+
+**Source/evidence.** Local run on `.venv` (mutmut 3.6.0, Redis up), 2026-08-20; counts cross-checked
+against the run's own progress output. `scripts/mutation_score.py`, `tests/test_mutation_config.py`,
+`.github/workflows/mutation.yml`. **Date:** 2026-08-20.
+
+**Durability.** `also_copy` was itself a hand-maintained literal, so fixing its contents without
+fixing its construction would have re-rotted. `tests/test_mutation_config.py` COMPUTES the
+first-party import closure from the seeds and asserts the config covers it, both directions. Its
+stated limit: a static walk cannot see a runtime-only import, which is what the executed-mutant floor
+in the workflow is the backstop for.
+
+---
+
+## 2026-08-20 — The operator track is parked until the code track is complete
 
 **Decision (owner, 2026-08-20).** All owner-only/operator work is deferred until the L30 code queue
 is finished. Nothing on the operator list gets picked up in the meantime, and no session should
