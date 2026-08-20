@@ -4380,7 +4380,7 @@ the `DEEPGRAM_API_KEY` preflight reds the secret meta-test.
 
 ### Issue 505: derive the RLS sweep from `pg_policies` instead of two hand-written tuples
 
-- [ ] **Status:** open · **Size:** M (~2 h) · **Lane:** L30 Batch C · **CORRECTED, reproduced**
+- [x] **Status:** ✅ **DONE 2026-08-20** · **Size:** M (~2 h) · **Lane:** L30 Batch C · **CORRECTED, reproduced**
 
 All three loops in the RLS regression sweep are driven by hand-written literals; **8 of 31 policied
 tables never enter any loop** (`chat_conversations`, `clip_publications`, `data_exports` have *no*
@@ -4397,9 +4397,56 @@ gate whose fix replaced a 2-item literal with a 17-item literal).
 **Evidence:** `tests/test_rls_isolation_integration.py:265`, `:579`; `models.py:279-318`, `:590-620`.
 
 **Acceptance**
-- [ ] Sweep enumerates `pg_policies` + `pg_class.relrowsecurity` at runtime, in the existing integration lane
-- [ ] Every model with a `creator_id` column has a policy or an entry on an explicit exemption list
-- [ ] Add the two missing policies or record the exemptions in `docs/DECISIONS.md`
+- [x] Sweep enumerates `pg_policies` + `pg_class.relrowsecurity` at runtime, in the existing integration lane
+- [x] Every model with a `creator_id` column has a policy or an entry on an explicit exemption list
+- [x] Add the two missing policies or record the exemptions in `docs/DECISIONS.md`
+
+**BUILD NOTE (2026-08-20)**
+
+**It is 3 of 29, not 2 of 29.** The filing named `creator_api_keys` and `creator_identity`; sweeping
+the models found `event_logs` as well (already exempt in prose, never machine-checked). Two more —
+`notification_preferences` and `notification_deliveries` — surfaced once the gate ran, both with
+existing docstring reasons. **`creator_identity` gets the policy** (migration 0064); the other four
+get recorded exemptions. It is the right one to protect: it holds creator free text injected into
+**LLM prompts**, so a leak reaches another creator's generated output, not just a response body.
+`creator_api_keys`' exemption was *correct all along* — `api_key.py:110-117` looks the row up by
+`key_hash` before any creator exists, so the row is what establishes `creator_id` — it had simply
+never been written down.
+
+**The exemption bar is stated in the code**, because "we always filter by creator_id" is the reason
+that would otherwise be used, and it is not one: it is true of every policied table too, and RLS
+exists for the query that forgets. The bar is *impossible* (GUC not yet set) or *structurally
+redundant* (creator_id IS the primary key).
+
+**TWO mechanisms, and the split is deliberate.** Static (`tests/test_rls_coverage.py`, **unit lane**)
+reads models + migration sources, so a new unpoliced tenant table fails at commit time on any
+machine with no database. Runtime (integration lane, CI only) reads `pg_class.relrowsecurity`,
+`relforcerowsecurity` and `pg_policy` from the live server — the only check that can catch a policy
+that exists in a migration but **did not apply**. `ENABLE` alone is asserted insufficient: without
+`FORCE` the table **owner bypasses RLS**, and migrations run as an owner.
+
+**What was deliberately NOT derived — this is the trap.** `_TENANT_TABLES` stays hand-written,
+because the behavioural sweep **seeds a row per table**. A table auto-added to that loop with no seed
+makes the clean-deny assertion pass **vacuously** — the file's own comment warns about exactly this,
+and it is how the pre-0045 `::uuid` defect hid. Deriving that loop would have swapped a visible gap
+for an invisible one. Instead the tuple is *reconciled* against the schema and the **8** policied
+tenant tables it never exercises are listed as an explicit ratchet: `chat_conversations`,
+`clip_impressions`, `clip_publications`, `creator_identity`, `creator_style`, `data_exports`,
+`notifications`, `summaries`. **That 8 was measured independently and matches the "8 of 31" this
+issue was filed on** — including all three the filing singled out as having no guard anywhere.
+
+**A parser bug worth recording:** migration 0040 declares `_CHILD_TABLES: list[tuple[...]] = [...]`,
+an `AnnAssign` rather than an `Assign`. The first draft handled only `Assign`, silently lost all five
+chat child-table policies, and reported them as unprotected. A static parser that misses a syntax
+form does not fail — it produces confident false findings.
+
+**Not an open door; do not restate the severity upward.** Every current query filters `creator_id`
+explicitly. This is the missing defence-in-depth layer.
+
+**Verification is split, and honestly so:** the static half runs locally (6 tests green). **The
+integration half was NOT run locally — there is no Postgres on this box (gotcha 17) — so it is
+CI-verified only.** Non-vacuity checked on the static half three ways: deleting migration 0064 reds
+with `creator_identity` named; a ghost exemption reds; exempting an already-policied table reds.
 
 ---
 
@@ -4482,6 +4529,23 @@ that is exactly how `tests/test_response_models.py` went vacuous (`OFF_COURSE_BU
 
 **Non-vacuity verified:** stripping `generate_clips`'s daily cap reds the quota gate; removing
 `create_summary`'s `require_budget` reds the flags gate naming the route.
+
+**LIVE-VERIFIED 2026-08-20**, read out of the RUNNING prod container (image revision `1dd03b8`),
+not the repo — per gotcha 4, a green pipeline is not a working feature:
+
+```
+routers.chat.post_message      ['25 per 1 day', '10 per 1 minute']
+routers.chat.regenerate        ['25 per 1 day', '10 per 1 minute']
+routers.creators.build_dna     ['120 per 1 minute', '50 per 1 day']
+routers.creators.identity_chat ['40 per 1 hour', '50 per 1 day']
+create_summary deps: ['get_current_creator', 'get_session', 'require_budget',
+                      'require_flag_render_intake']
+```
+
+All four previously-uncapped routes carry both ceilings in production, and `create_summary` — the
+take-money-grant-nothing shape the derived gate found on its first run — now carries the spend gate
+on the live box. `/health` 200 over the public URL. This needed no owner action: it is a read-only
+introspection of the running app.
 
 One off-course finding logged (`docs/OFF_COURSE_BUGS.md`, 2026-08-20): a doc guard asserting against
 a fixed 1000-character slice of `CLAUDE.md`, which fails when an unrelated bullet grows and blames

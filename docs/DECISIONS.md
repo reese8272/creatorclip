@@ -5,7 +5,57 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-20 (latest) — Keep the mutation gate: it runs in ~80 s and scores 54%
+## 2026-08-20 (latest) — RLS: policy `creator_identity`, exempt four tables with written reasons
+
+**Decision (Issue 505).** Of the tenant tables with a `creator_id` column and no RLS policy, one
+gets a policy and the rest get **recorded, machine-checked exemptions**. The exemption bar is
+explicit: a policy keyed on `app.creator_id` must be either **impossible** (the GUC is not set yet)
+or **structurally redundant** (the access pattern cannot express a cross-tenant read). *"We always
+filter by `creator_id`"* is **not** sufficient — that is true of every policied table too, and RLS
+exists precisely for the query that forgets.
+
+**Measured, and it is 3 of 29, not 2 of 29.** The filing named `creator_api_keys` and
+`creator_identity`. Sweeping the models found a third: `event_logs`.
+
+| table | verdict | reason |
+|---|---|---|
+| `creator_identity` | **POLICY** (migration 0064) | No defensible exemption. Holds creator free text (`mission`, `audience_summary`, `style_sample`, `hard_nos`) that is **injected into LLM prompts**, so a leak here reaches another creator's generated output, not merely a response body. |
+| `creator_api_keys` | exempt | Pre-auth bootstrap, same shape as `creators`. `api_key.py:110-117` looks the row up **by `key_hash` before any creator identity exists** — the row is what *establishes* `creator_id`. A policy on `app.creator_id` would make bearer auth impossible, not safer. The reason was correct all along; it had simply never been written anywhere. |
+| `event_logs` | exempt | Append-only behavioural telemetry, not tenant business data; written only via `event_log.record_event()`, which redacts at the boundary. Already stated in the model docstring + DECISIONS 2026-06-17. |
+| `notification_preferences` | exempt | `creator_id` **is the primary key** — one row per creator — so there is no unfiltered-SELECT shape for RLS to catch. |
+| `notification_deliveries` | exempt | Operational send-log; no creator-facing route selects from it. |
+
+**Not an open door, and the severity should not be restated upward.** Every current query filters
+`creator_id` explicitly, so no cross-tenant read was reachable. What was missing is the
+defence-in-depth layer — the one that catches the query someone forgets, which is exactly how
+`improvement_briefs` / `creator_insights` were caught in migration 0038.
+
+**Two mechanisms, deliberately, because neither can do the other's job.**
+- **Static** (`tests/test_rls_coverage.py`, unit lane): models + migration sources, so a new
+  unpoliced tenant table fails at commit time on any machine, with no database.
+- **Runtime** (`tests/test_rls_isolation_integration.py`, CI only): `pg_class.relrowsecurity` +
+  `relforcerowsecurity` + `pg_policy` as the live server actually has them. This is the only check
+  that can catch a policy which exists in a migration but **did not apply**.
+
+`ENABLE` alone is asserted insufficient: without `FORCE`, the table **owner bypasses RLS**, and
+migrations run as an owner.
+
+**What was NOT done, and why.** The behavioural sweep's `_TENANT_TABLES` tuple stays hand-written.
+It **seeds a row per table**, and seeding is per-table fixture code — a table auto-added to the loop
+with no seed makes the clean-deny assertion pass **vacuously**, which the file's own comment already
+warns about. Deriving that loop would have replaced a visible gap with an invisible one. Instead the
+tuple is *reconciled* against the schema, and the **8** policied tenant tables it never exercises are
+listed as an explicit ratchet. That 8 was measured independently and matches the "8 of 31" the issue
+was filed on.
+
+**Source/evidence.** `alembic/versions/0064_rls_creator_identity.py`, `tests/test_rls_coverage.py`,
+`tests/test_rls_isolation_integration.py`; `api_key.py:110-117`;
+`docs/assessment/DEEP_AUDIT_2026-08-17/01-domains/d07-security-tenancy.md:177-200` (finding F4).
+**Date:** 2026-08-20.
+
+---
+
+## 2026-08-20 — Keep the mutation gate: it runs in ~80 s and scores 54%
 
 **Decision.** Issue 503 offered an explicit either/or — *"make `mutmut` actually run, or delete the
 workflow"* — on the grounds that "a weekly report that cannot report is worse than no report".
