@@ -41,6 +41,19 @@ COPY: dict[str, dict[str, str]] = {
             "promise virality."
         ),
     },
+    # Issue 524/525: zero clips is a DESIGNED outcome (the five-code skip_reason
+    # taxonomy; Issue 458 deliberately made it more common), not a failure. It gets
+    # its own event rather than clips_ready with clip_count=0, which emailed
+    # "Your 0 clips ... are ready for review" and pointed a "Review your clips"
+    # CTA at an empty queue.
+    "no_clips_found": {
+        "subject": "No clips from your video — here's why",
+        "body": (
+            "We processed your video and did not find any clips worth recommending. "
+            "That is a real result, not an error — AutoClip would rather send you "
+            "nothing than send you a clip your audience would not watch."
+        ),
+    },
     "dna_built": {
         "subject": "Your channel DNA profile is ready",
         "body": (

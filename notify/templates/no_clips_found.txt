@@ -1,0 +1,14 @@
+Subject: No clips from {{ video_title }} — here's why
+
+Hi {{ creator_name }},
+
+We processed "{{ video_title }}" and did not find any clips worth recommending.
+
+Why: {{ skip_reason_label }}
+
+That is a real result, not an error — we would rather send you nothing than send you a clip your audience would not watch. Your minutes for this video are unaffected.
+
+See your videos: {{ dashboard_url }}
+
+—
+AutoClip

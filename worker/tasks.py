@@ -3878,18 +3878,43 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
         # entity_id = video_id so dedupe prevents duplicate notifications on retry.
         if clip_creator_id is not None:
             try:
-                send_notification.delay(
-                    str(clip_creator_id),
-                    "clips_ready",
-                    video_id,
-                    {
+                # Issue 525: branch on the count. `clip_count` was always passed —
+                # nothing read it — so a zero-clip video emailed "Your 0 clips from
+                # <title> are ready for review" with a CTA into an empty queue, and
+                # wrote an in-app row claiming "We found candidate clips."
+                #
+                # Zero clips is a designed state, so it gets its own event carrying
+                # the same skip_reason the clips API already surfaces, rather than a
+                # count-shaped variant of the success copy. The terminal SSE event one
+                # line earlier was already honest ("Generated 0 clip(s).") — only the
+                # outbound notification lied.
+                if clips:
+                    event_type = "clips_ready"
+                    payload = {
                         "clip_count": len(clips),
                         "creator_name": clip_creator_name or "there",
                         "video_title": clip_video_title or "your video",
                         # review_url is an absolute link built from APP_BASE_URL so the
                         # clips_ready template renders a clickable button in prod.
                         "review_url": f"{settings.APP_BASE_URL}/app/review",
-                    },
+                    }
+                else:
+                    from clip_engine.candidates import derive_skip_reason, skip_reason_label
+
+                    reason = derive_skip_reason(timeline) or "no_signal_above_threshold"
+                    event_type = "no_clips_found"
+                    payload = {
+                        "creator_name": clip_creator_name or "there",
+                        "video_title": clip_video_title or "your video",
+                        "skip_reason": reason,
+                        "skip_reason_label": skip_reason_label(reason),
+                        "dashboard_url": f"{settings.APP_BASE_URL}/app/dashboard",
+                    }
+                send_notification.delay(
+                    str(clip_creator_id),
+                    event_type,
+                    video_id,
+                    payload,
                 )
             except Exception as notify_exc:
                 logger.warning(
@@ -6655,6 +6680,7 @@ async def _send_notification_async(
     from sqlalchemy import select
     from sqlalchemy.exc import IntegrityError
 
+    from config import settings as notify_settings
     from models import (
         Creator,
         NotificationChannel,
@@ -6744,6 +6770,9 @@ async def _send_notification_async(
             channel=NotificationChannel.email,
             dedupe_key=dedupe_key,
             status=NotificationDeliveryStatus.sent,
+            # Issue 525: record WHICH backend handled this, because `status` alone
+            # cannot tell a real delivery from a console no-op — both write 'sent'.
+            handled_by=notify_settings.NOTIFY_BACKEND,
         )
         session.add(delivery)
         retry_of_failed = False
@@ -6905,6 +6934,17 @@ def _build_inapp_notification(
             "Your clips are ready to review.",
             payload.get("body", "We found candidate clips from your video. Tap to review them."),
             "/app/review",
+        ),
+        # Issue 525: the in-app half of the zero-clip case. The old row said "We
+        # found candidate clips from your video." for a video that produced none.
+        "no_clips_found": (
+            "No clips from your video.",
+            payload.get(
+                "body",
+                "We processed your video and did not find any clips worth "
+                "recommending. Tap to see why.",
+            ),
+            "/app/dashboard",
         ),
         "dna_built": (
             "Your channel DNA is ready.",
