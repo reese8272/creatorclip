@@ -4350,7 +4350,7 @@ repo-wide AST sweep with a bidirectional staleness check.
 
 ### Issue 507: derive `RENDER_TASKS` from the call graph — the routing test compares a literal to a copy of itself
 
-- [ ] **Status:** open · **Size:** S (~1 h) · **Lane:** L30 Batch C · `[unverified — repro output disputed]`
+- [x] **Status:** ✅ **DONE 2026-08-20** · **Size:** S (~1 h) · **Lane:** L30 Batch C · `[unverified — repro output disputed]` → **RE-MEASURED, both prior counts wrong**
 
 `test_every_ffmpeg_task_is_routed` reads `expected = {five literals}; assert set(RENDER_TASKS) ==
 expected`. Its stated claim is already false: the critic ran the finding's own repro and measured
@@ -4361,7 +4361,56 @@ regex cannot see. n=2, verified.
 **Evidence:** `tests/test_celery_routing.py:29-38`.
 
 **Acceptance**
-- [ ] `RENDER_TASKS` derived from the call graph or a task decorator; the two unrouted tasks routed or exempted
+- [x] `RENDER_TASKS` derived from the call graph or a task decorator; the unrouted tasks routed or exempted
+
+**BUILD NOTE (2026-08-20)**
+
+**Both prior counts were wrong, and the third measurement explains why.** The finding claimed 3
+unrouted ffmpeg tasks; the critic ran the repro and measured 2 (`backfill_video_peaks`,
+`backfill_video_camera_regions`). An import-aware call graph measures **3**, and only ONE of the
+critic's two is among them:
+
+| task | reaches ffmpeg? | via |
+|---|---|---|
+| `ingest_video` | **yes** | `_ingest_async → extract_audio_wav` |
+| `backfill_video_posters` | **yes** | `_extract_and_upload_poster → extract_poster_frame → _poster_cmd` |
+| `backfill_video_camera_regions` | **yes** | `detect_overlay_spans → _sample_gray_frames_timed → _sample_by_linear_decode` |
+| `backfill_video_peaks` | **NO** | reaches `compute_peaks` / `_compute_and_upload_peaks` only — no ffmpeg path exists |
+
+`backfill_video_peaks` was a false positive in the critic's correction, so the `[unverified — repro
+output disputed]` tag was right to distrust the number: **all three measurements disagreed, and the
+first two were both wrong.**
+
+**Two graph-construction facts, each of which silently zeroes the sweep if missed.**
+
+1. **Edges must follow REFERENCES, not `Call.func`.** `worker/tasks.py` offloads every blocking
+   encode with `asyncio.to_thread(render_clip_file, ...)` — the callee is an **argument** and never
+   appears as `Call.func`. A graph that only follows calls finds **0** ffmpeg-reaching tasks, which
+   would have passed every assertion vacuously. This was the first draft's result.
+2. **But it must NOT follow `.delay` / `.apply_async`.** With reference-following turned on,
+   `generate_clips` and `build_signals` appear to reach ffmpeg — via `render_video_clips.delay(...)`.
+   That is an **enqueue**: the encode runs inside the already-routed task, on the render worker.
+   Following it is the reference graph's own false-positive class, symmetric to the regex's
+   false-negative class. Both directions are now handled and commented.
+
+**All three are EXEMPTED, not routed — no runtime behavior changes.** The invariant the old test's
+name asserted ("every ffmpeg task is routed") is not the real rule and never was; the real rule is
+"every CPU-saturating **encode** routes to the concurrency-1 queue". None of the three encodes video:
+an audio decode, a single-JPEG seek, and a grayscale sampling pass. Routing `ingest_video` in
+particular would serialize the **entire ingestion pipeline** behind whatever clip is rendering — a
+worse failure than the contention the queue exists to prevent. Each exemption carries a written
+reason, and `test_every_exemption_carries_a_reason` enforces that it is prose rather than a checkbox.
+
+`ffprobe` is deliberately outside the swept token set — it is a metadata read, not an encode.
+
+**Four assertions replace one self-comparison**, including the reverse arm (a stale exemption for a
+task that no longer reaches ffmpeg) and an anti-vacuity floor (the sweep must still find ≥8
+ffmpeg-reaching tasks and must see every currently-routed one, so a broken graph fails loudly instead
+of passing everything).
+
+**Non-vacuity verified** three ways: unrouting `render_clip` reds; adding a synthetic
+`@celery.task` that shells to ffmpeg reds with the task named; a ghost exemption entry reds the
+staleness arm.
 
 ---
 
