@@ -407,75 +407,51 @@ def test_every_billed_llm_route_declares_flag_and_budget_dependencies() -> None:
     Flipping ``llm_generation`` did not stop them and a creator past their spend
     cap was not blocked.
 
-    This is enumerated rather than case-by-case so a NEW billed route fails here
-    instead of being discovered in an incident. Add to ``_BILLED_LLM_ROUTES``
-    when you add a route that spends LLM tokens.
+    Issue 506 — this was a 10-entry literal against 17 live LLM routes. It missed
+    both chat routes, identity chat, the improvement brief, video analysis and
+    BOTH clips/generate routes — the core product action. A list cannot catch a
+    new billed route, which is the only thing the test claims to do.
+
+    The population is now derived as the UNION of the two gates. Deriving it from
+    the flag alone would make the flag half of the assertion circular, and the
+    half it would lose is the one that matters: a route carrying one gate and not
+    the other. Taking the union makes that asymmetry itself the failure.
+
+    The residual limit, stated honestly: a billed route carrying NEITHER gate is
+    invisible here — that was the original 2026-08-14 defect shape. Catching it
+    needs the AST sweep in tests/test_security_baselines.py, which is the sibling
+    mechanism and is derived over the same module set.
     """
+    from tests._helpers import BUDGET_DEP, LLM_FLAG_DEP, discover_billed_routes, kill_switches
 
-    from fastapi.routing import APIRoute
+    gated = discover_billed_routes()
 
-    from main import app
-
-    # (path, method) pairs that spend LLM tokens on the creator's behalf.
-    _BILLED_LLM_ROUTES = {
-        ("/creators/me/videos/{video_id}/titles", "POST"),
-        ("/creators/me/videos/{video_id}/hook-analysis", "POST"),
-        ("/creators/me/videos/{video_id}/chapters", "POST"),
-        ("/creators/me/videos/{video_id}/thumbnail-concepts", "POST"),
-        ("/creators/me/thumbnail-patterns", "GET"),
-        ("/creators/me/dna/build", "POST"),
-        ("/creators/me/insights/analyze-performer", "POST"),
-        ("/clips/{clip_id}/title-suggestions", "POST"),
-        ("/clips/{clip_id}/caption-hooks", "POST"),
-        ("/clips/{clip_id}/explanation", "POST"),
-    }
-
-    # FastAPI >= 0.13x defers `include_router` into `_IncludedRouter` objects, so
-    # `app.routes` holds almost no APIRoute instances and a naive walk finds
-    # nothing. That is how `tests/test_response_models.py`'s equivalent guard went
-    # VACUOUS (docs/OFF_COURSE_BUGS.md, 2026-08-04) — it iterated zero routes and
-    # passed. This resolver handles both shapes, and the `unknown` assertion below
-    # turns "found nothing" into a loud failure rather than a silent pass.
-    def _collect(router, out: dict) -> None:
-        for r in getattr(router, "routes", []) or []:
-            if isinstance(r, APIRoute):
-                for method in r.methods or set():
-                    out[(r.path, method)] = r.dependant
-            elif type(r).__name__ == "_IncludedRouter":
-                # Effective contexts carry the PREFIXED path plus the merged
-                # dependant — i.e. what actually serves the request.
-                ctxs = r.effective_route_contexts
-                ctxs = ctxs() if callable(ctxs) else ctxs
-                for ctx in ctxs:
-                    for method in ctx.methods or set():
-                        out[(ctx.path, method)] = ctx.dependant
-                _collect(getattr(r, "original_router", None), out)
-            else:
-                _collect(r, out)
-
-    by_key: dict = {}
-    _collect(app.router, by_key)
+    assert len(gated) >= 23, (
+        f"only {len(gated)} gated route(s) found — the resolver has stopped "
+        "resolving. FastAPI 0.137 defers include_router into _IncludedRouter, and "
+        "a walk that misses it iterates zero routes and passes vacuously "
+        "(docs/OFF_COURSE_BUGS.md, 2026-08-04)."
+    )
 
     missing: list[str] = []
-    unknown: list[str] = []
-    for key in sorted(_BILLED_LLM_ROUTES):
-        dependant = by_key.get(key)
-        if dependant is None:
-            # The route was renamed or removed — fail loudly rather than let the
-            # guard silently stop covering it (a vacuous-pass failure mode).
-            unknown.append(f"{key[1]} {key[0]}")
-            continue
-        names = {getattr(d.call, "__name__", "") for d in dependant.dependencies}
-        # require_flag names its closure require_flag_<key> (see flags.py), so we
-        # can assert the route is behind the LLM switch specifically rather than
-        # merely behind *some* flag.
-        has_flag = "require_flag_llm_generation" in names
-        has_budget = "require_budget" in names
-        if not (has_flag and has_budget):
-            missing.append(f"{key[1]} {key[0]} (deps seen: {sorted(names)})")
+    for route in gated:
+        has_budget = BUDGET_DEP in route.dependencies
+        switches = kill_switches(route)
+        where = f"{route.method} {route.path} ({route.qualname})"
 
-    assert not unknown, f"billed-LLM route(s) not found — update the list: {unknown}"
+        # A route that costs money must be stoppable, and a route behind a kill
+        # switch is there because it costs money. Either without the other is a
+        # gap — and which switch it is does not matter here, only that one exists.
+        if has_budget and not switches:
+            missing.append(f"{where} — spend gate, NO kill switch: cannot be stopped mid-incident")
+        if switches and not has_budget:
+            missing.append(f"{where} — kill switch {sorted(switches)}, NO require_budget")
+        # The LLM switch specifically implies billed LLM tokens.
+        if LLM_FLAG_DEP in route.dependencies and not has_budget:
+            missing.append(f"{where} — llm_generation without require_budget")
+
     assert not missing, (
-        "billed LLM route(s) missing require_flag('llm_generation') and/or "
-        f"require_budget: {missing}"
+        "route(s) carrying one gate but not its partner. A billed route without a "
+        "kill switch cannot be stopped during an incident; one without "
+        f"require_budget bills a creator past their spend cap: {missing}"
     )

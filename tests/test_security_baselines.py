@@ -301,14 +301,28 @@ def test_csrf_disabled_in_dev(monkeypatch):
 # burst ceiling) AND a check_positive_balance / check_balance* call (the floor).
 # Walking the AST catches a gate-less route at commit time instead of in prod.
 
-_LLM_RENDER_ROUTERS = (
-    "clips",
-    "titles",
-    "thumbnails",
-    "insights",
-    "improvement",
-    "analysis",
-)
+
+# Issue 506 — this was a 6-name literal, and it excluded routers/chat.py and
+# routers/creators.py entirely while both own LLM-gated routes. Three routes
+# (chat.post_message, chat.regenerate, creators.identity_chat) therefore had
+# ZERO structural coverage from this sweep or its two sibling registries.
+#
+# The module set is now DERIVED: any router module owning at least one route
+# behind a spend gate or a kill switch is in scope. A new billed router is swept
+# on the day it is mounted, rather than when someone remembers to add it here.
+def _llm_render_routers() -> tuple[str, ...]:
+    from tests._helpers import BUDGET_DEP, discover_routes, kill_switches
+
+    return tuple(
+        sorted(
+            {
+                r.module
+                for r in discover_routes()
+                if r.module and (BUDGET_DEP in r.dependencies or kill_switches(r))
+            }
+        )
+    )
+
 
 # Read-only / cheap routes in these modules that intentionally carry no balance
 # floor (plain polls/reads at 60–120/minute) — excluded from the floor sweep but
@@ -326,12 +340,14 @@ _FLOOR_EXEMPT_HANDLERS = frozenset(
         "get_insights",
         "get_analytics_summary",
         "save_insight",
-        "list_insights",
-        "delete_insight",
         "get_improvement_brief",
-        "get_video_analysis",
-        "get_hook_analysis",
-        "get_chapters",
+        # NOTE (Issue 506): five entries were removed here — delete_insight,
+        # get_chapters, get_hook_analysis, get_video_analysis and list_insights.
+        # None of them existed in routers/ any more: the GET variants were
+        # dropped in favour of the start_* POST handlers, and list_insights was
+        # renamed list_saved_insights. They were found by the staleness arm below
+        # the day it was written. A ghost exemption is not merely dead weight —
+        # it silently pre-approves any future handler that reuses the name.
         # Issue 391 — the edit document is a pure DB write that enqueues nothing
         # and costs no minutes. The absent balance floor is the DESIGN: a creator
         # whose balance hit zero must still be able to see and save their work.
@@ -344,6 +360,29 @@ _FLOOR_EXEMPT_HANDLERS = frozenset(
         # llm_generation / render_intake kill switches are flipped — the review
         # backlog does not stop being yours during an incident.
         "set_clip_triage",
+        # ── Issue 506: newly in scope when the module list became derived ─────
+        #
+        # LLM routes whose ceiling is the SPEND cap, not the minute ledger.
+        # `check_positive_balance` gates render MINUTES; these spend Anthropic
+        # tokens and are bounded by `require_budget` (SPEND_CAP_CREATOR_DAILY_USD)
+        # plus a stacked daily/burst rate limit. A minute floor here would block
+        # chat for a creator with zero render minutes, which is not what minutes
+        # buy. Their gates are asserted by tests/test_creator_quota.py and
+        # tests/test_flags.py, both now derived from the same route table.
+        "post_message",
+        "regenerate",
+        "build_dna",
+        "identity_chat",
+        # Free profile/metadata writes: no task enqueued, no LLM call, no minutes.
+        # A creator at zero balance must still be able to edit their own account —
+        # same reasoning as put_edit_document and set_clip_triage above.
+        "put_brand_kit",
+        "accept_brand_kit_suggestion",
+        "sync_catalog",
+        "confirm_dna",
+        "upsert_identity",
+        "share_fingerprint",
+        "submit_feedback",
     }
 )
 
@@ -405,8 +444,13 @@ def test_every_llm_render_route_is_quota_and_rate_gated() -> None:
     """Issue 228: each LLM/render write route carries a @limiter.limit AND a
     check_positive_balance/check_balance* call."""
     routers_dir = _REPO_ROOT / "routers"
+    modules = _llm_render_routers()
+    assert len(modules) >= 9, (
+        f"derived module set collapsed to {modules} — the route resolver has "
+        "stopped resolving, and an empty sweep passes everything"
+    )
     checked = 0
-    for mod in _LLM_RENDER_ROUTERS:
+    for mod in modules:
         src = (routers_dir / f"{mod}.py").read_text()
         for name, has_limiter, has_floor in _gated_handlers(src):
             assert has_limiter, (
@@ -424,6 +468,38 @@ def test_every_llm_render_route_is_quota_and_rate_gated() -> None:
     # Guard against the sweep silently matching nothing (e.g. a refactor that
     # renamed decorators) — we must have asserted the floor on real handlers.
     assert checked >= 10, f"expected >=10 gated handlers, swept {checked}"
+
+
+def test_no_stale_floor_exemption() -> None:
+    """The reverse arm: an exemption naming a handler that no longer exists.
+
+    Existence, not sweep membership: several entries name GET/DELETE handlers
+    that `_is_write_route` never selects. Those are harmless — the exemption
+    simply never applies — and were written defensively. A name matching NO
+    function in any swept module is the real ghost, and the danger is not that
+    it does nothing today but that it silently pre-approves a future handler
+    that reuses the name.
+
+    Every literal in this repo that lacked this check had drifted (Issue 506 —
+    11 of ~20 gate-scope literals, two covering live defects). A stale entry is
+    worse than a missing one: it reads as deliberate coverage while covering a
+    ghost, and it silently pre-approves any NEW handler that happens to reuse
+    the name.
+    """
+    routers_dir = _REPO_ROOT / "routers"
+    defined: set[str] = set()
+    for mod in _llm_render_routers():
+        tree = ast.parse((routers_dir / f"{mod}.py").read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+                defined.add(node.name)
+
+    stale = _FLOOR_EXEMPT_HANDLERS - defined
+    assert not stale, (
+        f"floor exemption(s) naming handler(s) that no longer exist: {sorted(stale)}. "
+        "Remove the entry — it covers a ghost and pre-approves any future handler "
+        "that reuses the name."
+    )
 
 
 def test_ast_sweep_flags_a_gateless_route() -> None:

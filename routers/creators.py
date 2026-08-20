@@ -13,7 +13,7 @@ from db import get_session
 from dna import identity as identity_module
 from dna.onboarding import resolve_setup_step
 from flags import require_flag
-from limiter import creator_key, limiter
+from limiter import LLM_DAILY_LIMIT, creator_key, limiter
 from models import AnalysisMode, Clip, Creator, CreatorIdentity, CreatorStyle
 from routers._enqueue import enqueue_stream_task
 from routers._schemas import SetupStepOut, TaskQueuedOut
@@ -544,6 +544,9 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
     # creator past their spend cap could still trigger one.
     dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
+# Issue 506 — a 120/minute burst and NO daily cap on a route that enqueues a
+# Sonnet DNA build. require_budget bounds the spend; this bounds the queue.
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 @limiter.limit("120/minute", key_func=creator_key)
 async def build_dna(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Queue a DNA build for the current creator. Returns a Celery task_id.
@@ -773,6 +776,9 @@ async def upsert_identity(
     # billed LLM route — stack the same gates as every sibling LLM route.
     dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
+# Issue 506 — 40/hour is a burst cap, not a ceiling: unstacked it permits 960
+# billed calls a day. Stacked with the shared LLM daily limit like its siblings.
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 @limiter.limit("40/hour", key_func=creator_key)
 async def identity_chat(
     request: Request,

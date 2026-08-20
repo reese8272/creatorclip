@@ -24,33 +24,51 @@ required for the introspection/handler cases.
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from tests._helpers import override_current_creator
+from tests._helpers import discover_routes, override_current_creator
 
-# Daily-cap routes keyed by qualified name → which settings cap should back them.
-_LLM_ROUTES = [
-    "routers.clips.generate_clips",
-    "routers.titles.start_title_suggestions",
-    "routers.thumbnails.get_thumbnail_patterns",
-    "routers.thumbnails.start_thumbnail_concepts",
-    "routers.insights.analyze_performer",
-    "routers.improvement.start_improvement_brief",
-    "routers.analysis.start_video_analysis",
-    "routers.analysis.start_hook_analysis",
-    "routers.analysis.start_chapter_generation",
-]
-_RENDER_ROUTES = [
-    "routers.clips.render_clip",
-    "routers.clips.clean_clip",
-    "routers.clips.submit_cuts",
-    "routers.clips.ingest_clip",
-]
+# Issue 506 — these two were hand-written literals and BOTH had drifted: the LLM
+# list named 9 routes against 17 live, and the render list named 4 against 6
+# (missing create_clip, create_summary and review.trim_render) while carrying
+# `routers.clips.ingest_clip`, which is not behind the render flag at all.
+#
+# Neither literal could ever have caught a NEW uncapped route, which is the only
+# thing this module exists to prevent. The population is now derived from the
+# live route table by the flag each ceiling belongs to. Note the predicate and
+# the asserted property are different things — routes are FOUND by their kill
+# switch and JUDGED on their rate limits — so this is a real check, not a
+# tautology.
+_LLM_FLAG = "require_flag_llm_generation"
+_RENDER_FLAG = "require_flag_render_intake"
+
+# A sub-daily window. slowapi stringifies a Limit as e.g. "10 per 1 hour".
+_BURST_PERIODS = ("hour", "minute", "second")
+
+
+def _routes_behind(flag: str) -> list[str]:
+    return sorted({r.qualname for r in discover_routes() if flag in r.dependencies})
+
+
+def _llm_routes() -> list[str]:
+    return _routes_behind(_LLM_FLAG)
+
+
+def _render_routes() -> list[str]:
+    return _routes_behind(_RENDER_FLAG)
 
 
 def _import_routers() -> None:
+    """Import for decorator side effects — registers limits in `_route_limits`.
+
+    `discover_routes()` imports `main`, which imports every router, so this is
+    belt-and-braces for the tests that introspect a qualname directly.
+    """
     import routers.analysis  # noqa: F401
+    import routers.chat  # noqa: F401
     import routers.clips  # noqa: F401
+    import routers.creators  # noqa: F401
     import routers.improvement  # noqa: F401
     import routers.insights  # noqa: F401
+    import routers.review  # noqa: F401
     import routers.thumbnails  # noqa: F401
     import routers.titles  # noqa: F401
 
@@ -111,23 +129,54 @@ def test_quota_settings_have_sane_defaults() -> None:
 # ── Daily cap stacked on every LLM/render route ───────────────────────────────
 
 
-def test_every_llm_route_has_daily_cap_stacked_on_hourly() -> None:
-    _import_routers()
-    for qualname in _LLM_ROUTES:
-        lims = [str(limit.limit) for limit in _limits_for(qualname)]
-        assert _has_period(qualname, "day"), f"{qualname} missing daily cap: {lims}"
-        assert _has_period(qualname, "hour"), (
-            f"{qualname} lost its hourly burst limit — the daily cap must STACK, "
-            f"not replace it: {lims}"
-        )
+def _has_burst(qualname: str) -> bool:
+    """A sub-daily window of any granularity.
+
+    Chat's burst is per-MINUTE, not per-hour: the harm there is a flood of Celery
+    jobs inside one second, and a human in a real conversation never approaches
+    10/minute. Asserting the word "hour" would have rejected the correct fix.
+    """
+    return any(_has_period(qualname, period) for period in _BURST_PERIODS)
 
 
-def test_every_render_route_has_daily_cap_stacked_on_hourly() -> None:
+def _assert_stacked(qualname: str) -> None:
+    lims = [str(limit.limit) for limit in _limits_for(qualname)]
+    assert lims, (
+        f"{qualname} carries NO rate limit at all — it is behind a kill switch "
+        "but has no ceiling of any kind"
+    )
+    assert _has_period(qualname, "day"), f"{qualname} missing daily cap: {lims}"
+    assert _has_burst(qualname), (
+        f"{qualname} has a daily cap but no burst limit — the whole day's budget "
+        f"can be spent in one second, enqueueing that many jobs at once: {lims}"
+    )
+
+
+def test_the_route_sweep_finds_something() -> None:
+    """Anti-vacuity. A resolver that finds nothing passes every loop below.
+
+    This is not hypothetical here: FastAPI 0.137's `_IncludedRouter` deferral is
+    exactly how the equivalent guard in test_response_models.py went vacuous
+    (docs/OFF_COURSE_BUGS.md, 2026-08-04) — it walked zero routes and passed.
+    """
+    llm, render = _llm_routes(), _render_routes()
+    assert len(llm) >= 17, f"expected >=17 LLM routes behind the kill switch, found {len(llm)}"
+    assert len(render) >= 6, f"expected >=6 render routes, found {len(render)}"
+    # The route the product is FOR. If the sweep cannot see this one it is broken.
+    assert "routers.clips.generate_clips" in llm
+
+
+def test_every_llm_route_has_daily_cap_stacked_on_a_burst() -> None:
+    """Derived from the live route table: a new LLM route lands here on day one."""
     _import_routers()
-    for qualname in _RENDER_ROUTES:
-        lims = [str(limit.limit) for limit in _limits_for(qualname)]
-        assert _has_period(qualname, "day"), f"{qualname} missing daily cap: {lims}"
-        assert _has_period(qualname, "hour"), f"{qualname} lost hourly burst: {lims}"
+    for qualname in _llm_routes():
+        _assert_stacked(qualname)
+
+
+def test_every_render_route_has_daily_cap_stacked_on_a_burst() -> None:
+    _import_routers()
+    for qualname in _render_routes():
+        _assert_stacked(qualname)
 
 
 def test_render_clip_carries_render_daily_cap_value() -> None:

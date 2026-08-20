@@ -284,7 +284,7 @@ docker compose logs --tail 100 app worker
 > scorecard (Issue 303). The list below names the requirements; status lives there.
 
 - Lock `ALLOWED_ORIGINS` to production domain; disable `/docs` — env-gated in code (`main.py`); prod verification is Issue 24
-- ✅ Per-creator rate limiting + usage quotas before each LLM/render job — shipped via Issues 228 (stacked slowapi limits on all LLM/render routes, 2026-06-24), 312 (async Redis storage), 321 (brief quota); residual live 429 smoke tracked in `docs/GO_LIVE.md`
+- ✅ Per-creator rate limiting + usage quotas before each LLM/render job — shipped via Issues 228 (stacked slowapi limits on all LLM/render routes, 2026-06-24), 312 (async Redis storage), 321 (brief quota), 506 (registries derived from the live route table — this ✅ had rested on a 9-of-17 literal; 5 gaps found + fixed); residual live 429 smoke tracked in `docs/GO_LIVE.md`
 - ✅ YouTube data-retention/refresh fully compliant — Wave-4 Fix 3 (Issue 75b): 30-day partial-staleness purge per ToS §III.E.4.b (`docs/COMPLIANCE.md`)
 - ✅ `TOKEN_ENCRYPTION_KEY` rotation runbook written — `docs/RUNBOOKS.md` + `scripts/rotate_token_key.py` (zero-downtime MultiFernet rotation). Off-box escrow still open (Issue 255).
 - ✅ Terms of Service + Privacy Policy pages live AND linked — pages existed at `/static/tos.html` + `/static/privacy.html`; Wave-6 Fix B added a footer linking both from every static template (Google OAuth verification gate, Issue 29)
