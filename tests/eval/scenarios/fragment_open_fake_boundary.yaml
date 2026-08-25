@@ -1,0 +1,65 @@
+scenario: fragment_open_fake_boundary
+kind: snap
+description: >
+  Issue 484 / the Issue-441 fragment class (video 7e988321 rank 7): a clip
+  opened cold on the fragment "the Terry thing, no." The word before the
+  boundary is "but" — a coordinator, deliberately absent from the weak-opener
+  list (Issue 441 dropped coordinators because "But I think…" is a fine
+  open). The defect is the boundary again: "but" carries no terminal
+  punctuation and the pause is 0.9 s, so the fragment is the tail of the
+  previous sentence, split by Deepgram on a pause. Merging the fake boundary
+  restores the full thought — while "but" stays a legal opener elsewhere.
+  Principle: "Clean Context Boundary"
+
+input:
+  timeline:
+    version: 1
+    duration_s: 200.0
+    events:
+      - {type: silence,         start_s: 49.2, end_s: 50.1}
+      - {type: retention_spike, start_s: 85.0, end_s: 87.0, value: 1.6}
+  segments:
+    - start: 44.0
+      end: 47.0
+      text: "I get why you'd keep him."
+      words:
+        - {word: "I",     start: 44.0, end: 44.2}
+        - {word: "get",   start: 44.3, end: 44.5}
+        - {word: "why",   start: 44.6, end: 44.9}
+        - {word: "you'd", start: 45.0, end: 45.3}
+        - {word: "keep",  start: 45.4, end: 45.8}
+        - {word: "him.",  start: 45.9, end: 47.0}
+    - start: 47.6
+      end: 49.2
+      text: "And I was gonna say but"
+      words:
+        - {word: "And",   start: 47.6, end: 47.8}
+        - {word: "I",     start: 47.9, end: 48.0}
+        - {word: "was",   start: 48.1, end: 48.3}
+        - {word: "gonna", start: 48.4, end: 48.6}
+        - {word: "say",   start: 48.7, end: 48.9}
+        - {word: "but",   start: 49.0, end: 49.2}
+    - start: 50.1
+      end: 53.5
+      text: "the Terry thing, no."
+      words:
+        - {word: "the",    start: 50.1, end: 50.3}
+        - {word: "Terry",  start: 50.4, end: 50.8}
+        - {word: "thing,", start: 50.9, end: 51.3}
+        - {word: "no.",    start: 51.4, end: 53.5}
+    - start: 54.5
+      end: 88.0
+      text: "That trade market never existed."
+      words:
+        - {word: "That",     start: 54.5, end: 54.8}
+        - {word: "trade",    start: 54.9, end: 55.3}
+        - {word: "market",   start: 55.4, end: 55.9}
+        - {word: "never",    start: 56.0, end: 56.4}
+        - {word: "existed.", start: 56.5, end: 88.0}
+
+expected:
+  min_candidates: 1
+  starts_on_sentence_start: true
+  candidates:
+    - setup_start_s_min: 47.0
+      setup_start_s_max: 47.6

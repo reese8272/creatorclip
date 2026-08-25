@@ -265,8 +265,12 @@ SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "eval", "scenarios")
 # setup_before_loud_reaction, silence_only, endpoint_spike_first,
 # endpoint_spike_last, run_on_backward_snap, no_utterance_single_segment,
 # pause_weak_opener;
-# 30 → 31 when native_length_clamp landed — Issue 464)
-SCENARIO_FLOOR = 31
+# 30 → 31 when native_length_clamp landed — Issue 464;
+# 31 → 35 when the three Issue-484 fake-boundary fixtures landed
+# (fake_boundary_negation, hedge_open_fake_boundary, fragment_open_fake_boundary)
+# — the +4 also absorbs one file that had landed without a ratchet: the
+# directory held 32 files against the floor of 31 when 484 was built)
+SCENARIO_FLOOR = 35
 
 # Scenario files that are explicitly allowed to carry a pytest skip/xfail marker
 # (e.g. a known-broken scenario under active investigation). Add the YAML filename

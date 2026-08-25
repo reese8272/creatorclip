@@ -9,6 +9,8 @@ no-utterance index, and the pause-before-weak-opener walk-back).
 
 import logging
 
+import pytest
+
 from clip_engine.sentence_snap import (
     CLIP_TARGET_MAX_S,
     SENTENCE_SNAP_MAX_S,
@@ -530,3 +532,178 @@ def test_snap_start_pause_before_weak_opener_walks_back():
     walked-back open is the previous sentence's start, 1301.87."""
     sentences = build_sentence_index(PAUSE_WEAK_SEGMENTS)
     assert snap_start(1306.43, sentences) == 1301.87
+
+
+# ── Issue 484: a Deepgram utterance boundary is a PAUSE, not a sentence break ─
+
+# The live geometry from video 7e988321 rank 9: Deepgram ended an utterance
+# between "don't" and "feel", the index opened a "sentence" at "feel" (a strong
+# opener), and the rendered clip stated the OPPOSITE of what the speaker said.
+# The word before the boundary carries no terminal punctuation and the gap is
+# 0.9 s — a fake boundary the index must merge across.
+PERCY_SEGMENTS = [
+    _segment(
+        55.0,
+        59.5,
+        [
+            ("I", 55.0, 55.2),
+            ("like", 55.3, 55.6),
+            ("Percy", 55.7, 56.1),
+            ("Butler", 56.2, 56.7),
+            ("on", 56.8, 57.0),
+            ("special", 57.1, 57.6),
+            ("teams.", 57.7, 59.5),
+        ],
+    ),
+    _segment(
+        60.2,
+        62.4,
+        [("But", 60.2, 60.5), ("I", 60.6, 60.8), ("don't", 61.9, 62.4)],
+    ),
+    _segment(
+        63.3,
+        70.0,
+        [
+            ("feel", 63.3, 63.6),
+            ("like", 63.7, 63.9),
+            ("Percy", 64.0, 64.4),
+            ("Butler", 64.5, 64.9),
+            ("is", 65.0, 65.2),
+            ("a", 65.3, 65.4),
+            ("starting", 65.5, 66.0),
+            ("free", 66.1, 66.4),
+            ("anything.", 66.5, 70.0),
+        ],
+    ),
+]
+
+
+def test_build_index_merges_fake_utterance_boundary():
+    sentences = build_sentence_index(PERCY_SEGMENTS)
+    assert sentences == [
+        {"start_s": 55.0, "end_s": 59.5, "first_word": "I"},
+        {"start_s": 60.2, "end_s": 70.0, "first_word": "But"},
+    ]
+
+
+def test_build_index_terminal_punct_boundary_kept():
+    """Punctuation is authoritative: a small gap does not merge two sentences
+    when the first one actually ended."""
+    segments = [
+        _segment(60.2, 62.4, [("We", 60.2, 60.5), ("are", 60.6, 60.8), ("done.", 61.9, 62.4)]),
+        _segment(63.3, 65.0, [("Next", 63.3, 63.6), ("topic.", 63.7, 65.0)]),
+    ]
+    sentences = build_sentence_index(segments)
+    assert [(s["start_s"], s["end_s"]) for s in sentences] == [(60.2, 62.4), (63.3, 65.0)]
+
+
+def test_build_index_trailed_off_long_gap_keeps_break():
+    """>= _TRAILED_OFF_GAP_S of dead air means the speaker abandoned the
+    sentence — the utterance boundary is a real break even without punctuation."""
+    segments = [
+        _segment(60.2, 62.4, [("But", 60.2, 60.5), ("I", 60.6, 60.8), ("don't", 61.9, 62.4)]),
+        _segment(64.9, 66.5, [("Anyway", 64.9, 65.2), ("moving", 65.3, 65.8), ("on.", 65.9, 66.5)]),
+    ]
+    sentences = build_sentence_index(segments)  # gap 2.5 s
+    assert [(s["start_s"], s["end_s"]) for s in sentences] == [(60.2, 62.4), (64.9, 66.5)]
+
+
+def test_build_index_gap_at_threshold_keeps_break():
+    segments = [
+        _segment(60.2, 62.4, [("But", 60.2, 60.5), ("I", 60.6, 60.8), ("don't", 61.9, 62.4)]),
+        _segment(64.4, 66.0, [("Anyway", 64.4, 64.7), ("moving", 64.8, 65.3), ("on.", 65.4, 66.0)]),
+    ]
+    sentences = build_sentence_index(segments)  # gap exactly 2.0 s: strict <
+    assert len(sentences) == 2
+
+
+def test_build_index_speaker_change_keeps_break():
+    """A speaker change is a real boundary even without punctuation — and the
+    guard also stops overlapping cross-speaker diarized utterances merging."""
+    segments = [
+        {
+            **_segment(10.0, 12.0, [("so", 10.0, 10.4), ("I", 10.5, 10.8), ("was", 10.9, 12.0)]),
+            "speaker": 0,
+        },
+        {
+            **_segment(12.5, 14.0, [("hold", 12.5, 12.9), ("on.", 13.0, 14.0)]),
+            "speaker": 1,
+        },
+    ]
+    sentences = build_sentence_index(segments)
+    assert [(s["start_s"], s["end_s"]) for s in sentences] == [(10.0, 12.0), (12.5, 14.0)]
+
+
+def test_build_index_wordless_segment_closes_open_sentence():
+    """No gap is computable across a wordless segment, so it never merges."""
+    segments = [
+        _segment(10.0, 12.0, [("I", 10.0, 10.3), ("was", 10.4, 12.0)]),
+        {"start": 12.3, "end": 13.0, "text": "[music]"},
+        _segment(13.2, 15.0, [("saying", 13.2, 13.6), ("something.", 13.7, 15.0)]),
+    ]
+    sentences = build_sentence_index(segments)
+    assert [(s["start_s"], s["end_s"]) for s in sentences] == [
+        (10.0, 12.0),
+        (12.3, 13.0),
+        (13.2, 15.0),
+    ]
+
+
+def test_build_index_merge_chains_across_three_segments():
+    """One sentence split over three utterances collapses to one span."""
+    segments = [
+        _segment(10.0, 10.8, [("I", 10.0, 10.3), ("was", 10.4, 10.8)]),
+        _segment(11.2, 12.0, [("gonna", 11.2, 11.6), ("say", 11.7, 12.0)]),
+        _segment(12.5, 14.0, [("something", 12.5, 13.2), ("big.", 13.3, 14.0)]),
+    ]
+    sentences = build_sentence_index(segments)
+    assert sentences == [{"start_s": 10.0, "end_s": 14.0, "first_word": "I"}]
+
+
+def test_build_index_merge_applies_to_trailing_sentence_only():
+    """Only the segment's TRAILING unterminated sentence continues across the
+    boundary — sentences closed by punctuation inside the segment stay closed."""
+    segments = [
+        _segment(
+            10.0,
+            14.0,
+            [
+                ("That's", 10.0, 10.4),
+                ("it.", 10.5, 11.0),
+                ("But", 11.2, 11.5),
+                ("I", 11.6, 11.8),
+                ("don't", 12.0, 14.0),
+            ],
+        ),
+        _segment(14.6, 16.0, [("agree", 14.6, 15.0), ("at", 15.1, 15.3), ("all.", 15.4, 16.0)]),
+    ]
+    sentences = build_sentence_index(segments)
+    assert sentences == [
+        {"start_s": 10.0, "end_s": 11.0, "first_word": "That's"},
+        {"start_s": 11.2, "end_s": 16.0, "first_word": "But"},
+    ]
+
+
+def test_snap_start_fake_boundary_negation_preserved():
+    """The Issue-484 end-to-end shape: the raw start sits on the fake boundary
+    at "feel"; with the boundary merged the start is strictly inside the real
+    sentence and snaps back before the negation (60.2 - 0.3 lead-in, floored
+    at the previous sentence end 59.5)."""
+    sentences = build_sentence_index(PERCY_SEGMENTS)
+    assert snap_start(63.3, sentences) == pytest.approx(59.9)
+
+
+def test_snap_candidates_merge_collapse_trips_degenerate_disable(caplog):
+    """An unpunctuated multi-utterance transcript with small gaps now merges
+    toward one span — and a single span covering >= 80% of the video is the
+    untrustworthy-index shape, so snapping disables (Issue 456 semantics)."""
+    segments = [
+        _segment(5.0, 30.0, [("it", 5.0, 5.4), ("kept", 5.5, 30.0)]),
+        _segment(30.5, 55.0, [("going", 30.5, 31.0), ("and", 31.1, 55.0)]),
+        _segment(55.5, 90.0, [("going", 55.5, 56.0), ("still", 56.1, 90.0)]),
+    ]
+    candidates = [{"setup_start_s": 20.0, "start_s": 20.0, "peak_s": 60.0, "end_s": 85.0}]
+    with caplog.at_level(logging.WARNING, logger="clip_engine.sentence_snap"):
+        out = snap_candidates_to_sentences(candidates, segments, duration_s=100.0)
+    assert out == candidates  # raw geometry preserved
+    assert sum("degenerate" in r.message for r in caplog.records) == 1
