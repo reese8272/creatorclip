@@ -4,7 +4,37 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-20 (latest) — Issues 501 + 504: two gates that could pass without doing work
+## 2026-08-25 (latest) — Issue 484: the meaning-inverting cold open is fixed at the boundary
+
+The highest-impact known clip-quality defect (SEV2, was a beta blocker for a non-friend
+audience): a rendered clip opened on *"feel like Percy Butler is a starting free anything"* when
+the speaker said *"**don't** feel like"*. Root cause was structural, not lexical:
+`build_sentence_index` opened a sentence span at every Deepgram **utterance** boundary, but
+utterances split on **pauses** (`utt_split`, 0.8 s), not grammar — so a mid-sentence split
+manufactured a fake sentence start that every downstream guard correctly left alone.
+
+**The fix (PR #134):** terminal punctuation is now the boundary authority. An unterminated
+sentence continues across an utterance boundary unless the gap ≥ 2.0 s (trail-off), the speaker
+changes, or the next segment has no word timings. Fixed at index construction so both snap callers
+(signal + LLM paths) and the eval predicate are repaired at once. The Issue-441 residual (the
+`"maybe"`/`"Like,"` hedge class, the `"the Terry thing, no."` fragment) is cured by the same
+mechanism with the weak-opener list **byte-unchanged** — the issue's own warning ("no closed word
+class catches a fake boundary") held up in CHECK: negation guard lists are not an industry
+pattern; punctuation-primary segmentation is (Deepgram Paragraphs, WhisperX; DECISIONS
+2026-08-25, amending the 2026-08-05 "utterances are semantic units" ruling).
+
+Three new eval fixtures from video `7e988321`'s live ranks 9/12/7, red-first on the branch —
+note the trap they document: under the bug `starts_on_sentence_start` passed **vacuously**, so
+the red assertion is the `setup_start_s_max` pin. `SCENARIO_FLOOR` 31 → 35 (absorbing one
+pre-existing un-ratcheted file), landing-page public count 32 → 35, ten new unit tests. Suite
+**3312 passed / 0 failed** (3296 at handoff).
+
+**Still open on 484:** the live re-verification AC (fresh upload) — parked with the operator
+track per the 2026-08-20 scope decision.
+
+---
+
+## 2026-08-20 — Issues 501 + 504: two gates that could pass without doing work
 
 Lane L30 Batch B, first half. Both are the same defect at different altitudes: a gate reporting
 green over work it never performed.
