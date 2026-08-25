@@ -1,0 +1,64 @@
+scenario: hedge_open_fake_boundary
+kind: snap
+description: >
+  Issue 484 / the Issue-441 residual hedge class (video 7e988321 rank 12):
+  a clip opened cold on "maybe" — a hedge that is deliberately NOT in the
+  weak-opener list (no closed word class catches every hedge). The real
+  defect is the boundary: the previous utterance ends "And I'm thinking"
+  with no terminal punctuation and a 0.9 s pause, so "maybe he's…" is the
+  same sentence, split by Deepgram on a pause. Merging the fake boundary
+  moves the open back to "And I'm thinking maybe…" with the word list
+  byte-unchanged. Principle: "Clean Context Boundary"
+
+input:
+  timeline:
+    version: 1
+    duration_s: 200.0
+    events:
+      - {type: silence,         start_s: 58.9, end_s: 59.8}
+      - {type: retention_spike, start_s: 92.0, end_s: 94.0, value: 1.6}
+  segments:
+    - start: 52.0
+      end: 56.0
+      text: "He earned the second contract."
+      words:
+        - {word: "He",        start: 52.0, end: 52.2}
+        - {word: "earned",    start: 52.3, end: 52.8}
+        - {word: "the",       start: 52.9, end: 53.0}
+        - {word: "second",    start: 53.1, end: 53.6}
+        - {word: "contract.", start: 53.7, end: 56.0}
+    - start: 56.8
+      end: 58.9
+      text: "And I'm thinking"
+      words:
+        - {word: "And",      start: 56.8, end: 57.0}
+        - {word: "I'm",      start: 57.1, end: 57.4}
+        - {word: "thinking", start: 57.5, end: 58.9}
+    - start: 59.8
+      end: 65.0
+      text: "maybe he's the answer at nickel."
+      words:
+        - {word: "maybe",   start: 59.8, end: 60.1}
+        - {word: "he's",    start: 60.2, end: 60.4}
+        - {word: "the",     start: 60.5, end: 60.6}
+        - {word: "answer",  start: 60.7, end: 61.1}
+        - {word: "at",      start: 61.2, end: 61.3}
+        - {word: "nickel.", start: 61.4, end: 65.0}
+    - start: 66.0
+      end: 95.0
+      text: "The tape from December backs that up."
+      words:
+        - {word: "The",      start: 66.0, end: 66.2}
+        - {word: "tape",     start: 66.3, end: 66.7}
+        - {word: "from",     start: 66.8, end: 67.0}
+        - {word: "December", start: 67.1, end: 67.7}
+        - {word: "backs",    start: 67.8, end: 68.2}
+        - {word: "that",     start: 68.3, end: 68.5}
+        - {word: "up.",      start: 68.6, end: 95.0}
+
+expected:
+  min_candidates: 1
+  starts_on_sentence_start: true
+  candidates:
+    - setup_start_s_min: 56.0
+      setup_start_s_max: 56.8

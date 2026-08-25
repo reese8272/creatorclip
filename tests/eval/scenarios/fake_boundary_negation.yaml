@@ -1,0 +1,68 @@
+scenario: fake_boundary_negation
+kind: snap
+description: >
+  Issue 484, the live meaning-inverting cold open (video 7e988321 rank 9):
+  Deepgram ended an utterance between "don't" and "feel", so the sentence
+  index opened a span at "feel" — a strong opener — and the pause branch kept
+  the raw start untouched. The clip shipped "feel like Percy Butler is a
+  starting free anything", the OPPOSITE of what the speaker said. The word
+  before the boundary carries no terminal punctuation and the gap is 0.9 s:
+  a fake (pause-only) boundary, not a grammatical one. The sentence must
+  continue across it, so the open lands before the negation. Principle:
+  "Clean Context Boundary"
+
+input:
+  timeline:
+    version: 1
+    duration_s: 200.0
+    events:
+      - {type: silence,         start_s: 62.4, end_s: 63.3}
+      - {type: retention_spike, start_s: 95.0, end_s: 97.0, value: 1.6}
+  segments:
+    - start: 55.0
+      end: 59.5
+      text: "I like Percy Butler on special teams."
+      words:
+        - {word: "I",       start: 55.0, end: 55.2}
+        - {word: "like",    start: 55.3, end: 55.6}
+        - {word: "Percy",   start: 55.7, end: 56.1}
+        - {word: "Butler",  start: 56.2, end: 56.7}
+        - {word: "on",      start: 56.8, end: 57.0}
+        - {word: "special", start: 57.1, end: 57.6}
+        - {word: "teams.",  start: 57.7, end: 59.5}
+    - start: 60.2
+      end: 62.4
+      text: "But I don't"
+      words:
+        - {word: "But",   start: 60.2, end: 60.5}
+        - {word: "I",     start: 60.6, end: 60.8}
+        - {word: "don't", start: 61.9, end: 62.4}
+    - start: 63.3
+      end: 70.0
+      text: "feel like Percy Butler is a starting free anything."
+      words:
+        - {word: "feel",      start: 63.3, end: 63.6}
+        - {word: "like",      start: 63.7, end: 63.9}
+        - {word: "Percy",     start: 64.0, end: 64.4}
+        - {word: "Butler",    start: 64.5, end: 64.9}
+        - {word: "is",        start: 65.0, end: 65.2}
+        - {word: "a",         start: 65.3, end: 65.4}
+        - {word: "starting",  start: 65.5, end: 66.0}
+        - {word: "free",      start: 66.1, end: 66.4}
+        - {word: "anything.", start: 66.5, end: 70.0}
+    - start: 71.0
+      end: 100.0
+      text: "That contract tells you everything."
+      words:
+        - {word: "That",        start: 71.0, end: 71.3}
+        - {word: "contract",    start: 71.4, end: 71.9}
+        - {word: "tells",       start: 72.0, end: 72.4}
+        - {word: "you",         start: 72.5, end: 72.7}
+        - {word: "everything.", start: 72.8, end: 100.0}
+
+expected:
+  min_candidates: 1
+  starts_on_sentence_start: true
+  candidates:
+    - setup_start_s_min: 59.5
+      setup_start_s_max: 60.2
