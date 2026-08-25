@@ -1,10 +1,11 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-20 · **Branch:** `fix/505-derive-rls-sweep` ·
+**Last updated:** 2026-08-25 · **Branch:** `fix/issue-484-fake-utterance-boundary` ·
 **Working tree:** ✅ **CLEAN**
 
-> ⚠️ **YOU ARE NOT ON `main`.** One PR is open: **#133** (Issue 505). Merging it is the first action
-> below. Everything else from this session is already merged and deployed.
+> ⚠️ **One PR is open: #134 (Issue 484 — the meaning-inverting cold open).** Merging it once green
+> is the first action below. Everything from earlier sessions is already merged and deployed
+> (**#133**/Issue 505 merged 2026-08-20).
 
 **Shipped 2026-08-17:** **#119** (the audit itself + Issue 498 items 1–3), **#120** (Issue 521 — the
 lying gate), **#121** (Issue 520 — the personalization SEV1), **#122** (handoff).
@@ -18,10 +19,15 @@ apt call bounded), **#126** (close-out).
 **#128** (closure-integrity audit), **#129** (**501** fail-closed coverage gate + **504** nightly
 lanes prove they executed), **#130** (**507** RENDER_TASKS from the call graph), **#131** (**506**
 route registries from the live route table), **#132** (**503** mutmut actually runs + **502** no step
-swallows its verdict). **#133 (505 — RLS from the schema) is open.**
+swallows its verdict), **#133** (**505** RLS from the schema, merged 2026-08-20 late).
 
-**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3296 passed, 64 skipped, 0 failed**
-(3259 at the start of the day; +37 across the six issues).
+**In flight 2026-08-25:** **#134** (**484** — clips must not open on a clause that inverts the
+speaker's meaning; `build_sentence_index` now merges fake utterance boundaries; the Issue-441
+hedge/fragment residual cured with the weak-opener list byte-unchanged; `SCENARIO_FLOOR` 31 → 35).
+Details: `docs/PROJECT_STATE.md` 2026-08-25 + `docs/DECISIONS.md` 2026-08-25.
+
+**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3312 passed, 64 skipped, 0 failed**
+(3296 at the start of the day; +16 from Issue 484).
 
 **Prod:** `https://autoclip.studio`. **Running commit VERIFIED** — the container's image revision
 label reads `1dd03b84d161ccc9c2425c8f0b4e4144310b2590` (the #131 merge) and `/health` returns 200 over
@@ -85,8 +91,8 @@ live — that needs ≥21 clips rated.
 
 **The single active goal: work Lane L30's remaining code queue to empty.**
 
-**Batches B and C are DONE** (2026-08-20). Issues 501, 502, 503, 504, 505, 506, 507 are built,
-merged (505 pending) and — where a read-only introspection could reach them — live-verified.
+**Batches B and C are DONE** (2026-08-20, all merged). **Issue 484 is BUILT** (2026-08-25, PR #134
+— merge pending; its fresh-upload live AC stays open with the operator track).
 
 **The remaining code queue**, cheapest-first:
 
@@ -94,22 +100,22 @@ merged (505 pending) and — where a read-only introspection could reach them �
 |---|---|---|
 | **G** remainder | 523 | Stripe async-payment: take-money-grant-nothing, latent behind a Dashboard toggle. **Recommended next** if you want a money-path fix. |
 | **H** | 526, 527 | Dead output — the GDPR export has no UI while the Privacy Policy says it does; 527 is six paid capabilities consumed by nothing (mostly delete/wire-up/keep *decisions*, not code). |
-| **D / E / F** | 508–510 / 511–515 / 516–519 | Docs-as-schema, production truthfulness, process artifacts. **508 is the natural follow-on to this session** — it is the same "derive it, don't type it" rule applied to doc citations, and this session produced fresh evidence for it. |
-| *also open* | 498 items 4–5, 445, 484, 495 | **484 is the highest-impact known clip-quality defect** (a clip opening on a clause that inverts the speaker's meaning) — the one to pick for product impact over process hygiene. |
+| **D / E / F** | 508–510 / 511–515 / 516–519 | Docs-as-schema, production truthfulness, process artifacts. **508 is the natural follow-on** — the same "derive it, don't type it" rule applied to doc citations. |
+| *also open* | 498 items 4–5, 445, 495 | 445 (three-pile triage UI) needs a real CHECK phase — four design questions open, AC numbering drifted. |
 
 **Blocked and not workable under the scope decision:** 528 (needs 529).
 
 ### → NEXT ACTION
 
-1. **Merge PR #133 (Issue 505)** once green, then `git checkout main && git pull --ff-only origin main`.
-   It carries **migration 0064** (RLS on `creator_identity`), so the deploy runs a migration —
-   expected. Its integration-lane half is **CI-verified only**; there is no Postgres on this box.
+1. **Merge PR #134 (Issue 484)** once green, then `git checkout main && git pull --ff-only origin main`.
+   No migration in this change. Note the deploy ships a changed clip engine: the next real video
+   processed may produce slightly earlier clip starts where Deepgram split a sentence on a pause —
+   that is the fix working, not a regression.
 
 2. **Then pick one:**
-   - **484** — product impact. The meaning-inverting cold open. Its last AC needs a fresh upload,
-     which is parked, so everything *except* that is doable now.
    - **523** — money path. Stripe async-payment.
-   - **508** — continues this session's thread directly.
+   - **508** — docs-as-schema; continues the "derive it, don't type it" thread.
+   - **445** — the three-pile triage UI (bigger; run a real CHECK phase first).
 
 **Do NOT do:** anything on the parked operator list, or Issue 528.
 
@@ -387,8 +393,10 @@ Ordered by consequence, per `docs/runbooks/255-258-dr-durability.md`:
 - **Issue 445 — the three-pile triage UI.** `docs/issues.md` Lane L27. Strangers hit the review queue
   on their **first** upload, and reviewed state does not survive a reload today. Four design
   questions open — **run a real CHECK phase first**; AC numbering has drifted.
-- **Issue 484** — the meaning-inverting cold open (a clip opening on `"feel like Percy Butler is…"`
-  when the speaker said *"don't feel like"*). Highest-impact known clip-quality defect.
+- ✅ **Issue 484 — BUILT 2026-08-25 (PR #134).** The meaning-inverting cold open is fixed at the
+  sentence index (fake utterance boundaries merge; weak-opener list untouched). Only its
+  fresh-upload live AC remains, parked with the operator track — one upload now collapses **four**
+  waiting live checks (520 active path, 524 render guard, 525 delivery, 484 real output).
 - **Issue 495** — the deferred 2026-08-14 audit list: brand-kit fields that cannot be cleared; the
   `captions_enabled` toggle no renderer reads; `Profile.tsx` hardcoded `"—"` stats; the fully-built
   **data export with no UI** (GDPR Art. 15/20); `is_rewatch_spike` + `captions_available` never

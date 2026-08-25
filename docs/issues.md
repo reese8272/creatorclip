@@ -5523,9 +5523,10 @@ captions/caption_position must respect the padded safe area.
 
 ### Issue 484: clips must not open on a clause that inverts the speaker's meaning
 
-- [ ] **Status:** open · **Size:** M · filed 2026-08-13 (promoted from `docs/OFF_COURSE_BUGS.md`
+- [x] **Status:** **DONE 2026-08-25** (PR #134; live-verification AC deliberately open — see the
+      build note) · **Size:** M · filed 2026-08-13 (promoted from `docs/OFF_COURSE_BUGS.md`
       2026-08-10, where it had sat open, unfiled and unowned) · **Lane:** L29 follow-up ·
-      **BETA BLOCKER for a non-friend audience**
+      was **BETA BLOCKER for a non-friend audience**
 
 **Severity: SEV2 — a clip that states the inverse of the creator's actual opinion is the worst
 output this system can produce.** It is worse than an awkward open: an awkward open is a quality
@@ -5565,20 +5566,46 @@ these survived it and belong with this work because they share the same boundary
 - the fragment class — rank 7 `"the Terry thing, no."`
 
 **Acceptance**
-- [ ] An eval fixture built from **this exact case** — the `"don't" / "feel like Percy Butler…"`
+- [x] An eval fixture built from **this exact case** — the `"don't" / "feel like Percy Butler…"`
       boundary — is added to `tests/eval/scenarios/` and fails before the fix, passes after
-- [ ] A clip does not open at a sentence-index boundary that is an utterance boundary rather than a
-      grammatical one, per the signal chosen in CHECK
-- [ ] The weak-opener word list is **not** extended (regression guard: the fix must hold with the
-      list unchanged)
-- [ ] The Issue 441 residual hedge opens (`"Like,"`, `"maybe"`) and the fragment class no longer
-      open a clip
-- [ ] `SCENARIO_FLOOR` ratcheted to reflect the added fixture(s), in both pinned locations
-      (`tests/test_clip_engine.py`, `tests/test_eval_transparency.py`)
-- [ ] Setup-start geometry is unaffected — the existing geometry and snap scenarios stay green
-- [ ] Scores still cite a named principle from `docs/CLIPPING_PRINCIPLES.md`
-- [ ] `docs/OFF_COURSE_BUGS.md` 2026-08-10 entry flipped from 📋 Open to ✅ Fixed with the PR
+      (`fake_boundary_negation.yaml`; the red commit is on the PR branch)
+- [x] A clip does not open at a sentence-index boundary that is an utterance boundary rather than a
+      grammatical one, per the signal chosen in CHECK (signal (a), punctuation-primary)
+- [x] The weak-opener word list is **not** extended (regression guard: the fix must hold with the
+      list unchanged — `fragment_open_fake_boundary.yaml` pins this: its predecessor `"but"` is a
+      coordinator that must STAY a legal opener)
+- [x] The Issue 441 residual hedge opens (`"Like,"`, `"maybe"`) and the fragment class no longer
+      open a clip (`hedge_open_fake_boundary.yaml` + `fragment_open_fake_boundary.yaml`; `"Like,"`
+      is the same fake-boundary shape as `"maybe"` and is covered by the same mechanism — one
+      fixture per distinct shape, not per word)
+- [x] `SCENARIO_FLOOR` ratcheted to reflect the added fixture(s), in both pinned locations
+      (`tests/test_clip_engine.py`, `tests/test_eval_transparency.py`) — 31 → 35
+- [x] Setup-start geometry is unaffected — the existing geometry and snap scenarios stay green
+      (full suite 3312 passed / 0 failed; the only pre-existing unpunctuated cross-segment
+      boundaries are the Issue-456 run-on fixtures' 5.0 s gaps, preserved by the 2.0 s threshold)
+- [x] Scores still cite a named principle from `docs/CLIPPING_PRINCIPLES.md` (Principle 12,
+      reworded to make punctuation the boundary authority)
+- [x] `docs/OFF_COURSE_BUGS.md` 2026-08-10 entry flipped from 📋 Open to ✅ Fixed with the PR
 - [ ] Verified on real output in the next fresh-upload session, not only on the fixture
+      — **deliberately open**: needs an owner-driven upload, PARKED per the 2026-08-20 scope
+      decision (operator track deferred until the code queue is empty)
+
+**Build note (2026-08-25, PR #134).** Signal (a) chosen and built at index construction, not as a
+`snap_start` guard: `build_sentence_index` now carries open-sentence state across segments, so a
+sentence left unterminated at an utterance boundary CONTINUES unless the gap ≥ 2.0 s
+(`_TRAILED_OFF_GAP_S` — trail-off), the speaker changes, or the next segment is wordless. Fixing
+the index repairs both `snap_start` callers (`snap_candidates_to_sentences` + `merge.py`'s LLM
+path) and makes the eval predicate `starts_on_sentence_start` truthful — under the bug it passed
+**vacuously** on this exact defect, which is why the fixtures' red assertion is the per-candidate
+`setup_start_s_max` pin instead. Signal (b) (negation word list) rejected: redundant once the
+boundary is real, and the same list-shape this issue forbids. Threshold rationale: Deepgram splits
+utterances at pauses ≥ `utt_split` (0.8 s), so a fake boundary's gap typically already exceeds
+0.8 s — punctuation absence is the primary signal, the gap term only the trail-off escape hatch;
+2.0 s sits below the pinned Issue-456 run-on fixtures' genuine 5.0 s unpunctuated breaks. Full
+rationale + industry sources in `docs/DECISIONS.md` (2026-08-25), which amends the 2026-08-05
+"utterances are semantic units" ruling. Known accepted consequence: a fully unpunctuated
+multi-utterance transcript now merges toward one span and trips the Issue-456 degenerate disable
+(pinned by `test_snap_candidates_merge_collapse_trips_degenerate_disable`).
 
 ---
 

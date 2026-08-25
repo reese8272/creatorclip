@@ -5,7 +5,63 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-20 (latest) — RLS: policy `creator_identity`, exempt four tables with written reasons
+## 2026-08-25 (latest) — Sentence boundaries: terminal punctuation is the authority; an utterance boundary is a pause (Issue 484)
+
+**Decision (Issue 484, PR #134).** `build_sentence_index` no longer opens a sentence span at every
+Deepgram utterance boundary. A sentence left **unterminated** (last word carries no terminal
+punctuation) at a segment boundary **continues** into the next segment, unless one of three real
+boundary signals is present: the gap reaches `_TRAILED_OFF_GAP_S = 2.0` s (the speaker abandoned
+the sentence), the **speaker changes** (a real boundary even without punctuation, and the guard
+that keeps overlapping cross-speaker diarized utterances from merging), or the next segment has no
+word timings (no gap computable). This **amends the 2026-08-05 ruling (1)**, whose premise
+"utterances are semantic units" was half right: utterance *words* carry reliable punctuation, but
+the utterance *split* is pause-driven (`utt_split`, default 0.8 s) and can land mid-sentence —
+which is how a clip opened on `"feel like Percy Butler…"` when the speaker said `"don't feel
+like"`, inverting the meaning. The 2026-08-05 fix traded the word-level inversion class for this
+utterance-level one; this entry closes the residue.
+
+**Why punctuation-primary (industry standard, checked).** Deepgram's own `utt_split` doc describes
+a pure silence-gap trigger, and Deepgram derives its *Paragraphs* feature from punctuation, not
+utterances; WhisperX builds sentence-per-segment output by sentence-tokenizing the punctuated
+transcript rather than trusting VAD segments; subtitle standards (BBC) break at
+punctuation/clause boundaries. ASR punctuation restoration is most reliable exactly where we need
+it — terminal punctuation (periods/questions), notably better than commas. Sources:
+https://developers.deepgram.com/docs/utterance-split ·
+https://developers.deepgram.com/docs/paragraphs · https://github.com/m-bain/whisperx ·
+https://github.com/segment-any-text/wtpsplit.
+
+**Threshold rationale (2.0 s, strict `<`).** Punctuation absence is the *primary* signal; the gap
+term is only the trail-off escape hatch. It must sit above `utt_split` semantics being meaningless
+(a fake boundary's gap is typically already ≥ 0.8 s, so a sub-0.8 s pause test would never fire)
+and below **5.0 s** — the pinned Issue-456 run-on fixtures carry *genuine* unpunctuated breaks
+with exactly 5.0 s gaps that must survive. A gap of exactly 2.0 keeps the break.
+
+**Rejected alternatives.**
+- **Signal (b), a negation/auxiliary word list at cut points** (the issue's own second option):
+  no industry pattern found; brittle (sarcasm, hedges, double negatives all break lexical rules);
+  redundant once the boundary itself is correct; and it is the same list-shape the issue's
+  "do not extend the weak-opener list" warning exists to block.
+- **A guard inside `snap_start`** instead of the index: leaves `merge.py`'s LLM-moment path and
+  the eval predicate `starts_on_sentence_start` reading the broken index — that predicate passed
+  **vacuously** on the live defect, which is exactly the vacuous-green shape gotcha 14 warns about.
+- **Resurrecting `settings.MAX_SNAP_S` / `SENTENCE_BOUNDARY_MIN_PAUSE_MS`**: dead config keys
+  (read by nothing since snapping moved to `sentence_snap.py`); the threshold is a module constant
+  like its siblings.
+
+**Accepted consequences, written down so they are not chased as regressions.** (1) A false merge
+(ASR missed a period, joining two real sentences) makes a span longer, so a start snaps earlier or
+falls back raw — bounded by `SENTENCE_SNAP_MAX_S` / `_RUN_ON_BACKWARD_CAP_S` /
+`backward_limit_s` / the Issue-456 raw-start fallback; the failure mode is asymmetric (a slightly
+early open vs. a meaning inversion) and acceptable. (2) A fully unpunctuated multi-utterance
+transcript now merges toward one span and trips the Issue-456 degenerate disable — correct, since
+a punctuation-less index is untrustworthy; pinned by
+`test_snap_candidates_merge_collapse_trips_degenerate_disable`. (3) The weak-opener list is
+byte-unchanged, and Principle 12's wording was corrected from "terminal-punctuation token **or**
+silence gap" to punctuation-as-authority, matching what the code now does.
+
+---
+
+## 2026-08-20 — RLS: policy `creator_identity`, exempt four tables with written reasons
 
 **Decision (Issue 505).** Of the tenant tables with a `creator_id` column and no RLS policy, one
 gets a policy and the rest get **recorded, machine-checked exemptions**. The exemption bar is
