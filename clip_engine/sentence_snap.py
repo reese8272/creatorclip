@@ -9,10 +9,14 @@ sentence ENDS (terminal-punctuation word tokens) within a 3 s radius, so a raw
 ``setup_start_s`` landing mid-sentence more than 3 s after the previous
 sentence end survives unchanged — the live meaning-inverting cut ("I don't |
 really think it's gonna happen"). This module rebuilds SENTENCE spans from the
-Deepgram utterance segments (utterances are semantic units and words carry
-punctuation — https://developers.deepgram.com/docs/utterances,
-https://developers.deepgram.com/docs/punctuation) and snaps candidate edges to
-sentence STARTS/ends with a sentence-scale search radius.
+Deepgram utterance segments: words carry restored punctuation
+(https://developers.deepgram.com/docs/punctuation), and terminal punctuation —
+not the utterance split — is the boundary authority. Deepgram splits
+utterances on PAUSES (``utt_split``, default 0.8 s —
+https://developers.deepgram.com/docs/utterance-split), so an unterminated
+sentence CONTINUES across an utterance boundary (Issue 484: "don't | feel
+like Percy Butler…" — the split boundary inverted the speaker's meaning).
+Candidate edges snap to sentence STARTS/ends with a sentence-scale radius.
 
 Principle #12 "Clean Context Boundary": a clip never opens or closes
 mid-sentence. The start guard is bounded — when a start falls strictly inside
@@ -58,10 +62,13 @@ def effective_max_len_s(optimal_clip_len_s: float | None) -> float:
     )
 
 
-# Tokens that cannot open a clip (Issue 441). A Deepgram utterance boundary is a
-# PAUSE, not a grammatical break, so "because they still don't know what Mikey
-# is." is a first-class sentence start and snapping to it is a no-op — which is
-# how five of nine rendered clips on one video opened mid-thought.
+# Tokens that cannot open a clip (Issue 441). Deepgram can split on the pause
+# right AFTER a completed sentence, so "because they still don't know what
+# Mikey is." is a first-class sentence start and snapping to it is a no-op —
+# which is how five of nine rendered clips on one video opened mid-thought.
+# (The other pause-split shape — a boundary with NO terminal punctuation
+# before it — is not a sentence start at all; build_sentence_index merges
+# those since Issue 484, which is why this list needs no negation words.)
 #
 # A closed word list, not a parser: these are closed grammatical classes, so
 # enumeration is exact and a coreference model would be a dependency bought for
@@ -151,6 +158,16 @@ _RUN_ON_BACKWARD_CAP_S = 30.0
 # against it collapses every candidate onto one [0, CLIP_TARGET_MAX_S] window.
 _DEGENERATE_COVERAGE = 0.8
 
+# A sentence that stops without terminal punctuation and resumes within this
+# many seconds has NOT ended (Issue 484). Punctuation absence is the primary
+# signal: Deepgram splits utterances on pauses >= utt_split (default 0.8 s),
+# so the gap at a fake boundary is typically already past 0.8 s and a
+# sub-utt_split test would never fire. At or beyond this gap the speaker
+# trailed off mid-sentence and the break is real. Must stay <= 5.0 s — the
+# pinned Issue-456 run-on fixtures carry genuine unpunctuated breaks with
+# exactly 5.0 s gaps that must survive.
+_TRAILED_OFF_GAP_S = 2.0
+
 
 def _normalize_token(word: str) -> str:
     """Lowercase a transcript token and strip surrounding punctuation."""
@@ -163,18 +180,35 @@ def is_weak_opener(word: str | None) -> bool:
 
 
 def build_sentence_index(segments: list[dict]) -> list[dict]:
-    """Build ``[{"start_s", "end_s"}, ...]`` sentence spans from transcript segments.
+    """Build ``[{"start_s", "end_s", "first_word"}, ...]`` sentence spans.
 
-    Each Deepgram utterance opens a sentence; within a segment a word whose
-    token carries terminal punctuation closes the current sentence and the next
-    word opens a new one. A segment without word timings contributes a single
-    sentence spanning the whole segment. Spans are returned in chronological
-    order.
+    Terminal punctuation is the boundary authority: a word whose token carries
+    it closes the current sentence and the next word opens a new one. A
+    Deepgram utterance boundary is a PAUSE, not a grammatical break (Issue
+    484), so a sentence left unterminated at a segment boundary CONTINUES into
+    the next segment — unless the gap reaches ``_TRAILED_OFF_GAP_S`` (the
+    speaker abandoned the sentence), the speaker changes (a real boundary even
+    without punctuation), or the next segment has no word timings (no gap
+    computable). A segment without word timings contributes a single sentence
+    spanning the whole segment. Spans are returned in chronological order.
     """
     sentences: list[dict] = []
+    open_start: float | None = None
+    open_word = ""
+    last_end = 0.0
+    prev_speaker = None
+
+    def _close() -> None:
+        nonlocal open_start, open_word
+        if open_start is not None:
+            sentences.append({"start_s": open_start, "end_s": last_end, "first_word": open_word})
+            open_start = None
+            open_word = ""
+
     for seg in segments or []:
         words = seg.get("words") or []
         if not words:
+            _close()
             seg_start = seg.get("start")
             seg_end = seg.get("end")
             if seg_start is not None and seg_end is not None and seg_end > seg_start:
@@ -188,9 +222,12 @@ def build_sentence_index(segments: list[dict]) -> list[dict]:
                 )
             continue
 
-        open_start: float | None = None
-        open_word = ""
-        last_end = 0.0
+        if open_start is not None:
+            gap = float(words[0].get("start", 0.0)) - last_end
+            if gap >= _TRAILED_OFF_GAP_S or seg.get("speaker") != prev_speaker:
+                _close()
+        prev_speaker = seg.get("speaker")
+
         for w in words:
             w_start = float(w.get("start", 0.0))
             w_end = float(w.get("end", w_start))
@@ -205,9 +242,8 @@ def build_sentence_index(segments: list[dict]) -> list[dict]:
                 sentences.append({"start_s": open_start, "end_s": w_end, "first_word": open_word})
                 open_start = None
                 open_word = ""
-        # Utterance boundary closes an unterminated sentence (speaker trailed off).
-        if open_start is not None:
-            sentences.append({"start_s": open_start, "end_s": last_end, "first_word": open_word})
+    # End of transcript closes the last unterminated sentence.
+    _close()
 
     sentences.sort(key=lambda s: s["start_s"])
     return sentences
