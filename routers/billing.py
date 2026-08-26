@@ -217,13 +217,32 @@ async def checkout(
     return CheckoutOut(checkout_url=url)
 
 
+# Issue 523 — both fulfillment events take the SAME path below: the
+# data.object of async_payment_succeeded is a Checkout Session with
+# payment_status now "paid", exactly the shape completed carries, and the
+# stripe_session_id idempotency key is what Stripe documents for precisely
+# this pair (a card purchase fulfills via completed; a delayed method via
+# async_payment_succeeded days later; both converge on one dedupe key).
+_FULFILLMENT_EVENTS = frozenset(
+    {
+        "checkout.session.completed",
+        "checkout.session.async_payment_succeeded",
+    }
+)
+
+
 @router.post("/webhook", include_in_schema=False)
 @limiter.limit("60/minute", key_func=get_remote_address)
 async def stripe_webhook(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Stripe sends checkout.session.completed here to fulfill pack purchases.
+    """Fulfill pack purchases from Stripe Checkout events.
+
+    Handles checkout.session.completed and (Issue 523) the async pair:
+    async_payment_succeeded fulfills through the identical path, and
+    async_payment_failed is logged — nothing was granted, so there is no
+    ledger action, but the failure must be observable.
 
     Rate-limited per source IP at the Stripe-published webhook delivery rate.
     Sits in front of the signature check so a flood of bad-signature payloads
@@ -242,7 +261,26 @@ async def stripe_webhook(
         logger.warning("Stripe webhook parse error: %s", exc)
         raise HTTPException(status_code=400, detail="Bad webhook payload") from exc
 
-    if event["type"] != "checkout.session.completed":
+    if event["type"] == "checkout.session.async_payment_failed":
+        # Issue 523 — the delayed payment did not land. The completed event was
+        # (correctly) ignored as unpaid, so nothing was ever granted and there
+        # is no ledger action to take — but a customer whose money bounced must
+        # be visible in the event log, not silently dropped.
+        failed_cs = event["data"]["object"]
+        failed_meta = failed_cs.get("metadata") or {}
+        log_event(
+            "billing_async_payment_failed",
+            pack_id=failed_meta.get("pack_id"),
+            creator_id=failed_meta.get("creator_id"),
+        )
+        logger.warning(
+            "billing async payment failed session=%s pack=%s",
+            failed_cs.get("id"),
+            failed_meta.get("pack_id"),
+        )
+        return {"status": "async_payment_failed"}
+
+    if event["type"] not in _FULFILLMENT_EVENTS:
         return {"status": "ignored"}
 
     cs = event["data"]["object"]
@@ -253,10 +291,24 @@ async def stripe_webhook(
     # is not a valid outcome (price_cents > 0 for all PURCHASABLE_PACKS), so the
     # narrower guard `== 'paid'` is correct here — async/delayed methods (ACH,
     # bank transfer, BNPL) complete the session flow but defer collection;
-    # checkout.session.async_payment_succeeded fires later when payment actually
+    # checkout.session.async_payment_succeeded (handled above via
+    # _FULFILLMENT_EVENTS since Issue 523) fires later when payment actually
     # lands. Absent payment_status (malformed/unknown payload) is also rejected.
+    # Observable, not a silent drop (Issue 523): an unpaid completion is the
+    # first surfacing of an async-shaped session.
     # Source: https://docs.stripe.com/checkout/fulfillment
     if cs.get("payment_status") != "paid":
+        log_event(
+            "billing_webhook_ignored",
+            reason="payment_status_not_paid",
+            event_type=event["type"],
+        )
+        logger.info(
+            "billing webhook ignored session=%s event=%s payment_status=%s",
+            cs.get("id"),
+            event["type"],
+            cs.get("payment_status"),
+        )
         return {"status": "ignored"}
 
     meta = cs.get("metadata") or {}
@@ -313,7 +365,12 @@ async def stripe_webhook(
         price_cents=pack.price_cents,
     )
     await session.commit()
-    log_event("billing_webhook_processed", pack_id=pack_id, creator_id=str(creator_id))
+    log_event(
+        "billing_webhook_processed",
+        pack_id=pack_id,
+        creator_id=str(creator_id),
+        event_type=event["type"],
+    )
     logger.info(
         "billing fulfilled pack=%s creator=%s minutes=%d", pack_id, creator_id, pack.minutes
     )

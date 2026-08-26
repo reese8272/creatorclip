@@ -4677,7 +4677,7 @@ async def _reconcile_stripe_ledger_async() -> None:
     paid_sessions = await asyncio.get_event_loop().run_in_executor(
         None,
         list_recent_paid_sessions,
-        settings.STRIPE_RECONCILE_LOOKBACK_HOURS,
+        settings.STRIPE_RECONCILE_SETTLEMENT_HORIZON_DAYS * 24,
     )
 
     granted = 0

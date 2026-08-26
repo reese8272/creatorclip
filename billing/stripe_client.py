@@ -92,6 +92,15 @@ def create_checkout_session(
     per_min = pack.price_cents / pack.minutes
     params: dict[str, Any] = {
         "mode": "payment",
+        # Issue 523 — pinned ON PURPOSE, against Stripe's dynamic-payment-methods
+        # guidance ("never pass payment_method_types"). Unpinned, the offered
+        # method set is a Dashboard toggle: enabling ACH/BNPL there arms a
+        # delayed-settlement flow with zero code review, and the Dashboard
+        # webhook endpoint's enabled_events list is unversioned, so the async
+        # fulfillment branches could be dead on arrival. The pin makes enabling
+        # a delayed method a reviewed code change. Un-pinning checklist in
+        # docs/DECISIONS.md (2026-08-26, Issue 523).
+        "payment_method_types": ["card"],
         "line_items": [
             {
                 "price_data": {
@@ -156,14 +165,26 @@ def construct_webhook_event(payload: bytes, sig_header: str) -> stripe.Event:
 
 
 def list_recent_paid_sessions(lookback_hours: int) -> list[dict]:
-    """Return Checkout sessions from the last *lookback_hours* with payment_status=='paid'.
+    """Return Checkout sessions created in the last *lookback_hours* with
+    ``payment_status == 'paid'``.
+
+    ``lookback_hours`` is a SETTLEMENT HORIZON, not a webhook-retry window
+    (Issue 523): the list API can only filter on session *creation* time, and a
+    delayed payment method settles days after its session was created — so the
+    window must be wide enough that any session which can still settle is still
+    inside it. The caller derives it from
+    ``STRIPE_RECONCILE_SETTLEMENT_HORIZON_DAYS``. The old 48 h value made the
+    sweep structurally blind to every delayed settlement.
 
     Uses the Stripe Sessions list API with ``status='complete'`` and a ``created[gte]``
     filter, then filters client-side for ``payment_status == 'paid'`` (the API does not
     support ``payment_status`` as a server-side filter — confirmed from Stripe docs).
 
     Pagination is cursor-based (``starting_after``): pages until ``has_more=False`` or
-    the oldest session's ``created`` timestamp falls before the lookback window.
+    the oldest session's ``created`` timestamp falls before the lookback window. The
+    client-side stop is deliberately redundant with the server-side ``created[gte]``
+    — the server filter caps payload, the client stop caps pages if the server
+    filter ever misbehaves.
 
     Returns a list of plain dicts (the session object fields we need), not Stripe objects,
     so the caller does not depend on the Stripe SDK model at runtime.
