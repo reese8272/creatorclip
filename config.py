@@ -899,12 +899,17 @@ class Settings(BaseSettings):
     # Scale-checklist E (backpressure): every external call needs a bounded
     # timeout. (Issue 106)
     STRIPE_TIMEOUT_S: int = 10
-    # Issue 205 — Stripe ledger reconciliation sweep. The daily Beat task looks
-    # back this many hours for paid Checkout sessions and grants minutes to any
-    # that are missing a MinutePack row. 48h default: covers one missed Beat run
-    # plus a Stripe retry window. Stripe keeps events/sessions for 30 days via
-    # the API so this can be raised further if needed.
-    STRIPE_RECONCILE_LOOKBACK_HOURS: int = 48
+    # Issues 205 + 523 — Stripe ledger reconciliation sweep window, in DAYS.
+    # The daily Beat task lists paid Checkout sessions created within this many
+    # days and grants minutes to any missing a MinutePack row. This is a
+    # SETTLEMENT HORIZON, not a webhook-retry window: the list API filters on
+    # session *creation* time, and a delayed method (ACH ~4 business days, BNPL
+    # longer) settles days after creation — the old 48 h window was structurally
+    # blind to every delayed settlement (money collected, nothing granted,
+    # silently). 30 days covers worst-case settlement latency and matches
+    # Stripe's ~30-day API retention for sessions; volume at beta scale is a
+    # few pages.
+    STRIPE_RECONCILE_SETTLEMENT_HORIZON_DAYS: int = 30
     # Issue 207 — Stripe Tax via automatic_tax[enabled]=true.
     # DEFAULT FALSE. Flip to true ONLY after ≥1 active Stripe tax registration
     # has been created in Tax > Registrations (dashboard.stripe.com/tax/registrations).
