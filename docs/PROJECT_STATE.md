@@ -4,7 +4,31 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-25 (latest) — Issue 484: the meaning-inverting cold open is fixed at the boundary
+## 2026-08-26 (latest) — Issue 523: the Stripe take-money-grant-nothing path is closed
+
+The last money-path defect from the deep audit (one of only two Tier-1 findings that survived
+adversarial verification unmodified, latent behind a Dashboard toggle). Three legs, closed
+together in PR #135: the webhook now handles the async payment pair
+(`async_payment_succeeded` fulfills through the identical path as `completed` — same session
+shape, same Issue-206 guard, same session-id idempotency; `async_payment_failed` is logged
+observably), `payment_method_types` is pinned to `["card"]` (a recorded deviation from Stripe's
+dynamic-payment-methods guidance — the pin makes enabling a delayed-settlement method a reviewed
+code change instead of an unreviewed Dashboard click; un-pinning checklist in DECISIONS
+2026-08-26), and the reconcile sweep runs on a 30-day settlement horizon
+(`STRIPE_RECONCILE_SETTLEMENT_HORIZON_DAYS=30` replaces the 48 h retry-window knob, renamed so a
+prod-pinned 48 goes inert rather than silently preserving the bug).
+
+Evidence: 7 red-first unit tests + 2 CI-only integration tests (async grant against the real DB;
+completed-then-async double delivery grants exactly once). Suite **3319 passed / 0 failed**. The
+async branches cannot be live-exercised — card-only by construction is the point.
+
+**Left open on this surface, deliberately:** refunds/chargebacks Stripe reports (decision gap
+under Issue 208, `[refund half unverified]`); the doctor `webhook_endpoints.list()` subscription
+check (audit finding d09 F1).
+
+---
+
+## 2026-08-25 — Issue 484: the meaning-inverting cold open is fixed at the boundary
 
 The highest-impact known clip-quality defect (SEV2, was a beta blocker for a non-friend
 audience): a rendered clip opened on *"feel like Percy Butler is a starting free anything"* when

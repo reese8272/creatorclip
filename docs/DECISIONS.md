@@ -5,7 +5,68 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-25 (latest) — Sentence boundaries: terminal punctuation is the authority; an utterance boundary is a pause (Issue 484)
+## 2026-08-26 (latest) — Stripe: pin card, handle the async pair, sweep on a settlement horizon (Issue 523)
+
+**Decision (Issue 523, PR #135).** Three coupled changes close the audit-CONFIRMED
+take-money-grant-nothing path (a Dashboard toggle enabling ACH/BNPL would have collected money and
+granted nothing, permanently and silently):
+
+1. **`payment_method_types=["card"]` is pinned in `create_checkout_session` — a deliberate
+   deviation from Stripe's own guidance.** Stripe's current best-practice rule (stripe-best-practices
+   reference, read 2026-08-26) is: *"Never pass `payment_method_types` to any Stripe API call…
+   Never hardcode `payment_method_types: ['card']` even if the user only mentions credit cards"* —
+   dynamic payment methods are the standard, managed from the Dashboard. We pin anyway, because at
+   a ≤100-user beta the Dashboard-managed default is exactly the defect: enabling a
+   delayed-settlement method is one unreviewed UI click that arms a fulfillment mode the code must
+   be ready for, and the Dashboard webhook endpoint's `enabled_events` list is **unversioned**
+   (audit d09 F1) — nothing in the repo can prove the async events would even be delivered. The pin
+   converts that click into a reviewed code change. Conversion cost is negligible at this scale.
+   **Un-pinning checklist** (do all three, in order): (a) add `checkout.session.async_payment_succeeded`
+   and `checkout.session.async_payment_failed` to the Dashboard webhook endpoint's `enabled_events`
+   (and ideally build the doctor `webhook_endpoints.list()` assertion, d09 F1, first); (b) confirm
+   the settlement-horizon sweep is running (it is the backstop when webhook delivery fails);
+   (c) remove the pin and its param test (`test_create_checkout_session_pins_card_payment_method`).
+
+2. **Both fulfillment events flow through one path.** The webhook gate is a two-element frozenset
+   (`completed`, `async_payment_succeeded`) — the async event's `data.object` is the same Checkout
+   Session shape, so the Issue-206 `payment_status == "paid"` guard, metadata validation,
+   **session-id** idempotency and the grant apply unchanged. Two settled positions were preserved
+   on purpose: idempotency stays keyed on `checkout.session.id` (Stripe's documented convergence
+   key for exactly this event pair — `event.id` keying would double-grant), and the guard stays
+   `== "paid"` (deliberately tighter than Stripe's `!= "unpaid"` reference). `async_payment_failed`
+   is handled observably (`log_event("billing_async_payment_failed")`, `logger.warning`, distinct
+   response body) with no ledger action — nothing was granted for an unpaid session. The
+   previously-silent unpaid-ignore path now emits `billing_webhook_ignored` — it is the first place
+   an async-shaped session surfaces, and silence there is how this class stays invisible.
+   Customer notification on failure is out of scope (notifications infra is Issue 529, parked).
+
+3. **The reconcile sweep window is a settlement horizon.**
+   `STRIPE_RECONCILE_SETTLEMENT_HORIZON_DAYS: int = 30` replaces
+   `STRIPE_RECONCILE_LOOKBACK_HOURS: int = 48`. The Sessions list API can only filter on *creation*
+   time; a delayed method settles days after its session was created, so the old 48 h
+   webhook-retry-window value was structurally blind to every delayed settlement — the exact hole
+   under the Issue-205 safety net. 30 days covers worst-case settlement latency (ACH ~4 business
+   days, BNPL longer) and matches Stripe's ~30-day session retention; volume at beta scale is a few
+   pages per nightly run. A **new env name** rather than a raised default, because
+   `model_config extra="ignore"` means a prod-pinned `STRIPE_RECONCILE_LOOKBACK_HOURS=48` would
+   silently override a changed default forever, while an orphaned old key is inert. Both the
+   server-side `created[gte]` filter and the client-side pagination stop are kept at the same
+   cutoff — payload cap and page cap respectively.
+
+**Rejected alternatives.** `payment_method_configurations` / `excluded_payment_method_types`
+(Stripe's sanctioned restriction mechanisms — but both still live in the Dashboard, which is the
+unreviewed surface the fix exists to close); `event.id` idempotency (breaks the documented
+session-id convergence); dropping the server-side `created` filter entirely (pages the full 30-day
+history for no benefit over the bounded filter).
+
+**Explicitly out of scope, stays open:** refunds/chargebacks that *Stripe* reports
+(`charge.refunded`, `charge.dispute.*`) are unhandled in both directions — a gap in Issue 208's
+decision (which covers refunds *we* initiate), flagged `[refund half unverified]` by the audit and
+not verified since. It needs its own decision, not a drive-by fix.
+
+---
+
+## 2026-08-25 — Sentence boundaries: terminal punctuation is the authority; an utterance boundary is a pause (Issue 484)
 
 **Decision (Issue 484, PR #134).** `build_sentence_index` no longer opens a sentence span at every
 Deepgram utterance boundary. A sentence left **unterminated** (last word carries no terminal
