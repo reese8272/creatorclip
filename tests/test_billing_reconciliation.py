@@ -211,3 +211,29 @@ async def test_reconcile_logs_error_on_missing_metadata():
     mock_grant.assert_not_awaited()
     # An error must be logged — the PII-free alert
     assert mock_logger.error.called
+
+
+# ── Issue 523: the sweep window is a settlement horizon, not a retry window ───
+
+
+@pytest.mark.asyncio
+async def test_reconcile_passes_settlement_horizon_in_hours():
+    """The 48h creation-keyed window could never see a delayed payment: a
+    session created day 0 that settles day 4 was already outside it forever.
+    The task must derive its lookback from STRIPE_RECONCILE_SETTLEMENT_HORIZON_DAYS
+    (default 30 days) so any session that can still settle stays inside the sweep."""
+    from worker.tasks import _reconcile_stripe_ledger_async
+
+    mock_session = AsyncMock()
+    mock_session.scalar = AsyncMock(return_value=None)
+
+    with (
+        patch("billing.stripe_client.list_recent_paid_sessions", return_value=[]) as mock_list,
+        patch("db.AdminSessionLocal") as mock_ctx,
+    ):
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        await _reconcile_stripe_ledger_async()
+
+    mock_list.assert_called_once_with(30 * 24)

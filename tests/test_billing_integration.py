@@ -110,12 +110,15 @@ def _make_webhook_event(
     pack_id: str | None = None,
     include_metadata: bool = True,
     payment_status: str | None = "paid",
+    event_type: str = "checkout.session.completed",
 ) -> dict:
-    """Build a minimal checkout.session.completed event dict.
+    """Build a minimal Checkout Session event dict.
 
     ``payment_status`` defaults to ``"paid"`` to satisfy the Issue 206
     fulfillment guard (``routers/billing.py`` rejects anything other than
     ``"paid"``). Pass ``None`` / ``"unpaid"`` to exercise the ignore path.
+    ``event_type`` covers the Issue 523 async pair — their ``data.object`` is
+    the same Checkout Session shape ``completed`` carries.
     """
     meta: dict = {}
     if include_metadata:
@@ -133,7 +136,7 @@ def _make_webhook_event(
         obj["payment_status"] = payment_status
 
     return {
-        "type": "checkout.session.completed",
+        "type": event_type,
         "data": {"object": obj},
     }
 
@@ -423,6 +426,96 @@ async def test_webhook_fast_path_short_circuits_before_grant(
             "short-circuit failed to fire on the duplicate webhook. The "
             "RLS-context stamp on session.info['creator_id'] is missing."
         )
+
+        async with AsyncSessionLocal() as verify:
+            count = await _minute_pack_count(verify, stripe_session_id)
+            assert count == 1
+    finally:
+        await _cleanup_creator(db_session, creator.id)
+
+
+# ── Issue 523: async payment events fulfill against the real ledger ───────────
+
+
+@pytest.mark.integration
+async def test_webhook_async_payment_succeeded_grants(db_session: AsyncSession):
+    """checkout.session.async_payment_succeeded (delayed method settled) must
+    grant against the real DB — this event returning status=ignored was the
+    take-money-grant-nothing path."""
+    from db import AsyncSessionLocal
+    from main import app
+
+    creator = await _seed_creator(db_session, minutes_balance=0)
+    stripe_session_id = f"cs_test_{uuid.uuid4().hex}"
+    event = _make_webhook_event(
+        stripe_session_id=stripe_session_id,
+        creator_id=str(creator.id),
+        pack_id="starter",
+        event_type="checkout.session.async_payment_succeeded",
+    )
+
+    try:
+        with (
+            patch("routers.billing.construct_webhook_event", return_value=event),
+            TestClient(app) as client,
+        ):
+            r = client.post(
+                "/billing/webhook",
+                content=json.dumps(event).encode(),
+                headers={"stripe-signature": "mocked"},
+            )
+
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "ok"
+
+        async with AsyncSessionLocal() as verify:
+            count = await _minute_pack_count(verify, stripe_session_id)
+            assert count == 1
+    finally:
+        await _cleanup_creator(db_session, creator.id)
+
+
+@pytest.mark.integration
+async def test_webhook_completed_then_async_grants_once(db_session: AsyncSession):
+    """A card-settled `completed` followed by an `async_payment_succeeded` for
+    the SAME session must grant exactly once — session-id idempotency is the
+    documented Stripe pattern precisely so both events converge on one key."""
+    from db import AsyncSessionLocal
+    from main import app
+
+    creator = await _seed_creator(db_session, minutes_balance=0)
+    stripe_session_id = f"cs_test_{uuid.uuid4().hex}"
+    completed = _make_webhook_event(
+        stripe_session_id=stripe_session_id,
+        creator_id=str(creator.id),
+        pack_id="starter",
+    )
+    async_ok = _make_webhook_event(
+        stripe_session_id=stripe_session_id,
+        creator_id=str(creator.id),
+        pack_id="starter",
+        event_type="checkout.session.async_payment_succeeded",
+    )
+
+    try:
+        with TestClient(app) as client:
+            with patch("routers.billing.construct_webhook_event", return_value=completed):
+                r1 = client.post(
+                    "/billing/webhook",
+                    content=json.dumps(completed).encode(),
+                    headers={"stripe-signature": "mocked"},
+                )
+            with patch("routers.billing.construct_webhook_event", return_value=async_ok):
+                r2 = client.post(
+                    "/billing/webhook",
+                    content=json.dumps(async_ok).encode(),
+                    headers={"stripe-signature": "mocked"},
+                )
+
+        assert r1.status_code == 200, r1.text
+        assert r1.json()["status"] == "ok"
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["status"] == "already_fulfilled"
 
         async with AsyncSessionLocal() as verify:
             count = await _minute_pack_count(verify, stripe_session_id)
