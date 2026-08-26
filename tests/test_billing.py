@@ -675,9 +675,17 @@ def test_create_checkout_session_raises_when_session_url_is_none():
 
 
 def _make_checkout_completed_event(
-    payment_status: str | None, *, session_id: str = "cs_test_xxx"
+    payment_status: str | None,
+    *,
+    session_id: str = "cs_test_xxx",
+    event_type: str = "checkout.session.completed",
 ) -> dict:
-    """Build a synthetic checkout.session.completed event dict."""
+    """Build a synthetic Checkout Session event dict.
+
+    ``event_type`` covers the async pair (Issue 523): the ``data.object`` of
+    ``checkout.session.async_payment_succeeded`` / ``_failed`` is the same
+    Checkout Session shape ``completed`` carries.
+    """
     obj: dict = {
         "id": session_id,
         "customer": None,
@@ -686,7 +694,7 @@ def _make_checkout_completed_event(
     if payment_status is not None:
         obj["payment_status"] = payment_status
     return {
-        "type": "checkout.session.completed",
+        "type": event_type,
         "data": {"object": obj},
     }
 
@@ -1096,3 +1104,148 @@ def test_checkout_non_stripe_failure_502_detail_shape(monkeypatch, caplog):
     assert detail["code"] == "checkout_failed"
     assert "RuntimeError" in caplog.text
     assert "cs_test_999" in caplog.text
+
+
+# ── Issue 523: async payment methods must fulfill (or fail observably) ────────
+
+
+def _webhook_post(client, fake_event, *, session_scalar=None):
+    """POST fake_event to the webhook with a stubbed DB session; returns
+    (response, grant_mock, log_mock)."""
+    from db import get_session as _get_session
+    from main import app
+
+    async def _gen():
+        session = AsyncMock()
+        session.scalar = AsyncMock(return_value=session_scalar)
+        session.execute = AsyncMock()
+        session.commit = AsyncMock()
+        session.info = {}
+        yield session
+
+    app.dependency_overrides[_get_session] = _gen
+    try:
+        with (
+            patch("routers.billing.construct_webhook_event", return_value=fake_event),
+            patch("routers.billing.grant_minutes", new_callable=AsyncMock) as grant_mock,
+            patch("routers.billing.log_event") as log_mock,
+        ):
+            response = client.post(
+                "/billing/webhook",
+                content=json.dumps(fake_event).encode(),
+                headers={"stripe-signature": "sig"},
+            )
+    finally:
+        app.dependency_overrides.pop(_get_session, None)
+    return response, grant_mock, log_mock
+
+
+def test_webhook_async_payment_succeeded_grants_minutes(client):
+    """checkout.session.async_payment_succeeded (delayed method settled) must
+    take the SAME fulfillment path as completed — the take-money-grant-nothing
+    defect was this event returning status=ignored."""
+    fake_event = _make_checkout_completed_event(
+        "paid",
+        session_id="cs_test_async_ok",
+        event_type="checkout.session.async_payment_succeeded",
+    )
+    response, grant_mock, _ = _webhook_post(client, fake_event)
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    grant_mock.assert_awaited_once()
+
+
+def test_webhook_async_payment_succeeded_dedupes_after_completed(client):
+    """A session already fulfilled (e.g. via completed) must short-circuit on
+    the stripe_session_id fast path — session-id keying is the documented
+    Stripe pattern precisely so both events converge on one dedupe key."""
+    fake_event = _make_checkout_completed_event(
+        "paid",
+        session_id="cs_test_async_dupe",
+        event_type="checkout.session.async_payment_succeeded",
+    )
+    response, grant_mock, _ = _webhook_post(client, fake_event, session_scalar=uuid.uuid4())
+    assert response.status_code == 200
+    assert response.json()["status"] == "already_fulfilled"
+    grant_mock.assert_not_awaited()
+
+
+def test_webhook_async_payment_failed_logs_and_no_grant(client):
+    """checkout.session.async_payment_failed: nothing was ever granted so there
+    is no ledger action — but the failure must be OBSERVABLE, not silent."""
+    fake_event = _make_checkout_completed_event(
+        "unpaid",
+        session_id="cs_test_async_fail",
+        event_type="checkout.session.async_payment_failed",
+    )
+    response, grant_mock, log_mock = _webhook_post(client, fake_event)
+    assert response.status_code == 200
+    assert response.json()["status"] == "async_payment_failed"
+    grant_mock.assert_not_awaited()
+    event_names = [c.args[0] for c in log_mock.call_args_list]
+    assert "billing_async_payment_failed" in event_names
+
+
+def test_webhook_async_payment_succeeded_unpaid_still_ignored(client):
+    """The Issue-206 payment_status guard must apply to the async branch too:
+    an async_payment_succeeded carrying anything but 'paid' is malformed or
+    out-of-order and must not grant."""
+    fake_event = _make_checkout_completed_event(
+        "unpaid",
+        session_id="cs_test_async_unpaid",
+        event_type="checkout.session.async_payment_succeeded",
+    )
+    response, grant_mock, log_mock = _webhook_post(client, fake_event)
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+    grant_mock.assert_not_awaited()
+    event_names = [c.args[0] for c in log_mock.call_args_list]
+    assert "billing_webhook_ignored" in event_names
+
+
+def test_webhook_unpaid_ignore_emits_log_event(client):
+    """The unpaid-ignore path used to be a silent drop — indistinguishable from
+    nothing happening. It is exactly where an async-shaped session first
+    surfaces, so it must emit an event (counters must count writes)."""
+    fake_event = _make_checkout_completed_event("unpaid", session_id="cs_test_unpaid_log")
+    response, grant_mock, log_mock = _webhook_post(client, fake_event)
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+    grant_mock.assert_not_awaited()
+    ignored_call = next(
+        (c for c in log_mock.call_args_list if c.args[0] == "billing_webhook_ignored"),
+        None,
+    )
+    assert ignored_call is not None, "billing_webhook_ignored must be emitted"
+    assert ignored_call.kwargs.get("reason") == "payment_status_not_paid"
+
+
+def test_create_checkout_session_pins_card_payment_method():
+    """Issue 523: payment_method_types is pinned to card so enabling a
+    delayed-settlement method (ACH/BNPL) is a reviewed code change, never a
+    Dashboard toggle. Deliberate deviation from Stripe's dynamic-payment-methods
+    guidance — rationale + un-pinning checklist in docs/DECISIONS.md (2026-08-26)."""
+    from billing import stripe_client as _sc
+    from billing.stripe_client import create_checkout_session
+
+    captured: dict = {}
+    fake_session = MagicMock()
+    fake_session.url = "https://checkout.stripe.com/pay/abc"
+    fake_session.id = "cs_test_pin"
+
+    def _capture(params, **kwargs):
+        captured["params"] = params
+        return fake_session
+
+    with patch.object(_sc, "_STRIPE") as stripe_mock:
+        stripe_mock.checkout.sessions.create.side_effect = _capture
+        create_checkout_session(
+            pack_id="creator",
+            creator_id=str(uuid.uuid4()),
+            stripe_customer_id=None,
+            success_url="http://x/ok",
+            cancel_url="http://x/no",
+            intent_id="11111111-1111-4111-8111-111111111111",
+        )
+
+    assert captured["params"].get("payment_method_types") == ["card"]
