@@ -1,11 +1,11 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-25 · **Branch:** `fix/issue-484-fake-utterance-boundary` ·
+**Last updated:** 2026-08-26 · **Branch:** `fix/issue-523-stripe-async-payments` ·
 **Working tree:** ✅ **CLEAN**
 
-> ⚠️ **One PR is open: #134 (Issue 484 — the meaning-inverting cold open).** Merging it once green
-> is the first action below. Everything from earlier sessions is already merged and deployed
-> (**#133**/Issue 505 merged 2026-08-20).
+> ⚠️ **One PR is open: #135 (Issue 523 — Stripe async payments).** Merging it once green is the
+> first action below. Everything earlier is merged and deployed (**#134**/Issue 484 merged +
+> live-verified 2026-08-25).
 
 **Shipped 2026-08-17:** **#119** (the audit itself + Issue 498 items 1–3), **#120** (Issue 521 — the
 lying gate), **#121** (Issue 520 — the personalization SEV1), **#122** (handoff).
@@ -21,13 +21,17 @@ lanes prove they executed), **#130** (**507** RENDER_TASKS from the call graph),
 route registries from the live route table), **#132** (**503** mutmut actually runs + **502** no step
 swallows its verdict), **#133** (**505** RLS from the schema, merged 2026-08-20 late).
 
-**In flight 2026-08-25:** **#134** (**484** — clips must not open on a clause that inverts the
-speaker's meaning; `build_sentence_index` now merges fake utterance boundaries; the Issue-441
-hedge/fragment residual cured with the weak-opener list byte-unchanged; `SCENARIO_FLOOR` 31 → 35).
-Details: `docs/PROJECT_STATE.md` 2026-08-25 + `docs/DECISIONS.md` 2026-08-25.
+**Shipped 2026-08-25:** **#134** (**484** — the meaning-inverting cold open; fake utterance
+boundaries merge in `build_sentence_index`; `SCENARIO_FLOOR` 31 → 35). Merged, deployed, and
+live-verified (running container merges the exact `"don't" | "feel"` boundary).
 
-**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3312 passed, 64 skipped, 0 failed**
-(3296 at the start of the day; +16 from Issue 484).
+**In flight 2026-08-26:** **#135** (**523** — Stripe async payments: the async pair handled,
+`payment_method_types` pinned to card, reconcile sweep on a 30-day settlement horizon —
+`STRIPE_RECONCILE_SETTLEMENT_HORIZON_DAYS` replaces `STRIPE_RECONCILE_LOOKBACK_HOURS`).
+Details: `docs/PROJECT_STATE.md` + `docs/DECISIONS.md`, both 2026-08-26.
+
+**Suite at handoff:** `.venv/bin/python -m pytest -q` → **3319 passed, 64 skipped, 0 failed**
+(3312 at the start of the day; +7 from Issue 523, plus 2 CI-only integration tests).
 
 **Prod:** `https://autoclip.studio`. **Running commit VERIFIED** — the container's image revision
 label reads `1dd03b84d161ccc9c2425c8f0b4e4144310b2590` (the #131 merge) and `/health` returns 200 over
@@ -98,23 +102,24 @@ live — that needs ≥21 clips rated.
 
 | Batch | Issues | Note |
 |---|---|---|
-| **G** remainder | 523 | Stripe async-payment: take-money-grant-nothing, latent behind a Dashboard toggle. **Recommended next** if you want a money-path fix. |
 | **H** | 526, 527 | Dead output — the GDPR export has no UI while the Privacy Policy says it does; 527 is six paid capabilities consumed by nothing (mostly delete/wire-up/keep *decisions*, not code). |
 | **D / E / F** | 508–510 / 511–515 / 516–519 | Docs-as-schema, production truthfulness, process artifacts. **508 is the natural follow-on** — the same "derive it, don't type it" rule applied to doc citations. |
 | *also open* | 498 items 4–5, 445, 495 | 445 (three-pile triage UI) needs a real CHECK phase — four design questions open, AC numbering drifted. |
+
+**Batch G is now COMPLETE** (520–525 all shipped; 523 was the last, PR #135).
 
 **Blocked and not workable under the scope decision:** 528 (needs 529).
 
 ### → NEXT ACTION
 
-1. **Merge PR #134 (Issue 484)** once green, then `git checkout main && git pull --ff-only origin main`.
-   No migration in this change. Note the deploy ships a changed clip engine: the next real video
-   processed may produce slightly earlier clip starts where Deepgram split a sentence on a pause —
-   that is the fix working, not a regression.
+1. **Merge PR #135 (Issue 523)** once green, then `git checkout main && git pull --ff-only origin main`.
+   No migration. Deploy note: `/opt/autoclip/.env` may still carry
+   `STRIPE_RECONCILE_LOOKBACK_HOURS=48` — it is inert (`extra="ignore"`) but delete it for hygiene;
+   the new `STRIPE_RECONCILE_SETTLEMENT_HORIZON_DAYS` default (30) needs no env entry.
 
 2. **Then pick one:**
-   - **523** — money path. Stripe async-payment.
    - **508** — docs-as-schema; continues the "derive it, don't type it" thread.
+   - **526/527** — Batch H dead-output decisions.
    - **445** — the three-pile triage UI (bigger; run a real CHECK phase first).
 
 **Do NOT do:** anything on the parked operator list, or Issue 528.

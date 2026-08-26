@@ -145,11 +145,15 @@ discount path that could produce an `amount_total` below the catalog price. It i
 
 Also on this path:
 
-- **`checkout.session.async_payment_succeeded` is referenced in a comment
-  (`routers/billing.py:256`) but not handled.** ACH / bank transfer / BNPL purchases
-  complete the Checkout flow and then never fulfill.
-- **Idempotency is per-`checkout.session.id`, not per-`event.id`** — fine for the one event
-  currently handled, but it won't generalise when a second event type is added.
+- ~~**`checkout.session.async_payment_succeeded` is referenced in a comment
+  (`routers/billing.py:256`) but not handled.**~~ **Closed by Issue 523 (2026-08-26, PR
+  #135):** the async pair is handled (succeeded fulfills through the same path; failed is
+  logged observably), `payment_method_types` is pinned to card, and the reconcile sweep
+  runs on a 30-day settlement horizon.
+- **Idempotency is per-`checkout.session.id`, not per-`event.id`** — this turned out to be
+  the *correct* design, not a gap: Stripe's own fulfillment pattern passes the session id
+  for both `completed` and `async_payment_succeeded` precisely so the pair converges on one
+  dedupe key (audit d09-billing.md:41-51; exercised by Issue 523's double-delivery test).
 - **`record_llm_usage` swallows all exceptions** (`billing/ledger.py:253`) and writes via the
   BYPASSRLS admin session, so LLM cost accounting can silently drop rows under load.
 

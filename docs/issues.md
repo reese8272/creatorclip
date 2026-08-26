@@ -5120,7 +5120,8 @@ hygiene.
 
 ### Issue 523: a Stripe Dashboard toggle creates a take-money-grant-nothing path
 
-- [ ] **Status:** open · **Size:** S (~2 h) · **Lane:** L30 Batch G · **CONFIRMED (latent)**
+- [x] **Status:** **DONE 2026-08-26** (PR #135) · **Size:** S (~2 h) · **Lane:** L30 Batch G ·
+      **CONFIRMED (latent)**
 
 `payment_method_types` is never set, so the offered payment-method set is a **Dashboard UI toggle**.
 If ACH or BNPL is ever enabled: `checkout.session.completed` fires with `payment_status: "unpaid"` →
@@ -5140,9 +5141,32 @@ spendable. Issue 208 decided refunds *we* initiate; it says nothing about refund
 **Evidence:** `billing/stripe_client.py:93-116`, `:173-180`; `routers/billing.py:245-260`.
 
 **Acceptance**
-- [ ] `payment_method_types=["card"]` pinned **and** a branch on the async pair
-- [ ] `payment_status` checked before granting entitlement
-- [ ] Reconcile sweep keyed on settlement, not creation
+- [x] `payment_method_types=["card"]` pinned **and** a branch on the async pair
+- [x] `payment_status` checked before granting entitlement (the Issue-206 guard now sits on
+      BOTH fulfillment events — `async_payment_succeeded` flows through the identical path)
+- [x] Reconcile sweep keyed on settlement, not creation
+      (`STRIPE_RECONCILE_SETTLEMENT_HORIZON_DAYS=30` replaces the 48 h retry-window knob)
+
+**BUILD NOTE (2026-08-26, PR #135).** The minimal shape won: `async_payment_succeeded`'s
+`data.object` is a Checkout Session with `payment_status:"paid"` — the same shape `completed`
+carries — so the gate became a two-element fulfillment set and every downstream step (payment_status
+guard, metadata validation, **session-id** idempotency, grant) applies unchanged; a
+completed-then-async double delivery grants exactly once (integration-tested against the real
+`UNIQUE(stripe_session_id)`). `async_payment_failed` gets an explicit observable branch
+(`log_event("billing_async_payment_failed")`, no ledger action — nothing was ever granted), and the
+previously-silent unpaid-ignore now emits `billing_webhook_ignored`. The **pin is a recorded
+deviation** from Stripe's dynamic-payment-methods guidance ("never hardcode
+`payment_method_types: ['card']`") — rationale + un-pinning checklist in `docs/DECISIONS.md`
+(2026-08-26); the checklist matters because the Dashboard webhook endpoint's `enabled_events` list
+is unversioned (audit d09 F1, not built here), so without the pin the new branches could be dead on
+arrival. The sweep keeps BOTH the server-side `created[gte]` filter and the client-side pagination
+stop at the same 30-day cutoff (payload cap + page cap). New env name rather than a new default on
+the old one, so a prod-pinned `STRIPE_RECONCILE_LOOKBACK_HOURS=48` goes inert (`extra="ignore"`)
+instead of silently preserving the bug. **Explicitly left open:** refunds/chargebacks Stripe
+reports (`[refund half unverified]`) remain a decision gap under Issue 208 — not filed as fixed
+here; the doctor `webhook_endpoints.list()` subscription check is audit finding F1, separate. The
+async branches cannot be live-exercised on prod — card-only by construction is the point; the
+red-first fixtures + the CI integration lane are the evidence.
 
 ---
 
