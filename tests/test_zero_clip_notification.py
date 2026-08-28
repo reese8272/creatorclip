@@ -160,25 +160,21 @@ def _prod_settings(monkeypatch, backend: str) -> None:
         monkeypatch.setenv(key, value)
 
 
-def test_console_backend_in_production_warns(monkeypatch, caplog) -> None:
-    import logging
+def test_console_backend_in_production_raises(monkeypatch) -> None:
+    """Issue 528 (upgrades the Issue-525 warning): with Resend provisioned, a
+    non-delivering notify backend in production is an unmissable startup
+    failure — the console backend delivers nothing while rows still end
+    'sent', which is exactly how 17 undelivered rows stayed invisible."""
+    import pytest as _pytest
 
     _prod_settings(monkeypatch, "console")
     from config import Settings
 
-    with caplog.at_level(logging.WARNING):
+    with _pytest.raises(ValueError, match="NOTIFY_BACKEND must be 'resend'"):
         Settings()
-    warnings = " ".join(r.getMessage() for r in caplog.records)
-    assert "NOTIFY_BACKEND" in warnings, (
-        "a non-delivering notify backend must warn loudly in production (Issue 525)"
-    )
-    assert "sent" in warnings, (
-        "the warning must name the specific trap: delivery rows still say 'sent', "
-        "which is what made 17 undelivered rows invisible"
-    )
 
 
-def test_resend_backend_in_production_does_not_warn(monkeypatch, caplog) -> None:
+def test_resend_backend_in_production_constructs_cleanly(monkeypatch, caplog) -> None:
     import logging
 
     _prod_settings(monkeypatch, "resend")
@@ -189,7 +185,8 @@ def test_resend_backend_in_production_does_not_warn(monkeypatch, caplog) -> None
     from config import Settings
 
     with caplog.at_level(logging.WARNING):
-        Settings()
+        settings = Settings()
+    assert settings.NOTIFY_BACKEND == "resend"
     warnings = " ".join(r.getMessage() for r in caplog.records)
     assert "NOTIFY_BACKEND" not in warnings
 
