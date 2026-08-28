@@ -7,11 +7,12 @@
  * PublishPanel. Copy is workflow-state only — a structural check pins the
  * no-virality constraint on this new surface.
  */
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PileList } from './ClipPiles'
+import { PileList, PileTabs } from './ClipPiles'
+import type { Pile } from '@/lib/clipPiles'
 import type { ReviewClip } from '@/types'
 
 function makeClip(over: Partial<ReviewClip> = {}): ReviewClip {
@@ -128,6 +129,70 @@ describe('Keep-pile finish line (Issue 447)', () => {
     expect(await screen.findByRole('button', { name: 'Schedule publish' })).toBeInTheDocument()
   })
 
+  // The 422 that shipped: this call once sent {state: …} against a backend
+  // whose TriageIn declares `triage` with extra="forbid", so every Un-keep and
+  // Restore click failed loudly. These two tests CLICK the buttons and pin the
+  // exact request body — presence-only assertions are how it slipped through.
+  it('Un-keep PUTs {triage: "pending"} — the exact wire contract', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+      status: 200,
+      ok: true,
+      json: async () => ({}),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderPile([makeClip()])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Un-keep' }))
+
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(
+        ([u, init]) =>
+          String(u).endsWith('/clips/c1/triage') &&
+          (init as RequestInit | undefined)?.method === 'PUT',
+      )
+      expect(put).toBeTruthy()
+      expect(JSON.parse(String((put![1] as RequestInit).body))).toEqual({ triage: 'pending' })
+    })
+  })
+
+  it('Restore PUTs {triage: "pending"} from the dropped pile', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+      status: 200,
+      ok: true,
+      json: async () => ({}),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderPile([makeClip({ triage: 'dropped' })], 'dropped')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
+
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(
+        ([u, init]) =>
+          String(u).endsWith('/clips/c1/triage') &&
+          (init as RequestInit | undefined)?.method === 'PUT',
+      )
+      expect(put).toBeTruthy()
+      expect(JSON.parse(String((put![1] as RequestInit).body))).toEqual({ triage: 'pending' })
+    })
+  })
+
+  it('surfaces the server message when the move fails — honest failure (Issue 437)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        status: 422,
+        ok: false,
+        json: async () => ({ detail: { code: 'validation', message: 'Unknown triage state.' } }),
+      })),
+    )
+    renderPile([makeClip()])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Un-keep' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/Unknown triage state/)
+  })
+
   it('structural: pile copy stays workflow-neutral — no virality language', () => {
     const { container } = renderPile([
       makeClip({
@@ -143,5 +208,52 @@ describe('Keep-pile finish line (Issue 447)', () => {
     for (const term of ['viral', 'guarantee', 'promise', 'reach', 'views']) {
       expect(text).not.toContain(term)
     }
+  })
+})
+
+// Issue 445 AC6 — the tablist is keyboard-operable: one roving tab stop,
+// ←/→/Home/End move between piles, selection follows focus (WAI-ARIA tabs).
+describe('PileTabs keyboard navigation (Issue 445 AC6)', () => {
+  function renderTabs(active: Pile = 'pending') {
+    const onSelect = vi.fn()
+    render(
+      <PileTabs
+        counts={{ pending: 3, kept: 2, dropped: 1 }}
+        active={active}
+        onSelect={onSelect}
+      />,
+    )
+    return onSelect
+  }
+
+  it('only the active tab is in the tab order', () => {
+    renderTabs('kept')
+    const tabs = screen.getAllByRole('tab')
+    for (const tab of tabs) {
+      const selected = tab.getAttribute('aria-selected') === 'true'
+      expect(tab).toHaveAttribute('tabindex', selected ? '0' : '-1')
+    }
+  })
+
+  it('ArrowRight selects the next pile; ArrowLeft wraps to the last', async () => {
+    const onSelect = renderTabs('pending')
+    screen.getByRole('tab', { selected: true }).focus()
+
+    await userEvent.keyboard('{ArrowRight}')
+    expect(onSelect).toHaveBeenLastCalledWith('kept')
+
+    await userEvent.keyboard('{ArrowLeft}')
+    expect(onSelect).toHaveBeenLastCalledWith('dropped')
+  })
+
+  it('Home and End jump to the first and last pile', async () => {
+    const onSelect = renderTabs('kept')
+    screen.getByRole('tab', { selected: true }).focus()
+
+    await userEvent.keyboard('{End}')
+    expect(onSelect).toHaveBeenLastCalledWith('dropped')
+
+    await userEvent.keyboard('{Home}')
+    expect(onSelect).toHaveBeenLastCalledWith('pending')
   })
 })

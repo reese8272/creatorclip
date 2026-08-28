@@ -17,6 +17,7 @@ import { QueryErrorState } from '@/components/QueryErrorState'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { StyleReview } from '@/components/review/StyleReview'
 import { PileList, PileTabs } from '@/components/review/ClipPiles'
+import { LastCallStrip, type LastCall } from '@/components/review/LastCallStrip'
 import { orderForReview, partitionByPile, type Pile } from '@/lib/clipPiles'
 import { GenerateMoreClipsButton } from '@/components/review/GenerateMoreClipsButton'
 import { generateMoreMutationKey } from '@/lib/mutationKeys'
@@ -87,11 +88,13 @@ function ReviewClipView({
   clip,
   videoId,
   onAdvance,
+  onVerdict,
   personalization,
 }: {
   clip: ReviewClip
   videoId: string
   onAdvance: () => void
+  onVerdict: (action: 'upvote' | 'downvote') => void
   personalization: PersonalizationStatus | null
 }) {
   const navigate = useNavigate()
@@ -146,7 +149,13 @@ function ReviewClipView({
         aria-label="Clip actions"
         className="flex min-h-0 flex-col gap-4 lg:col-start-3 lg:row-start-1 lg:overflow-y-auto"
       >
-        <YourCall clip={clip} trimStart={trim.start} trimEnd={trim.end} onAdvance={onAdvance} />
+        <YourCall
+          clip={clip}
+          trimStart={trim.start}
+          trimEnd={trim.end}
+          onAdvance={onAdvance}
+          onVerdict={onVerdict}
+        />
 
         {/* The packaging: title/hook compacted to one truncating row each,
             suggestions behind a disclosure (Issue 424). */}
@@ -221,6 +230,9 @@ export function Review() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [index, setIndex] = useState(0)
+  // Issue 445 — the clip just rated, for the post-hoc tag strip + Undo. Page
+  // level because ReviewClipView/YourCall remount per clip (key={clip.id}).
+  const [lastCall, setLastCall] = useState<LastCall | null>(null)
   // Issue 377 — shortlist mode: default the queue to the engine's argued top
   // picks (WhyThisClip primary content is unchanged — it was already
   // default-open); the full candidate set is one click away via "show all
@@ -277,6 +289,28 @@ export function Review() {
   const reviewed =
     allClips.length > 0 && (pendingClips.length === 0 || index >= pendingClips.length)
   const clip = clips[index]
+  // Issue 445 AC5 — per-video progress. "clips reviewed", never "labels"
+  // (DECISIONS 2026-08-12): reviewed = a clip with a standing verdict.
+  const reviewedCount = pileCounts.kept + pileCounts.dropped
+
+  // A Keep/Drop landed on the server (YourCall commits on first click).
+  // Record it so the strip can offer post-hoc tags + Undo, then advance —
+  // same invalidation contract as onAdvance (only clip-counts; refetching
+  // review-clips mid-queue would silently skip the next clip).
+  function handleVerdict(action: 'upvote' | 'downvote') {
+    if (clip) setLastCall({ clip, action, index })
+    setIndex((i) => i + 1)
+    void queryClient.invalidateQueries({ queryKey: ['clip-counts'] })
+  }
+
+  // Undo reached the server (triage → pending): rewind the queue to the clip.
+  // The cached list still holds it (review-clips is never refetched mid-queue),
+  // so the same index shows the same clip.
+  function handleUndone(call: LastCall) {
+    setLastCall(null)
+    setIndex(call.index)
+    void queryClient.invalidateQueries({ queryKey: ['clip-counts'] })
+  }
   // Issue 431: an in-flight generate-more request must hold the "all reviewed"
   // redirect open — otherwise the dashboard navigation yanks the creator away
   // while the server is still finding their new clips.
@@ -359,7 +393,13 @@ export function Review() {
           data-testid="pile-tabs"
           className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted"
         >
-          <PileTabs counts={pileCounts} active={pile} onSelect={selectPile} />
+          <div className="flex items-center gap-3">
+            <PileTabs counts={pileCounts} active={pile} onSelect={selectPile} />
+            {/* Issue 445 AC5 — same progress figure as the pending queue. */}
+            <span data-testid="review-progress" className="text-subtle">
+              {reviewedCount} of {allClips.length} clips reviewed
+            </span>
+          </div>
           <GenerateMoreClipsButton videoId={videoId} onDone={handleMoreClips} />
         </div>
         <PileList
@@ -374,6 +414,17 @@ export function Review() {
     return (
       <ToolShell>
         <ToolMain className="flex flex-col items-center gap-3 text-center">
+          {/* The final verdict is exactly when an "oops" needs Undo — the strip
+              survives onto this terminal screen (Issue 445). Undo rewinds the
+              queue index, which flips `reviewed` back off. */}
+          {lastCall && (
+            <LastCallStrip
+              key={lastCall.clip.id}
+              call={lastCall}
+              onUndone={handleUndone}
+              onDismiss={() => setLastCall(null)}
+            />
+          )}
           <p className="text-sm text-muted">
             {generatingMore
               ? 'All clips reviewed! Finding more clips for this video…'
@@ -431,6 +482,10 @@ export function Review() {
           {pile === 'pending' && shortlistedClips.length > 0 && (
             <span data-testid="shortlist-banner">top picks first</span>
           )}
+          {/* Issue 445 AC5 — per-video progress, "clips reviewed" not "labels". */}
+          <span data-testid="review-progress" className="text-subtle">
+            {reviewedCount} of {allClips.length} clips reviewed
+          </span>
         </div>
 
         <div className="flex items-center gap-4">
@@ -445,11 +500,23 @@ export function Review() {
         </div>
       </div>
 
+      {/* Post-hoc enrichment for the clip just rated (Issue 445): optional
+          tags + Undo. Keyed by clip so a new verdict resets the strip. */}
+      {lastCall && (
+        <LastCallStrip
+          key={lastCall.clip.id}
+          call={lastCall}
+          onUndone={handleUndone}
+          onDismiss={() => setLastCall(null)}
+        />
+      )}
+
       <ReviewClipView
         key={clip.id}
         clip={clip}
         videoId={videoId}
         personalization={personalization}
+        onVerdict={handleVerdict}
         onAdvance={() => {
           // YourCall calls this for BOTH a verdict and the plain "Next clip"
           // skip (YourCall.tsx:127 and :305), so it must always advance.

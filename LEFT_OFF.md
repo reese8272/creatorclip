@@ -104,7 +104,7 @@ live — that needs ≥21 clips rated.
 |---|---|---|
 | **H** | 526, 527 | Dead output — the GDPR export has no UI while the Privacy Policy says it does; 527 is six paid capabilities consumed by nothing (mostly delete/wire-up/keep *decisions*, not code). |
 | **D / E / F** | 508–510 / 511–515 / 516–519 | Docs-as-schema, production truthfulness, process artifacts. **508 is the natural follow-on** — the same "derive it, don't type it" rule applied to doc citations. |
-| *also open* | 498 items 4–5, 445, 495 | 445 (three-pile triage UI) needs a real CHECK phase — four design questions open, AC numbering drifted. |
+| *also open* | 498 items 4–5, 495 | ~~445~~ **DONE 2026-08-28** — it was mostly SHIPPED 2026-08-12 (commit `7e3582a`, "groundwork"); the completion wave fixed the live 422 on Un-keep/Restore and added first-click Keep/Drop + post-hoc tags/Undo + K/X + progress + keyboard nav. See `docs/issues.md` §445 ledger note. |
 
 **Batch G is now COMPLETE** (520–525 all shipped; 523 was the last, PR #135).
 
@@ -120,7 +120,8 @@ live — that needs ≥21 clips rated.
 2. **Then pick one:**
    - **508** — docs-as-schema; continues the "derive it, don't type it" thread.
    - **526/527** — Batch H dead-output decisions.
-   - **445** — the three-pile triage UI (bigger; run a real CHECK phase first).
+   - ~~**445**~~ — DONE 2026-08-28 (the "run a CHECK phase" advice was stale: the design
+     questions were already ruled in DECISIONS 2026-08-12, and most of the UI had shipped).
 
 **Do NOT do:** anything on the parked operator list, or Issue 528.
 
@@ -395,9 +396,13 @@ Ordered by consequence, per `docs/runbooks/255-258-dr-durability.md`:
 
 ### B. Code track
 
-- **Issue 445 — the three-pile triage UI.** `docs/issues.md` Lane L27. Strangers hit the review queue
-  on their **first** upload, and reviewed state does not survive a reload today. Four design
-  questions open — **run a real CHECK phase first**; AC numbering has drifted.
+- ✅ **Issue 445 — the three-pile triage UI — DONE 2026-08-28.** The premise here was stale:
+  most of it shipped 2026-08-12 (commit `7e3582a`, labelled "groundwork", which is why every
+  ledger missed it) — piles, pile-in-URL reload persistence, the Dashboard badge. The completion
+  wave fixed the **live 422** on Un-keep/Restore (`{state:…}` vs `{triage:…}`, caught by contract
+  tests that actually click) and added first-click Keep/Drop, post-hoc tags + Undo
+  (`LastCallStrip`), K/X shortcuts, "N of M clips reviewed", and pile-tab keyboard nav.
+  Purge-dropped deferred to 446 (DECISIONS 2026-08-28).
 - ✅ **Issue 484 — BUILT 2026-08-25 (PR #134).** The meaning-inverting cold open is fixed at the
   sentence index (fake utterance boundaries merge; weak-opener list untouched). Only its
   fresh-upload live AC remains, parked with the operator track — one upload now collapses **four**

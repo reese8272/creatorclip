@@ -28,13 +28,40 @@ export function PileTabs({
   active: Pile
   onSelect: (pile: Pile) => void
 }) {
+  // Roving tabindex (Issue 445 AC6): one tab stop for the whole tablist, with
+  // ←/→/Home/End moving between piles. Selection follows focus — moving to a
+  // tab selects it — matching the WAI-ARIA tabs pattern for a small, cheap
+  // tab switch (each pile is already-loaded client-side data).
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const idx = PILE_ORDER.indexOf(active)
+    let next: number
+    if (e.key === 'ArrowRight') next = (idx + 1) % PILE_ORDER.length
+    else if (e.key === 'ArrowLeft') next = (idx - 1 + PILE_ORDER.length) % PILE_ORDER.length
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = PILE_ORDER.length - 1
+    else return
+    e.preventDefault()
+    const pile = PILE_ORDER[next]
+    onSelect(pile)
+    e.currentTarget
+      .querySelector<HTMLButtonElement>(`[data-pile="${pile}"]`)
+      ?.focus()
+  }
+
   return (
-    <div className="flex shrink-0 items-center gap-1" role="tablist" aria-label="Clip piles">
+    <div
+      className="flex shrink-0 items-center gap-1"
+      role="tablist"
+      aria-label="Clip piles"
+      onKeyDown={onKeyDown}
+    >
       {PILE_ORDER.map((pile) => (
         <button
           key={pile}
+          data-pile={pile}
           role="tab"
           aria-selected={active === pile}
+          tabIndex={active === pile ? 0 : -1}
           onClick={() => onSelect(pile)}
           className={cn(
             'rounded-sm px-3 py-1.5 text-xs font-medium transition-colors duration-fast ease-standard',
@@ -198,7 +225,10 @@ export function PileList({
     setError('')
     setBusyId(clip.id)
     try {
-      await api(`/clips/${clip.id}/triage`, { method: 'PUT', body: { state: to } })
+      // The field is `triage`, pinned by a contract test: the backend declares
+      // TriageIn with extra="forbid" precisely so a wrong key (this call once
+      // sent `state`) fails loudly as a 422 instead of a cheerful silent no-op.
+      await api(`/clips/${clip.id}/triage`, { method: 'PUT', body: { triage: to } })
       await queryClient.invalidateQueries({ queryKey: ['review-clips', videoId] })
       await queryClient.invalidateQueries({ queryKey: ['clip-counts'] })
     } catch (e) {

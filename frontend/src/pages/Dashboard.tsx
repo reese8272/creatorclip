@@ -115,12 +115,17 @@ export function Dashboard() {
   // finally consuming it.
   let clipsPending = 0
   const countsLoading = clipCountsQuery.isPending
-  const countsByVideoId: Record<string, { total: number; rendered: number; pending: number }> = {}
+  const countsByVideoId: Record<
+    string,
+    { total: number; rendered: number; pending: number; reviewed: number }
+  > = {}
   for (const row of clipCountsQuery.data?.counts ?? []) {
     countsByVideoId[row.video_id] = {
       total: row.total,
       rendered: row.rendered,
       pending: row.pending ?? 0,
+      // Issue 445 AC5 — a clip counts as reviewed when it holds a verdict.
+      reviewed: (row.kept ?? 0) + (row.dropped ?? 0),
     }
   }
   for (const v of videos.filter((v) => v.ingest_status === 'done')) {
@@ -128,6 +133,7 @@ export function Dashboard() {
     clipInfoByVideo[v.id] = {
       total: counts?.total ?? 0,
       rendered: counts?.rendered ?? 0,
+      reviewed: counts?.reviewed ?? 0,
       loading: countsLoading,
     }
     clipsPending += counts?.pending ?? 0

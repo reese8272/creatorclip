@@ -5,7 +5,40 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-28 (latest) — Notification rows are written `pending`, not `sent` (Issue 530; amends Issue 349's ordering record)
+## 2026-08-28 (latest) — Issue 445 completion: first-click verdicts, post-hoc tags on a page-level strip, purge deferred to 446
+
+**Decision.** The 445 completion wave implements the owner's 2026-08-10 ruling as follows:
+
+1. **Keep/Drop commit on the first click** (`YourCall.tsx` POSTs the verdict immediately and the
+   queue advances). K/X are keyboard equivalents, registered on the SHARED shortcut bus
+   (`useEditorShortcuts`) rather than a private listener — the bus already refuses keystrokes
+   aimed at inputs, buttons, and open modals, so one typing-guard predicate exists, not two.
+2. **Post-hoc tags + Undo live on a page-level `LastCallStrip`, not inside YourCall.**
+   Structural, not aesthetic: `ReviewClipView` remounts per clip (`key={clip.id}`), so any
+   state referencing the *previous* clip cannot survive the advance inside the card. The strip
+   re-records the SAME verdict with tags attached (append-only feedback log; the trainer reads
+   the latest verdict per clip — Issue 444 — so enrichment cannot flip or duplicate a decision).
+3. **Undo is exclusively `PUT /clips/{id}/triage → pending`** (Issue 472: `skip` is never a
+   verdict). It rewinds the queue index rather than refetching `review-clips` — the 2026-08-12
+   ruling's invalidation contract (only `clip-counts`) stands, so an Undo can never silently
+   skip a clip.
+4. **"Purge the dropped" (AC1) is DEFERRED to Issue 446.** No `DELETE /clips/{id}` exists; clip
+   deletion is erasure semantics (media + feedback + impressions), which is exactly 446's scope.
+   Building a one-off deletion path inside a UI issue would fork that design.
+5. **The 422 fix is pinned by contract tests that CLICK.** Root cause of the shipped 422: tests
+   asserted the Un-keep button *exists* but never clicked it, so a wrong request-body key
+   (`state` vs `triage`) passed both suites. The new tests click Un-keep/Restore/Keep/Drop/Undo
+   and assert the exact JSON body — presence assertions don't survive contact with the wire.
+
+**Evidence.** `frontend/src/components/review/{YourCall,ClipPiles,LastCallStrip}.tsx`,
+`pages/Review.tsx`, `pages/Dashboard.tsx` + `components/dashboard/VideoTable.tsx` (AC5);
+tests in the same directories. Ledger reconciliation in the same pass: `docs/issues.md` §445
+checked with a ledger note, the stale "genuinely unbuilt" DECISIONS entry (2026-08-11) amended,
+`docs/AUDIT_KNOWN_ISSUES.md` stale §484 row corrected.
+
+---
+
+## 2026-08-28 — Notification rows are written `pending`, not `sent` (Issue 530; amends Issue 349's ordering record)
 
 **Decision (Issue 530).** `notification_deliveries` gains a `pending` status (migration 0065) and
 the send path is reordered: the row commits `pending` before the blocking mailer call, and `sent`
@@ -1044,6 +1077,16 @@ ship-as-is (the meaning-inverting cut is the class of defect that costs a creato
 — unacceptable for someone who has no personal relationship to extend goodwill).
 
 **(3) Issue 445 (three-pile triage UI) is built before non-friends arrive.**
+
+> ⚠️ **Amended 2026-08-28: the "genuinely unbuilt" claim below was stale one day after it was
+> written.** The piles, pile-in-URL reload persistence, and the Dashboard badge fix shipped
+> 2026-08-12 under commit `7e3582a` — a commit labelled "groundwork", which is the likely reason
+> this entry, `LEFT_OFF.md`, and the issue's checkboxes never caught up (2026-08-12's own "445
+> build ruling" entry below records the design decisions that build made). What actually remained,
+> and was completed 2026-08-28, was: a live 422 on Un-keep/Restore (`{state:…}` vs `{triage:…}`),
+> the owner's first-click Keep/Drop + post-hoc tags + Undo + K/X, AC5 progress copy, and pile-tab
+> keyboard nav. See the 2026-08-28 Issue-445 completion entry and `docs/issues.md` §445's ledger
+> note. Original (now-superseded) text follows.
 
 It is genuinely unbuilt — 6 unchecked ACs, four unresolved design questions — despite a handoff doc
 claiming the L27 triage UI had shipped. Strangers hit the review queue on their **first** upload, and
