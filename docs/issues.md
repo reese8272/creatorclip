@@ -5426,6 +5426,109 @@ whenever wanted). These need **decision entries ratifying them**, not work — s
 
 ---
 
+## Lane L31 — PRE-BETA CLOSEOUT (filed 2026-08-28)
+
+The final code wave before the fresh-upload E2E session and the #28 friend invite. Scope locked by
+owner 2026-08-28 (plan `wondrous-petting-shell`): the notification delivery-honesty fix (#530), the
+three small clip-output defects promoted from `docs/OFF_COURSE_BUGS.md` / the #495 list (#531–533),
+finishing #445, and #526. Explicitly out of scope: the operator DR track, `is_rewatch_spike`, #483,
+purge-dropped (deferred to #446), and #508–519.
+
+---
+
+### Issue 530: a notification row must not say `sent` before the send happens
+
+- [ ] **Status:** open · **Size:** M · **Lane:** L31 · filed 2026-08-28
+
+`_send_notification_async` constructs the delivery row already-terminal
+(`status=NotificationDeliveryStatus.sent`, `worker/tasks.py:6766-6776`) and commits it **before**
+the mailer call (`:6860`, the Issue-349 connection-freeing commit). Only an exception downgrades it
+to `failed`. Two consequences:
+
+1. A worker crashed/OOM-killed between commit and send leaves a permanently latched false `sent` —
+   the DB claims a delivery that never left the box (exactly the #529 forensic problem, but
+   reproducible even after Resend is live).
+2. The dedupe short-circuit (`:6787-6803`) adopts only `failed` rows, so a falsely-`sent` row can
+   never be retried.
+
+**Fix:** add `pending` to `NotificationDeliveryStatus` (`models.py:1653`, native PG enum migration);
+write the row as `pending` and commit (the connection is still freed before the blocking send, so
+Issue 349's intent is preserved); on success flip `pending → sent` in the post-send session **and
+record `provider_message_id`** (declared at `models.py:1746`, currently written by nothing —
+`mailer.send()` discards the Resend id at `notify/mailer.py:262-266`); on failure flip to `failed`
+as today. Widen the retry guard to adopt `failed` OR stale `pending`. Update the pinned ordering
+test (`tests/test_notifications.py:416`).
+
+Drive-bys in the same PR: the prod warning at `config.py:1245` names `NOTIFY_FROM_EMAIL`, which is
+not a real setting (should be `EMAIL_FROM`); `render.yaml:27` hardcodes `NOTIFY_BACKEND: console`
+under `ENV: production` (change to `sync: false`).
+
+**Acceptance**
+- [ ] A row is `pending` at the moment of the pre-send commit; `sent` only after the mailer returns
+- [ ] `sent` rows carry `provider_message_id` when the backend is resend
+- [ ] A stale `pending` row is adopted and retried; a `sent` row still short-circuits
+- [ ] Migration round-trips (CI `migration-lint`); enum change follows `docs/MIGRATIONS.md`
+- [ ] The `NOTIFY_FROM_EMAIL` warning text and `render.yaml` drift are fixed
+
+---
+
+### Issue 531: trim does not remap `reframe_track_jsonb`, so the crop overlay desyncs
+
+- [ ] **Status:** open · **Size:** S · **Lane:** L31 · filed 2026-08-28 · promoted from `docs/OFF_COURSE_BUGS.md` (2026-08-13, SEV3)
+
+After a clip trim, the stored crop track still describes the **pre-trim** timeline: overlay keyframe
+times are not remapped, so the frontend crop overlay drifts against the delivered video. The
+burned-in crop in the artifact itself is correct — only the editor overlay lies.
+
+**Fix:** remap the track's keyframe times to the delivered timeline when a trim is applied
+(`clip_engine/edits.py` / the clip PATCH path); if remap proves risky, the recorded fallback —
+hide the overlay whenever effective geometry differs from the track's basis — is acceptable.
+
+**Acceptance**
+- [ ] After a trim, overlay keyframe times align with the delivered timeline (or the overlay is
+      hidden when they cannot)
+- [ ] Test in the reframe/clip-edit suites (not eval scenarios — those cover window geometry only)
+- [ ] `docs/OFF_COURSE_BUGS.md` row flipped to fixed
+
+---
+
+### Issue 532: LLM title grounding reads words the trim removed
+
+- [ ] **Status:** open · **Size:** S · **Lane:** L31 · filed 2026-08-28 · promoted from `docs/OFF_COURSE_BUGS.md` (2026-08-13, SEV4)
+
+`generate_clip_metadata` and the title-suggestions endpoint window the **full source transcript**
+over the clip's original span, so words a trim removed can still ground titles/captions. Exposure is
+the on-demand regenerate path after a trim.
+
+**Fix:** filter grounding through the existing `map_words_to_delivered` so only delivered words are
+eligible (`worker/tasks.py` `generate_clip_metadata`, `knowledge/clip_titles.py`, the titles route).
+
+**Acceptance**
+- [ ] Grounding for a trimmed clip contains no trimmed-out words (test with a trim fixture)
+- [ ] Both call sites (worker task + on-demand endpoint) go through the same filter
+- [ ] `docs/OFF_COURSE_BUGS.md` row flipped to fixed
+
+---
+
+### Issue 533: the `captions_enabled` toggle is persisted but no renderer reads it
+
+- [ ] **Status:** open · **Size:** S · **Lane:** L31 · filed 2026-08-28 · promoted from the #495 deferred list
+
+The creator-level `captions_enabled` setting is persisted (`models.py`) and written by the style
+learner (`preference/style_learn.py:34`), but `clip_engine/render.py` gates caption burn-in on
+`style_preset["subtitle"]` alone — the switch the user sees does nothing (the
+`style_preset["background"]` shape again).
+
+**Fix:** make the render path honor the persisted setting; reconcile precedence between the creator
+toggle and the style preset and record it (a toggle set OFF must win — the user's explicit choice).
+
+**Acceptance**
+- [ ] `captions_enabled=false` → no burned captions on a rendered clip, regardless of preset
+- [ ] A test pins toggle-off → no captions and toggle-on → captions
+- [ ] The #495 bullet is marked done in its list
+
+---
+
 ## Tracker hygiene
 
 This file is the **sole authority** for the next free issue number (Issue 498 item 6). The number is
@@ -5438,7 +5541,7 @@ made the next filed issue collide with #520. Deleting the competing copies made 
 authoritative without making it correct — the mechanism is the fix. `docs/OFF_COURSE_BUGS.md`,
 2026-08-18.)*
 
-- Next free issue number: **530**.
+- Next free issue number: **534**.
 
 ---
 
