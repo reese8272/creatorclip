@@ -4,7 +4,35 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-28 (latest) — Issue 445 DONE: the triage UI is finished, and the ledger about it is finally honest
+## 2026-08-28 (latest, second entry) — Pre-beta closeout wave: Lane L31 code track COMPLETE (#530–533, 526, 528 drafted)
+
+Five PRs in one wave (plan `wondrous-petting-shell`), all merged + deployed except the
+deliberately-gated draft:
+
+- **#530 (PR #136)** — notification delivery honesty: rows commit `pending` and flip to `sent` +
+  `provider_message_id` only after the provider returns (migration 0065, real downgrade); the
+  retry guard adopts stale `pending` rows; found en route — Resend's `SendResponse` is a plain
+  dict, so the old `getattr(response, "id")` had always logged None. DECISIONS entry amends the
+  Issue-349 ordering record.
+- **#445 (PR #137)** — see the entry below.
+- **#531–533 (PR #138)** — clip polish: serve-time crop-track projection for trimmed clips,
+  delivered-word LLM grounding (both call sites), the `captions_enabled` toggle finally reaches
+  burn-in (explicit-False wins). Both OFF_COURSE rows flipped; eval floor 35 green.
+- **#526 (PR #139)** — the GDPR export gets its account surface (`DataExportSection` in Settings,
+  above deletion); the Privacy Policy's "download from your account" clause is now true.
+- **#528 (PR #140, DRAFT)** — the hard raise is written and green; **merge only the same day the
+  operator Resend flip (#529) is confirmed on prod.**
+
+**What remains before the friend invite (#28):** the operator track — Resend provisioning
+(#529: account + DNS per `docs/RUNBOOKS.md:5-140`, 48 h propagation is the long pole, then the
+`.env` flip) — and the **fresh-upload E2E session** (GO_LIVE Track 4: r2 CORS pre-flight, the
+three #395 drills, `clip_audit.py`, the live ACs for 484/427/430/448/520/524/525, one real
+`clips_ready` email with `handled_by='resend'` + `provider_message_id`, then the
+would-you-post-these verdict). Suite at close: 3325 passed / 0 failed; frontend 700 passed.
+
+---
+
+## 2026-08-28 — Issue 445 DONE: the triage UI is finished, and the ledger about it is finally honest
 
 Two findings and a build. **Finding 1:** most of 445 had been SHIPPED since 2026-08-12 (commit
 `7e3582a`, labelled "groundwork" — the likely reason `docs/issues.md`, DECISIONS 2026-08-11 and
