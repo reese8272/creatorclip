@@ -284,7 +284,10 @@ Filed, understood, deliberately not being worked — no need to report these:
 - The GKE / Helm track (`deploy/charts/`) — descoped for v1, never deployed, placeholder
   values throughout.
 - Lane L25 Batches C/D/E (B-roll, multi-track timeline, transitions) — filed, unfunded.
-- Issue 445 (three-pile triage UI) — known unbuilt, four design questions still open.
-- Issue 484 (a clip that opens mid-clause and inverts the speaker's meaning) — known,
-  filed, the highest-impact clip-quality defect.
+- Issue 445 (three-pile triage UI) — ✅ DONE 2026-08-28 (most shipped 2026-08-12 under a
+  "groundwork" commit; the completion wave fixed a live 422 on Un-keep/Restore and added
+  first-click verdicts, post-hoc tags + Undo, K/X, progress copy, keyboard nav).
+- Issue 484 (a clip that opens mid-clause and inverts the speaker's meaning) — ✅ FIXED
+  2026-08-25 (PR #134, sentence-index fix + 3 eval fixtures, floor 31→35); only the
+  fresh-upload live-verification AC remains (parked with the operator track).
 - Issue 495 — an 8-item deferred triage list from the 2026-08-14 pass.

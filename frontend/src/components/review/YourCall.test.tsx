@@ -40,9 +40,19 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
 }
 
-function renderYourCall(clip: ReviewClip = CLIP, onAdvance: () => void = () => {}) {
+function renderYourCall(
+  clip: ReviewClip = CLIP,
+  onAdvance: () => void = () => {},
+  onVerdict: (action: 'upvote' | 'downvote') => void = () => {},
+) {
   return render(
-    <YourCall clip={clip} trimStart={2} trimEnd={18} onAdvance={onAdvance} />,
+    <YourCall
+      clip={clip}
+      trimStart={2}
+      trimEnd={18}
+      onAdvance={onAdvance}
+      onVerdict={onVerdict}
+    />,
     { wrapper },
   )
 }
@@ -218,15 +228,14 @@ function feedbackFetch(status = 201) {
 }
 
 describe('YourCall — keep/drop write failures (Issue 437)', () => {
-  it('a failed Keep keeps the panel open, preserves the tags, and reads as an error', async () => {
+  it('a failed Keep reads as an error and does not advance', async () => {
     const fetchMock = feedbackFetch(502)
     vi.stubGlobal('fetch', fetchMock)
     const onAdvance = vi.fn()
-    renderYourCall(CLIP, onAdvance)
+    const onVerdict = vi.fn()
+    renderYourCall(CLIP, onAdvance, onVerdict)
 
     await userEvent.click(screen.getByRole('button', { name: 'Keep' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Good hook' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Submit' }))
 
     // Says plainly that nothing was persisted, in the danger tone — not green.
     const status = await screen.findByRole('status')
@@ -234,28 +243,32 @@ describe('YourCall — keep/drop write failures (Issue 437)', () => {
     expect(status.className).toContain('text-danger')
     expect(status.className).not.toContain('text-success')
 
-    // The creator's work survives, so one click re-submits it.
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Good hook' })).toHaveClass('border-accent')
+    // The clip stays put — one more click retries the same verdict.
+    expect(screen.getByRole('button', { name: 'Keep' })).toBeEnabled()
+    expect(onVerdict).not.toHaveBeenCalled()
     expect(onAdvance).not.toHaveBeenCalled()
   })
 
-  it('a successful Keep closes the panel and advances the queue', async () => {
+  it('a Keep commits on the FIRST click — no tag panel in the way (Issue 445)', async () => {
     const fetchMock = feedbackFetch(201)
     vi.stubGlobal('fetch', fetchMock)
     const onAdvance = vi.fn()
-    renderYourCall(CLIP, onAdvance)
+    const onVerdict = vi.fn()
+    renderYourCall(CLIP, onAdvance, onVerdict)
 
     await userEvent.click(screen.getByRole('button', { name: 'Keep' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Submit' }))
 
-    await waitFor(() => expect(onAdvance).toHaveBeenCalledTimes(1))
+    // One POST, straight away, no Submit ritual — and the verdict callback
+    // (which the page uses to advance + offer post-hoc tags) fires once.
+    await waitFor(() => expect(onVerdict).toHaveBeenCalledWith('upvote'))
+    expect(onVerdict).toHaveBeenCalledTimes(1)
+    const posts = postsTo(fetchMock, '/clips/c1/feedback')
+    expect(posts).toHaveLength(1)
+    expect(JSON.parse(String(posts[0][1]!.body))).toEqual({ action: 'upvote' })
     expect(screen.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument()
-    expect(screen.getByRole('status').className).toContain('text-success')
-    expect(postsTo(fetchMock, '/clips/c1/feedback')).toHaveLength(1)
   })
 
-  it('locks Submit while the write is in flight so a double-click writes one row', async () => {
+  it('locks Keep/Drop while the write is in flight so a double-click writes one row', async () => {
     let release: () => void = () => {}
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -270,15 +283,44 @@ describe('YourCall — keep/drop write failures (Issue 437)', () => {
     vi.stubGlobal('fetch', fetchMock)
     renderYourCall()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Keep' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Submit' }))
-
-    const inFlight = await screen.findByRole('button', { name: 'Saving…' })
-    expect(inFlight).toBeDisabled()
-    await userEvent.click(inFlight)
+    const keep = screen.getByRole('button', { name: 'Keep' })
+    await userEvent.click(keep)
+    expect(keep).toBeDisabled()
+    await userEvent.click(keep)
 
     expect(postsTo(fetchMock, '/clips/c1/feedback')).toHaveLength(1)
     release()
+  })
+})
+
+// Issue 445 — K/X are keyboard equivalents of Keep/Drop, routed through the
+// shared shortcut bus (which already refuses keystrokes aimed at inputs and
+// open modals).
+describe('YourCall — K/X keyboard shortcuts (Issue 445)', () => {
+  it('K commits a keep from the keyboard', async () => {
+    const fetchMock = feedbackFetch(201)
+    vi.stubGlobal('fetch', fetchMock)
+    const onVerdict = vi.fn()
+    renderYourCall(CLIP, () => {}, onVerdict)
+
+    await userEvent.keyboard('k')
+
+    await waitFor(() => expect(onVerdict).toHaveBeenCalledWith('upvote'))
+    expect(postsTo(fetchMock, '/clips/c1/feedback')).toHaveLength(1)
+  })
+
+  it('X commits a drop from the keyboard', async () => {
+    const fetchMock = feedbackFetch(201)
+    vi.stubGlobal('fetch', fetchMock)
+    const onVerdict = vi.fn()
+    renderYourCall(CLIP, () => {}, onVerdict)
+
+    await userEvent.keyboard('x')
+
+    await waitFor(() => expect(onVerdict).toHaveBeenCalledWith('downvote'))
+    const posts = postsTo(fetchMock, '/clips/c1/feedback')
+    expect(posts).toHaveLength(1)
+    expect(JSON.parse(String(posts[0][1]!.body))).toEqual({ action: 'downvote' })
   })
 })
 

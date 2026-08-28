@@ -14,6 +14,8 @@ import { VideoTitleCell } from '@/components/dashboard/VideoTitleCell'
 export interface ClipInfo {
   total: number
   rendered: number
+  /** Clips with a standing verdict — kept + dropped (Issue 445 AC5). */
+  reviewed: number
   loading: boolean
 }
 
@@ -252,7 +254,8 @@ function VideoRow({
 
 // Clips column (Issue 305): surface the rendered count that already lives in
 // clipInfoByVideo. Em-dash while the pipeline hasn't finished; "0" for a done
-// video with no clips; "{rendered} rendered" once clips exist.
+// video with no clips; "{rendered} rendered" once clips exist — plus the
+// per-video review progress (Issue 445 AC5, "clips reviewed" never "labels").
 function ClipsCell({ video, clipInfo }: { video: Video; clipInfo: ClipInfo | undefined }) {
   if (video.ingest_status !== 'done') {
     return <span className="font-mono text-sm text-subtle">—</span>
@@ -264,9 +267,14 @@ function ClipsCell({ video, clipInfo }: { video: Video; clipInfo: ClipInfo | und
     return <span className="font-mono text-base font-semibold text-muted">0</span>
   }
   return (
-    <span>
-      <span className="font-mono text-base font-semibold text-fg">{clipInfo.rendered}</span>
-      <span className="text-xs text-subtle"> rendered</span>
+    <span className="flex flex-col">
+      <span>
+        <span className="font-mono text-base font-semibold text-fg">{clipInfo.rendered}</span>
+        <span className="text-xs text-subtle"> rendered</span>
+      </span>
+      <span data-testid="video-review-progress" className="text-xs text-subtle">
+        {clipInfo.reviewed} of {clipInfo.total} reviewed
+      </span>
     </span>
   )
 }

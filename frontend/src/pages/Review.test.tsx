@@ -23,7 +23,7 @@ const BASE_VIDEO = {
 
 function mockFetch(personalization?: PersonalizationStatus | null) {
   const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input)
     if (url.endsWith('/videos')) return json({ videos: [BASE_VIDEO], state: 'populated' })
     if (url.endsWith('/videos/clips/counts'))
@@ -157,12 +157,62 @@ describe('Review', () => {
     )
   })
 
-  it('opens the tag-feedback panel when Keep is clicked', async () => {
-    vi.stubGlobal('fetch', mockFetch())
+  // Issue 445 (owner decision 2026-08-10): the verdict commits on the FIRST
+  // click; tags become optional post-hoc enrichment on the LastCallStrip.
+  it('Keep commits on first click and offers post-hoc tags + Undo on the strip', async () => {
+    const fetchMock = mockFetch()
+    vi.stubGlobal('fetch', fetchMock)
     renderReview('/app/review?video_id=v1')
     await screen.findByText(/Clip #1/)
     await userEvent.click(screen.getByRole('button', { name: 'Keep' }))
-    expect(screen.getByText('Why are you keeping this?')).toBeInTheDocument()
+
+    // The POST went out immediately — no Submit ritual.
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([u, init]) =>
+            String(u).endsWith('/clips/c1/feedback') &&
+            (init as RequestInit | undefined)?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+    // The strip carries the post-hoc enrichment and the Undo.
+    const strip = await screen.findByTestId('last-call-strip')
+    expect(within(strip).getByText('Kept')).toBeInTheDocument()
+    expect(within(strip).getByText(/Add why\?/)).toBeInTheDocument()
+    expect(within(strip).getByRole('button', { name: /Undo/ })).toBeInTheDocument()
+  })
+
+  it('Undo retracts via PUT triage → pending and returns to the clip (Issue 472 contract)', async () => {
+    const fetchMock = mockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    renderReview('/app/review?video_id=v1')
+    await screen.findByText(/Clip #1/)
+    await userEvent.click(screen.getByRole('button', { name: 'Drop' }))
+
+    const strip = await screen.findByTestId('last-call-strip')
+    await userEvent.click(within(strip).getByRole('button', { name: /Undo/ }))
+
+    // Retraction is EXCLUSIVELY the triage PUT — never a `skip` feedback POST.
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(
+        ([u, init]) =>
+          String(u).endsWith('/clips/c1/triage') &&
+          (init as RequestInit | undefined)?.method === 'PUT',
+      )
+      expect(put).toBeTruthy()
+      expect(JSON.parse(String((put![1] as RequestInit).body))).toEqual({ triage: 'pending' })
+    })
+    // The queue rewound to the retracted clip.
+    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
+    expect(screen.queryByTestId('last-call-strip')).toBeNull()
+  })
+
+  it('shows per-video progress as "N of M clips reviewed" (Issue 445 AC5)', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderReview('/app/review?video_id=v1')
+    await screen.findByText(/Clip #1/)
+    expect(screen.getByTestId('review-progress')).toHaveTextContent('0 of 1 clips reviewed')
   })
 
   // ── L26 Issue 424: the stage flip ──
@@ -306,7 +356,7 @@ const FOUR_CLIPS = [
 
 function mockFetchWithClips(clips: unknown[]) {
   const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input)
     if (url.endsWith('/videos')) return json({ videos: [BASE_VIDEO], state: 'populated' })
     if (url.endsWith('/videos/clips/counts'))

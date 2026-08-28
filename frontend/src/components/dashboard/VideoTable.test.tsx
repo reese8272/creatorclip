@@ -53,7 +53,10 @@ function makeVideo(over: Partial<Video> = {}): Video {
 
 function renderTable(
   videos: Video[],
-  clipInfoByVideo: Record<string, { total: number; rendered: number; loading: boolean }> = {},
+  clipInfoByVideo: Record<
+    string,
+    { total: number; rendered: number; reviewed: number; loading: boolean }
+  > = {},
   archivedView = false,
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -137,18 +140,20 @@ describe('VideoTable — StageStepper integration', () => {
 
   it('Clips column shows the rendered count, and Actions becomes a Review link (Issue 305)', () => {
     renderTable([makeVideo({ id: 'vd', ingest_status: 'done', clippable: true })], {
-      vd: { total: 3, rendered: 2, loading: false },
+      vd: { total: 3, rendered: 2, reviewed: 1, loading: false },
     })
     // Clips column surfaces the rendered count.
     expect(screen.getByText('2')).toBeInTheDocument()
     expect(screen.getByText('rendered')).toBeInTheDocument()
+    // Issue 445 AC5 — per-video review progress ("clips reviewed", not labels).
+    expect(screen.getByTestId('video-review-progress')).toHaveTextContent('1 of 3 reviewed')
     // Action is "Review" (the count no longer lives on the button).
     expect(screen.getByRole('link', { name: 'Review' })).toBeInTheDocument()
   })
 
   it('shows a Create recap link for a clippable done video with clips (Issue 192)', () => {
     renderTable([makeVideo({ id: 'vd', ingest_status: 'done', clippable: true })], {
-      vd: { total: 3, rendered: 2, loading: false },
+      vd: { total: 3, rendered: 2, reviewed: 1, loading: false },
     })
     const link = screen.getByRole('link', { name: 'Create recap' })
     expect(link).toHaveAttribute('href', '/video/vd/recap')
@@ -156,14 +161,14 @@ describe('VideoTable — StageStepper integration', () => {
 
   it('hides Create recap when the video is not clippable (Issue 192 gating)', () => {
     renderTable([makeVideo({ id: 'vd', ingest_status: 'done', clippable: false })], {
-      vd: { total: 3, rendered: 2, loading: false },
+      vd: { total: 3, rendered: 2, reviewed: 1, loading: false },
     })
     expect(screen.queryByRole('link', { name: 'Create recap' })).toBeNull()
   })
 
   it('Clips column shows 0 for a done video with no clips (Issue 305)', () => {
     renderTable([makeVideo({ id: 'vd', ingest_status: 'done', clippable: true })], {
-      vd: { total: 0, rendered: 0, loading: false },
+      vd: { total: 0, rendered: 0, reviewed: 0, loading: false },
     })
     expect(screen.getByText('0')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Generate clips' })).toBeInTheDocument()
@@ -225,7 +230,7 @@ describe('VideoTable — archive / restore / erase (Issue 446)', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
     renderTable([makeVideo({ id: 'va', ingest_status: 'done', clippable: true })], {
-      va: { total: 0, rendered: 0, loading: false },
+      va: { total: 0, rendered: 0, reviewed: 0, loading: false },
     })
     await userEvent.click(screen.getByRole('button', { name: 'Archive' }))
     const call = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/videos/va'))

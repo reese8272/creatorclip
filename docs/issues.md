@@ -2657,38 +2657,56 @@ Those clips read as `pending` until re-triaged — a handful of rows in a ~30 s 
 
 ### Issue 445: three workable piles — needs review / keep / drop
 
+- [x] **Status: DONE 2026-08-28** (completed in two waves — see the ledger note below)
+
 **Severity: high — this is the part the creator feels.**
 
 Depends on 444. The queue becomes "clips where `triage = 'pending'`", which fixes the
 reset-to-0-on-reload problem for free rather than as separate work.
+
+> **Ledger note (2026-08-28).** Most of this issue SHIPPED 2026-08-12 under commit `7e3582a`
+> ("groundwork", PR #81) — `ClipPiles.tsx`, `clipPiles.ts`, pile-in-URL, the Dashboard badge fix —
+> but the checkboxes here were never flipped, and `DECISIONS.md` 2026-08-11 / `LEFT_OFF.md` kept
+> repeating "genuinely unbuilt". The 2026-08-28 completion wave delivered what was actually
+> missing: a **live 422** on every Un-keep/Restore (the frontend sent `{state:…}` against
+> `TriageIn`'s `{triage:…}` with `extra="forbid"` — both suites were green over the broken seam
+> because nothing ever CLICKED the buttons; now pinned by contract tests that do), the owner's
+> first-click Keep/Drop + post-hoc tags + Undo + K/X (`YourCall.tsx`, `LastCallStrip.tsx`), AC5
+> progress copy, and PileTabs roving-tabindex keyboard nav.
 
 **Settled up front (owner, 2026-08-10):** Keep/Drop commits on the FIRST click and advances; the
 tag chips become optional post-hoc enrichment with an Undo, plus K/X keyboard shortcuts. Rationale:
 a mandatory optional field gets satisficed — twenty forced Submits produce twenty junk tags, which
 is worse for the style distiller than no tags at all.
 
-**Open design questions to settle in this issue's own CHECK phase:** where the piles live (tabs
-inside the focused one-clip-at-a-time `/review` ToolChrome flow vs a new `/library` list route —
-note `App.tsx:117`'s catch-all means a new path needs a real `Nav.tsx` entry); how a pile filter
-coexists with the Issue-377 shortlist toggle (`Review.tsx:231-249`); whether Keep/Drop should still
-open the tag panel every time (`components/review/YourCall.tsx:139-143` — the interaction performed
-dozens of times per video); and whether to introduce this codebase's **first** optimistic-update
-pattern (`grep -r 'onMutate|setQueryData|cancelQueries' frontend/src` returns zero hits today)
-without regressing Issue 437's honest-failure contract.
+**Design questions — all resolved** (`docs/DECISIONS.md` 2026-08-12 "the 445 build ruling" +
+2026-08-28): piles live as tabs inside `/review` (no `/library` route); the Issue-377 shortlist
+became ORDERING, not a filter; Keep/Drop no longer opens the tag panel (first-click commit, tags
+post-hoc); NO optimistic updates (Issue 437's honest-failure contract stands). Undo is exclusively
+`PUT /triage → pending` (Issue 472 — never a `skip` POST).
 
 **Acceptance**
-- [ ] Three piles, each independently workable: review the unreviewed, restore or purge the dropped,
-      export or un-keep the kept
-- [ ] Reviewed clips stay visibly reviewed across a reload; the queue resumes where it left off
-- [ ] Moving a clip between piles keeps the model in step — it records the new verdict rather
+- [x] Three piles, each independently workable: review the unreviewed, restore the dropped,
+      export or un-keep the kept (`ClipPiles.tsx` PileTabs/PileList/PileRow; Download + reused
+      PublishPanel on kept; Un-keep/Restore now actually work — the 422 is fixed and the request
+      body `{triage:…}` is pinned by tests that click the buttons).
+      **"Purge the dropped" is DEFERRED to Issue 446's archive/erase surface** (no
+      `DELETE /clips/{id}` exists; building a deletion path here is scope creep into 446's
+      erasure semantics — recorded in `DECISIONS.md` 2026-08-28)
+- [x] Reviewed clips stay visibly reviewed across a reload; the queue resumes where it left off
+      (`triage` is server state; pile lives in the URL, `Review.tsx` `selectPile`)
+- [x] Moving a clip between piles keeps the model in step — it records the new verdict rather
       than stacking a contradiction, so the pile and the model never disagree (Issue 444
       `PUT /clips/{id}/triage`; owner decision 2026-08-10 reversed the original label-free plan)
-- [ ] The Dashboard badge counts pending-triage clips and decrements as you rate — replacing the
-      `counts[].rendered` sum at `pages/Dashboard.tsx:108`; the test pinning the old wrong behaviour
-      (`pages/Dashboard.test.tsx:169`) is updated with a note on why it changed
-- [ ] Per-video review progress is visible ("5 of 12 reviewed")
-- [ ] `docs/UI.md` status-token contract honoured; exactly one `data-elevation="primary"` panel; no
-      native form controls; no glyph icons; keyboard-operable
+- [x] The Dashboard badge counts pending-triage clips and decrements as you rate — shipped
+      2026-08-12: `pages/Dashboard.tsx` sums `counts[].pending`; the old test renamed with the
+      required note (`pages/Dashboard.test.tsx:184-189`)
+- [x] Per-video review progress is visible — "N of M clips reviewed" in both Review toolbars and
+      the Dashboard Clips column (2026-08-28; copy per DECISIONS "clips reviewed", never "labels")
+- [x] `docs/UI.md` status-token contract honoured; exactly one `data-elevation="primary"` panel
+      (`Review.test.tsx`); no native form controls / no glyph icons (repo-wide contract tests);
+      keyboard-operable — K/X verdicts via the shared shortcut bus + roving-tabindex pile tabs
+      with ←/→/Home/End (2026-08-28)
 
 ### Issue 446: manage, archive, and delete uploads — and close the render erasure gap
 

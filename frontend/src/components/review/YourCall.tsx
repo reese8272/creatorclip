@@ -2,24 +2,12 @@ import { useState } from 'react'
 import { api, ApiError } from '@/lib/api'
 import { CleanedPreviewConfirm } from '@/components/review/CleanedPreviewConfirm'
 import { useClipRender } from '@/hooks/useClipRender'
+import { useEditorShortcuts } from '@/hooks/useEditorShortcuts'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { FeedbackAction, FeedbackPayload, ReviewClip, TaskQueued } from '@/types'
 import { ArrowRight, Download, RotateCcw, Scissors, ThumbsDown, ThumbsUp } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
-
-const APPROVE_TAGS = [
-  { id: 'titles_fit_style', label: 'Titles fit my style' },
-  { id: 'editing_matches_pace', label: 'Editing matches my pace' },
-  { id: 'good_hook', label: 'Good hook' },
-  { id: 'right_length', label: 'Right length' },
-]
-const DENY_TAGS = [
-  { id: 'editing_mismatch', label: "Editing doesn't match" },
-  { id: 'off_brand_topic', label: 'Off-brand topic' },
-  { id: 'bad_hook', label: 'Bad hook' },
-  { id: 'wrong_length', label: 'Wrong length' },
-]
 
 type FlashTone = 'muted' | 'success' | 'danger'
 
@@ -49,22 +37,26 @@ function feedbackErrorText(e: unknown): string {
 }
 
 // Issue 306: the triage actions grouped into one "Your call" card (moved out of
-// ClipPlayer). Keep/Drop open the inline feedback-tag panel; Save trim submits
-// the trim region the filmstrip produced; Download streams the rendered clip.
+// ClipPlayer). Issue 445 (owner decision 2026-08-10): Keep/Drop commit on the
+// FIRST click and advance — the old open-a-tag-panel-first flow made a
+// mandatory ritual of an optional field, and twenty forced Submits produce
+// twenty junk tags. Tags are now post-hoc enrichment (LastCallStrip, page
+// level) with an Undo; K/X are keyboard equivalents of Keep/Drop.
 export function YourCall({
   clip,
   trimStart,
   trimEnd,
   onAdvance,
+  onVerdict,
 }: {
   clip: ReviewClip
   trimStart: number
   trimEnd: number
   onAdvance: () => void
+  /** A Keep/Drop landed on the server — the page records it (for the post-hoc
+   *  tag strip + Undo) and advances the queue. */
+  onVerdict: (action: 'upvote' | 'downvote') => void
 }) {
-  const [panel, setPanel] = useState<'upvote' | 'downvote' | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [note, setNote] = useState('')
   // Issue 437: the tagged {text, tone} idiom the profile sections already use
   // (IdentitySection, BrandKitSection, DnaCard, …). A bare string forced ONE
   // colour on every outcome, so a failed keep/drop rendered in the success
@@ -112,26 +104,22 @@ export function YourCall({
   }
 
   /** Resolves true when the rating actually reached the API. */
-  async function sendFeedback(
-    action: RatingAction,
-    tags?: string[],
-    feedbackNote?: string,
-  ): Promise<boolean> {
+  async function sendFeedback(action: RatingAction): Promise<boolean> {
     if (submitting) return false
     const body: FeedbackPayload = { action }
     if (action === 'trim') {
       body.trim_start_s = trimStart
       body.trim_end_s = trimEnd
     }
-    if (tags?.length) body.feedback_tags = tags
-    if (feedbackNote) body.feedback_note = feedbackNote
     setSubmitting(true)
     setFlash({ text: 'Saving…', tone: 'muted' })
     try {
       await api(`/clips/${clip.id}/feedback`, { method: 'POST', body })
       setFlash({ text: ACTION_CONFIRMATION[action], tone: 'success' })
       setTimeout(() => setFlash(null), 1500)
-      if (action !== 'trim') onAdvance()
+      // First-click commit (Issue 445): the verdict is already saved; the page
+      // records it (post-hoc tags + Undo live there) and advances the queue.
+      if (action !== 'trim') onVerdict(action)
       return true
     } catch (e) {
       // Deliberately NOT auto-cleared: a success can fade, a lost rating can't
@@ -143,30 +131,19 @@ export function YourCall({
     }
   }
 
-  function openPanel(action: 'upvote' | 'downvote') {
-    setPanel(action)
-    setSelected(new Set())
-    setNote('')
-  }
-
-  function toggleTag(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  async function submitTagged() {
-    if (!panel || submitting) return
-    const tags = Array.from(selected).filter((t) => t !== '__other__')
-    // Closed only on success — a failed write leaves the panel, the tags and
-    // the note exactly as the creator left them, so one click re-submits.
-    if (await sendFeedback(panel, tags, note.trim() || undefined)) setPanel(null)
-  }
-
-  const tags = panel === 'upvote' ? APPROVE_TAGS : DENY_TAGS
+  // K = Keep, X = Drop (Issue 445 owner decision). The shared shortcut bus
+  // already refuses keystrokes aimed at inputs, buttons, and open modals, so
+  // typing a note or a title can never rate a clip.
+  useEditorShortcuts({
+    k: () => {
+      if (!submitting) void sendFeedback('upvote')
+      return true
+    },
+    x: () => {
+      if (!submitting) void sendFeedback('downvote')
+      return true
+    },
+  })
 
   return (
     <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
@@ -189,11 +166,35 @@ export function YourCall({
       </div>
 
       <div className="flex gap-2.5">
-        <Button variant="success" className="h-[46px] flex-1 text-base" onClick={() => openPanel('upvote')}>
-          <ThumbsUp className={ICON_SIZE.md} aria-hidden="true" /> Keep
+        {/* First click commits (Issue 445). The K/X hints are literal — the
+            shortcut bus binds them above. */}
+        <Button
+          variant="success"
+          className="h-[46px] flex-1 text-base"
+          disabled={submitting}
+          onClick={() => void sendFeedback('upvote')}
+        >
+          <ThumbsUp className={ICON_SIZE.md} aria-hidden="true" /> Keep{' '}
+          <kbd
+            aria-hidden="true"
+            className="ml-1 rounded-sm border border-strong px-1 font-mono text-xs opacity-70"
+          >
+            K
+          </kbd>
         </Button>
-        <Button variant="danger" className="h-[46px] flex-1 text-base" onClick={() => openPanel('downvote')}>
-          <ThumbsDown className={ICON_SIZE.md} aria-hidden="true" /> Drop
+        <Button
+          variant="danger"
+          className="h-[46px] flex-1 text-base"
+          disabled={submitting}
+          onClick={() => void sendFeedback('downvote')}
+        >
+          <ThumbsDown className={ICON_SIZE.md} aria-hidden="true" /> Drop{' '}
+          <kbd
+            aria-hidden="true"
+            className="ml-1 rounded-sm border border-strong px-1 font-mono text-xs opacity-70"
+          >
+            X
+          </kbd>
         </Button>
       </div>
 
@@ -309,46 +310,6 @@ export function YourCall({
 
       {/* The publish title/description moved to ClipMetadataPanel (Issue 424) —
           this card is the decision, that panel is the packaging. */}
-
-      {panel && (
-        <div className="mt-3.5 animate-slide-up border-t border-default pt-3.5">
-          <h4 className="mb-3 text-label uppercase tracking-[0.06em] text-muted">
-            {panel === 'upvote' ? 'Why are you keeping this?' : 'Why are you dropping this?'}
-          </h4>
-          <div className="mb-3 flex flex-wrap gap-2">
-            {[...tags, { id: '__other__', label: 'Other…' }].map((t) => (
-              <button
-                key={t.id}
-                onClick={() => toggleTag(t.id)}
-                className={cn(
-                  'rounded-sm border px-3 py-1 text-xs',
-                  selected.has(t.id)
-                    ? 'border-accent bg-accent-soft text-accent-text'
-                    : 'border-strong bg-bg text-muted hover:border-muted hover:text-fg',
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          {selected.has('__other__') && (
-            <input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Tell us more…"
-              className="mb-3 w-full rounded-sm border border-strong bg-bg px-3 py-2 text-xs text-fg placeholder:text-subtle focus:border-accent focus:outline-none"
-            />
-          )}
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setPanel(null)}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={() => void submitTagged()} disabled={submitting}>
-              {submitting ? 'Saving…' : 'Submit'}
-            </Button>
-          </div>
-        </div>
-      )}
 
       {/* Quiet footer, not a destination (Issue 424 — moved off the stage; the
           accessible name is load-bearing for the shortlist queue tests). */}

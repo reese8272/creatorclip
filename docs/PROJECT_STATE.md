@@ -4,7 +4,25 @@ Updated after every issue closes.
 
 ---
 
-## 2026-08-26 (latest) — Issue 523: the Stripe take-money-grant-nothing path is closed
+## 2026-08-28 (latest) — Issue 445 DONE: the triage UI is finished, and the ledger about it is finally honest
+
+Two findings and a build. **Finding 1:** most of 445 had been SHIPPED since 2026-08-12 (commit
+`7e3582a`, labelled "groundwork" — the likely reason `docs/issues.md`, DECISIONS 2026-08-11 and
+`LEFT_OFF.md` all kept calling it "genuinely unbuilt"). **Finding 2:** what did ship carried a
+**live 422** — `ClipPiles.tsx` sent `{state:…}` where `TriageIn` requires `{triage:…}` with
+`extra="forbid"`, so every Un-keep/Restore click failed; both suites were green because tests
+asserted the buttons *exist* but never clicked them. **The build:** the 422 fix pinned by
+contract tests that click and assert the exact body; the owner's 2026-08-10 ruling implemented —
+Keep/Drop commit on the FIRST click (K/X on the shared shortcut bus), tags demoted to optional
+post-hoc enrichment with Undo on a page-level `LastCallStrip` (Undo = `PUT /triage → pending`,
+never `skip`, per Issue 472); "N of M clips reviewed" in Review and the Dashboard Clips column
+(AC5); roving-tabindex pile tabs. Purge-dropped deferred to 446 (DECISIONS 2026-08-28). Frontend
+suite 696 passed / 0 failed (node 22 — node 26's jsdom phantom-failure trap again, see
+OFF_COURSE 2026-08-05). Part of the Lane L31 pre-beta closeout wave (#530–533 filed same day).
+
+---
+
+## 2026-08-26 — Issue 523: the Stripe take-money-grant-nothing path is closed
 
 The last money-path defect from the deep audit (one of only two Tier-1 findings that survived
 adversarial verification unmodified, latent behind a Dashboard toggle). Three legs, closed
