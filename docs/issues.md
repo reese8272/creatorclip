@@ -5309,7 +5309,7 @@ to `docs/GO_LIVE.md` as an OPEN Stage-A row, because #28's friend beta depends o
 
 ### Issue 526: the GDPR data export has no UI, and the Privacy Policy says it does
 
-- [ ] **Status:** open · **Size:** M (~4 h, or 0.5 h for the policy-only fix) · **Lane:** L30 Batch H ·
+- [x] **Status: DONE 2026-08-28** · **Size:** M (~4 h, or 0.5 h for the policy-only fix) · **Lane:** L30 Batch H ·
       **CORRECTED (high → medium), reproduced**
 
 Three endpoints, a table, a Celery task, integration tests, and a queue prod consumes — and **zero
@@ -5324,7 +5324,13 @@ email channel, so Art. 15/20 remains exercisable inside the statutory window; an
 exactly one layer thick — the missing button.
 
 **Acceptance**
-- [ ] Either ship the UI affordance **or** correct the one policy clause (decide explicitly; do not leave both)
+- [x] Either ship the UI affordance **or** correct the one policy clause (decide explicitly; do
+      not leave both) → **UI shipped** (owner decision 2026-08-28, pre-beta closeout wave):
+      `frontend/src/components/profile/DataExportSection.tsx`, rendered in Settings directly
+      above `AccountDeletion` — request (202, debounced) → poll while pending → authed
+      same-origin download link when ready → honest failed-state with the server error. Vitest
+      coverage in `DataExportSection.test.tsx` (4 tests). The policy clause is now true as
+      written; no policy edit needed.
 
 ---
 
@@ -6148,7 +6154,8 @@ Found and verified during the audit; deliberately NOT built, per the owner's
       `subtitle`) — the `style_preset["background"]` shape again → **DONE 2026-08-28 as
       Issue 533** (explicit `False` suppresses burn-in; absent key keeps legacy behavior)
 - [ ] `Profile.tsx` "Shorts published" / "Clip ratings" are hardcoded `"—"`; the data exists
-- [ ] Data export (`routers/export.py`) is fully built and has NO UI — GDPR Art. 15/20 relevant
+- [x] Data export (`routers/export.py`) is fully built and has NO UI — GDPR Art. 15/20 relevant
+      → **DONE 2026-08-28 as Issue 526** (`DataExportSection` in Settings, above deletion)
 - [ ] `is_rewatch_spike` is never written, so DNA retention spikes and the Issue-127 signal arm are
       permanently inert; `captions_available` likewise never written but exposed via API as `false`
 - [ ] `push_enabled` accepted and stored, never read

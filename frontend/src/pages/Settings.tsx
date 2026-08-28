@@ -9,6 +9,7 @@ import { IdentitySection } from '@/components/profile/IdentitySection'
 import { PublishingSection } from '@/components/profile/PublishingSection'
 import { ApiKeysSection } from '@/components/profile/ApiKeysSection'
 import { AccountDeletion } from '@/components/profile/AccountDeletion'
+import { DataExportSection } from '@/components/profile/DataExportSection'
 import { NotificationPreferencesSection } from '@/components/profile/NotificationPreferencesSection'
 import type { Identity, IdentityResponse, NicheOption } from '@/types'
 
@@ -228,6 +229,10 @@ export function Settings() {
         {/* Account & access — relocated from Profile (functional). */}
         <PublishingSection canPublish={user?.can_publish ?? false} />
         <ApiKeysSection />
+        {/* GDPR export (Issue 526) sits directly above deletion: the policy's
+            "download from your account" promise, finally true — and the export
+            is the natural step before an irreversible erasure. */}
+        <DataExportSection />
         <AccountDeletion />
 
         {/* Footer (design chrome). Each section above saves on its own; a single
