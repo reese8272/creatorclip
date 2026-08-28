@@ -779,20 +779,40 @@ async def _clip_metadata_async(video_id: str, creator_id: str | None = None) -> 
         vc_row = await session.get(VideoContext, video_uuid)
         context_summary = (vc_row.context_jsonb or {}).get("summary") if vc_row else None
 
+        from clip_engine.edits import extract_delivered_words, parse_geometry
+
         for clip in clips:
             window_start = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+            # Issue 532: a trimmed clip grounds in the DELIVERED words only —
+            # the midpoint window and the 5 s opening would otherwise quote
+            # content the trim removed (the opening is the visible liar: a trim
+            # that cuts the first seconds leaves the hook describing them).
+            # Falls back to the pre-fix extractors when there is no baked trim
+            # or no word-level timings.
+            keep_segments = parse_geometry(clip.effective_geometry_jsonb)
+            delivered = (
+                extract_delivered_words(segments_jsonb, window_start, clip.end_s, keep_segments)
+                if keep_segments is not None
+                else None
+            )
+            if delivered is not None:
+                window_text = " ".join(w["word"] for w in delivered if w["word"])[:1200]
+                opening_text = " ".join(
+                    w["word"] for w in delivered if w["word"] and w["start"] < 5.0
+                )[:300]
+            else:
+                # Each clip grounded in its OWN transcript window (Issue 414).
+                window_text = extract_transcript_window(segments_jsonb, window_start, clip.end_s)
+                # The words actually spoken in the clip's first ~5 s — the
+                # hook must reflect the real open, not the story summary
+                # (Issue 428).
+                opening_text = extract_transcript_opening(segments_jsonb, window_start)
             clip_payloads.append(
                 {
                     "clip_id": str(clip.id),
                     "rank": clip.rank,
-                    # Each clip grounded in its OWN transcript window (Issue 414).
-                    "window_text": extract_transcript_window(
-                        segments_jsonb, window_start, clip.end_s
-                    ),
-                    # The words actually spoken in the clip's first ~5 s — the
-                    # hook must reflect the real open, not the story summary
-                    # (Issue 428).
-                    "opening_text": extract_transcript_opening(segments_jsonb, window_start),
+                    "window_text": window_text,
+                    "opening_text": opening_text,
                 }
             )
 

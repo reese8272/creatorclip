@@ -436,3 +436,88 @@ def test_clip_model_has_suggested_columns_nullable() -> None:
     for col in ("suggested_title", "suggested_description", "suggested_hook"):
         assert Clip.__table__.columns[col].nullable is True
     assert Clip.__table__.columns["suggestions_generated_at"].nullable is True
+
+
+async def test_trimmed_clip_grounds_in_delivered_words_only(mocker) -> None:
+    """Issue 532: a clip with a confirmed trim grounds window_text AND
+    opening_text in the words that survive the trim — the batched path
+    previously windowed the full source transcript, so a regenerate after a
+    trim could title the clip against words the delivered video cut."""
+    from models import Transcript, VideoContext
+    from worker.tasks import _clip_metadata_async
+
+    creator_id = uuid.uuid4()
+    clip = _clip_row(1)  # origin 10.0, end 70.0
+    # Trim removed the first 5 clip-relative seconds (video-abs 10–15).
+    clip.effective_geometry_jsonb = {
+        "version": 1,
+        "keep_segments_s": [[5.0, 60.0]],
+        "duration_s": 55.0,
+    }
+
+    transcript = MagicMock(spec=Transcript)
+    transcript.segments_jsonb = {
+        "segments": [
+            {
+                "start": 10.0,
+                "end": 30.0,
+                "text": "TRIMMEDWORD KEPTOPEN LATERWORD",
+                "words": [
+                    # video-abs 11 → clip-rel 1.0 → inside the removed head.
+                    {"word": "TRIMMEDWORD", "start": 11.0, "end": 12.0},
+                    # video-abs 16 → clip-rel 6.0 → delivered 1.0 (< 5 s: opening).
+                    {"word": "KEPTOPEN", "start": 16.0, "end": 17.0},
+                    # video-abs 26 → clip-rel 16.0 → delivered 11.0 (past opening).
+                    {"word": "LATERWORD", "start": 26.0, "end": 27.0},
+                ],
+            }
+        ]
+    }
+    vc = MagicMock(spec=VideoContext)
+    vc.context_jsonb = {"summary": "A video about testing."}
+
+    exec_result = MagicMock()
+    exec_result.scalars = MagicMock(return_value=iter([clip]))
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[exec_result])
+
+    def _get(model, key):
+        if model is Transcript:
+            return transcript
+        if model is VideoContext:
+            return vc
+        return MagicMock(channel_title="Chan")
+
+    session.get = AsyncMock(side_effect=_get)
+
+    mocker.patch("worker.tasks.db.AsyncSessionLocal", return_value=_session_cm(session))
+    mocker.patch("worker.tasks._spend_guard_blocked", new=AsyncMock(return_value=False))
+    mocker.patch("dna.profile.get_active", new=AsyncMock(return_value=None))
+    mocker.patch("worker.progress.aemit", new=AsyncMock())
+    mocker.patch("billing.ledger.record_llm_usage", new=AsyncMock())
+
+    batch = mocker.patch(
+        "knowledge.clip_metadata.generate_clip_metadata_batch",
+        new=AsyncMock(
+            return_value=(
+                {},
+                {
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "cache_read": 0,
+                    "cache_creation": 0,
+                    "cache_1h": False,
+                },
+            )
+        ),
+    )
+
+    await _clip_metadata_async(str(uuid.uuid4()), str(creator_id))
+
+    payload = batch.await_args.args[3][0]
+    assert "KEPTOPEN" in payload["window_text"]
+    assert "LATERWORD" in payload["window_text"]
+    assert "TRIMMEDWORD" not in payload["window_text"]
+    # Opening = first 5 DELIVERED seconds — KEPTOPEN lands at 1.0, LATERWORD at 11.0.
+    assert payload["opening_text"] == "KEPTOPEN"

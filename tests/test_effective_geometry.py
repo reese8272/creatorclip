@@ -534,3 +534,105 @@ def test_clean_discard_clears_pending_geometry(client):
     values = {c.name: v for c, v in captured[1]._values.items()}
     assert values["pending_geometry_jsonb"].value is None
     assert clip.pending_geometry_jsonb is None
+
+
+# ── Issue 531/532: delivered-timeline projections ────────────────────────────
+
+
+class TestMapTimeToDelivered:
+    def test_maps_inside_a_keep_segment(self) -> None:
+        from clip_engine.edits import map_time_to_delivered
+
+        # keep [2,5) and [8,10): t=9 → 3 (len of first segment) + 1
+        assert map_time_to_delivered(9.0, [(2.0, 5.0), (8.0, 10.0)]) == 4.0
+
+    def test_cut_instant_returns_none(self) -> None:
+        from clip_engine.edits import map_time_to_delivered
+
+        assert map_time_to_delivered(6.0, [(2.0, 5.0), (8.0, 10.0)]) is None
+
+
+class TestRemapCropTrackToDelivered:
+    _TRACK = {
+        "version": 1,
+        "mode": "speaker_cut",
+        "source": {"width": 1920, "height": 1080},
+        "crop": {"width": 607, "height": 1080},
+        "origin_s": 10.0,
+        "duration_s": 20.0,
+        "keyframes": [{"t": 0.0, "x": 100}, {"t": 4.0, "x": 1196}, {"t": 12.0, "x": 300}],
+        "cuts": [{"t": 4.0, "from_x": 100, "to_x": 1196, "speaker": 1}],
+        "shots": [{"t": 4.0}],
+        "speakers": {"count": 2, "mapping_confidence": 0.9},
+        "meta": {"sample_fps": 5.0, "fallback": False},
+    }
+
+    def test_entries_shift_and_cut_entries_drop(self) -> None:
+        """Trim removes [0,6): the t=0/t=4 keyframes, the cut and the shot all
+        fall inside the cut and drop; the t=12 keyframe shifts to 6; a seam
+        keyframe is synthesized at delivered t=0 with the sampled x."""
+        from clip_engine.edits import remap_crop_track_to_delivered
+
+        out = remap_crop_track_to_delivered(self._TRACK, [(6.0, 20.0)])
+        assert out["duration_s"] == 14.0
+        assert out["cuts"] == []
+        assert out["shots"] == []
+        # Seam keyframe at t=0: sampled at original t=6 (between kf 4.0→12.0,
+        # after the cut at 4.0 — snap rule gives to_x=1196... but the cut is at
+        # exactly k0.t so the span 4.0→12.0 has no interior cut; lerp applies:
+        # x = 1196 + (6-4)/(12-4) * (300-1196) = 1196 - 224 = 972.
+        assert out["keyframes"][0] == {"t": 0.0, "x": 972.0}
+        assert out["keyframes"][1] == {"t": 6.0, "x": 300}
+        # Untouched metadata rides along.
+        assert out["origin_s"] == 10.0
+        assert out["source"] == self._TRACK["source"]
+
+    def test_multi_segment_offsets_accumulate(self) -> None:
+        from clip_engine.edits import remap_crop_track_to_delivered
+
+        # keep [0,2) and [10,20): kf t=12 → 2 + (12-10) = 4
+        out = remap_crop_track_to_delivered(self._TRACK, [(0.0, 2.0), (10.0, 20.0)])
+        assert out["duration_s"] == 12.0
+        kept_times = [k["t"] for k in out["keyframes"]]
+        assert kept_times[0] == 0.0  # seam for segment 1 (t=0 original)
+        assert 4.0 in kept_times  # the t=12 keyframe, shifted
+        # The original t=4 keyframe fell in the cut → only seam + shifted survive.
+        assert out["cuts"] == []
+
+
+class TestExtractDeliveredWords:
+    _SEGMENTS = {
+        "segments": [
+            {
+                "start": 300.0,
+                "end": 320.0,
+                "text": "TRIMMED OPEN then KEPT STORY",
+                "words": [
+                    {"word": "TRIMMED", "start": 301.0, "end": 302.0},
+                    {"word": "OPEN", "start": 302.5, "end": 303.0},
+                    {"word": "KEPT", "start": 315.0, "end": 315.5},
+                    {"word": "STORY", "start": 316.0, "end": 316.5},
+                ],
+            }
+        ]
+    }
+
+    def test_drops_trimmed_words_and_rebases_times(self) -> None:
+        from clip_engine.edits import extract_delivered_words
+
+        # Clip origin 300, end 360; trim removed the first 10 clip-relative
+        # seconds (keep [10, 60)).
+        out = extract_delivered_words(self._SEGMENTS, 300.0, 360.0, [(10.0, 60.0)])
+        assert out is not None
+        assert [w["word"] for w in out] == ["KEPT", "STORY"]
+        # Delivered-relative: original clip-relative 15.0 - 10.0 = 5.0
+        assert out[0]["start"] == 5.0
+
+    def test_returns_none_without_word_timings(self) -> None:
+        """Pre-Deepgram transcripts have no word arrays — callers fall back to
+        the segment-midpoint window (the pre-fix behavior) instead of silently
+        grounding on nothing."""
+        from clip_engine.edits import extract_delivered_words
+
+        segs = {"segments": [{"start": 300.0, "end": 320.0, "text": "no words here"}]}
+        assert extract_delivered_words(segs, 300.0, 360.0, [(10.0, 60.0)]) is None

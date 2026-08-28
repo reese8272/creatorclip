@@ -443,6 +443,136 @@ def map_words_to_delivered(
     return mapped
 
 
+def map_time_to_delivered(
+    t: float, keep_segments: list[tuple[float, float]]
+) -> float | None:
+    """Project one clip-relative instant onto the delivered timeline.
+
+    Returns ``None`` when the instant falls inside a cut — the moment does not
+    exist in the delivered video. Same timebase rules as
+    ``map_words_to_delivered``.
+    """
+    offset = 0.0
+    for a, b in keep_segments:
+        if a <= t < b:
+            return offset + (t - a)
+        offset += b - a
+    return None
+
+
+def _sample_track_x(keyframes: list[dict], cuts: list[dict], t: float) -> float:
+    """Crop-window left edge at clip-relative ``t`` — the server-side mirror of
+    the frontend's ``sampleCropX`` (lerp between keyframes, SNAP at cuts), used
+    only to synthesize seam keyframes in ``remap_crop_track_to_delivered``.
+    Clamping to ``maxCropX`` is left to the consumer, as on the wire.
+    """
+    if not keyframes:
+        return 0.0
+    if t <= float(keyframes[0].get("t", 0.0)):
+        return float(keyframes[0].get("x", 0.0))
+    last = keyframes[-1]
+    if t >= float(last.get("t", 0.0)):
+        return float(last.get("x", 0.0))
+    i = 0
+    while i < len(keyframes) - 1 and float(keyframes[i + 1].get("t", 0.0)) <= t:
+        i += 1
+    k0, k1 = keyframes[i], keyframes[i + 1]
+    k0_t, k1_t = float(k0.get("t", 0.0)), float(k1.get("t", 0.0))
+    for cut in cuts:
+        cut_t = float(cut.get("t", 0.0))
+        if k0_t < cut_t <= k1_t:
+            return float(cut.get("from_x", 0.0) if t < cut_t else cut.get("to_x", 0.0))
+    f = (t - k0_t) / (k1_t - k0_t) if k1_t > k0_t else 0.0
+    return float(k0.get("x", 0.0)) + f * (float(k1.get("x", 0.0)) - float(k0.get("x", 0.0)))
+
+
+def remap_crop_track_to_delivered(
+    track: dict, keep_segments: list[tuple[float, float]]
+) -> dict:
+    """Project a persisted crop track (``clips.reframe_track_jsonb``, the wire
+    contract built by ``clip_engine/reframe.py::_build_track_json``) onto the
+    delivered timeline of a trimmed clip (Issue 531).
+
+    Keyframe/cut/shot ``t`` values are clip-relative with the SAME origin as
+    ``effective_geometry_jsonb`` segments (``setup_start_s ?? start_s`` — the
+    ONE origin rule, Issue 475), so this is pure segment arithmetic: entries
+    inside a cut are dropped, survivors shift left by the removed time, and a
+    synthetic keyframe is emitted at each keep-segment start (sampled with the
+    frontend's own lerp/snap rule) so the overlay never interpolates across a
+    trim seam that the delivered video jumps over. ``duration_s`` becomes the
+    delivered duration. The stored row is untouched — this is a serve-time
+    projection, which also heals clips trimmed before the fix shipped.
+    """
+    remapped = dict(track)
+    keyframes = [k for k in track.get("keyframes", []) if isinstance(k, dict)]
+    cuts = [c for c in track.get("cuts", []) if isinstance(c, dict)]
+
+    new_keyframes: list[dict] = []
+    offset = 0.0
+    for a, b in keep_segments:
+        seam_x = _sample_track_x(keyframes, cuts, a)
+        new_keyframes.append({"t": round(offset, 3), "x": seam_x})
+        for k in keyframes:
+            k_t = float(k.get("t", 0.0))
+            if a < k_t < b:
+                new_keyframes.append({**k, "t": round(offset + (k_t - a), 3)})
+        offset += b - a
+
+    def _remap_entries(entries: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        for e in entries:
+            d_t = map_time_to_delivered(float(e.get("t", 0.0)), keep_segments)
+            if d_t is not None:
+                out.append({**e, "t": round(d_t, 3)})
+        return out
+
+    remapped["keyframes"] = new_keyframes
+    remapped["cuts"] = _remap_entries(cuts)
+    if isinstance(track.get("shots"), list):
+        remapped["shots"] = _remap_entries(
+            [s for s in track["shots"] if isinstance(s, dict)]
+        )
+    remapped["duration_s"] = round(sum(b - a for a, b in keep_segments), 3)
+    return remapped
+
+
+def extract_delivered_words(
+    segments_jsonb: dict | None,
+    origin_s: float,
+    end_s: float,
+    keep_segments: list[tuple[float, float]],
+) -> list[dict] | None:
+    """Word dicts actually PRESENT in the delivered video of a trimmed clip.
+
+    Flattens word-level timings in video-absolute ``[origin_s, end_s)`` to
+    clip-relative seconds and projects them through ``keep_segments``
+    (``map_words_to_delivered``), so grounding never quotes words a trim
+    removed (Issue 532). Returns ``None`` when the transcript has no
+    word-level timings anywhere in the window (pre-Deepgram) — callers fall
+    back to the segment-midpoint window, the pre-fix behavior.
+    """
+    if not segments_jsonb:
+        return None
+    words: list[dict] = []
+    saw_word_timings = False
+    for seg in segments_jsonb.get("segments", []):
+        for w in seg.get("words") or []:
+            saw_word_timings = True
+            try:
+                w_start = float(w.get("start", 0.0))
+                w_end = float(w.get("end", w_start))
+            except (TypeError, ValueError):
+                continue
+            if w_end <= origin_s or w_start >= end_s:
+                continue
+            words.append(
+                {"word": str(w.get("word", "")), "start": w_start - origin_s, "end": w_end - origin_s}
+            )
+    if not saw_word_timings:
+        return None
+    return map_words_to_delivered(words, keep_segments)
+
+
 def _invert_cuts(
     cuts: list[tuple[float, float]], clip_duration_s: float
 ) -> list[tuple[float, float]]:

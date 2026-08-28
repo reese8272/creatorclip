@@ -525,3 +525,54 @@ def test_render_endpoint_409_when_source_expired(client):
     assert detail["code"] == "source_expired"
     assert "re-upload" in detail["message"]
     mock_task.delay.assert_not_called()
+
+
+def test_render_clip_file_captions_disabled_suppresses_subtitles(tmp_path):
+    """Issue 533: an explicit captions_enabled=False wins over the subtitle key
+    — the creator's toggle finally reaches the burn-in decision. An ABSENT key
+    must keep today's behavior (legacy presets never carried it), which the
+    passes-style test above pins."""
+    from pathlib import Path
+    from unittest.mock import patch
+
+    called_args = {}
+
+    def _mock_run(cmd, label, timeout_s=120.0):
+        called_args["cmd"] = cmd
+
+    segments = [
+        {
+            "start": 10.0,
+            "end": 12.0,
+            "text": "hello world",
+            "words": [
+                {"word": "hello", "start": 10.0, "end": 10.5},
+                {"word": "world", "start": 10.6, "end": 11.2},
+            ],
+        }
+    ]
+
+    with (
+        patch("clip_engine.render._run", _mock_run),
+        patch("clip_engine.render._frame_dimensions", return_value=(1920, 1080)),
+        patch("clip_engine.render._extract_keyframe"),
+        patch("clip_engine.render._detect_face_center_x", return_value=960),
+        patch("tempfile.NamedTemporaryFile") as mock_tmp,
+    ):
+        mock_tmp.return_value.__enter__ = lambda s: s
+        mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
+        mock_tmp.return_value.name = str(tmp_path / "kf.jpg")
+
+        render_clip_file(
+            source_path=Path("/fake/source.mp4"),
+            start_s=10.0,
+            end_s=40.0,
+            out_path=tmp_path / "out.mp4",
+            style_preset={"subtitle": "bold_pop", "captions_enabled": False},
+            transcript_segments=segments,
+        )
+
+    vf_arg_index = called_args["cmd"].index("-vf")
+    vf = called_args["cmd"][vf_arg_index + 1]
+    assert "crop=" in vf
+    assert "subtitles=" not in vf

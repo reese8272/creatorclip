@@ -285,3 +285,88 @@ def test_title_suggestions_grounds_in_clip_window_not_minute_zero(client, mocker
         assert "PAST THE CLIP" not in passed_transcript
     finally:
         app.dependency_overrides.clear()
+
+
+# ── Issue 532: trimmed clips ground in DELIVERED words only ───────────────────
+
+
+def test_title_suggestions_exclude_trimmed_words(client, mocker) -> None:
+    """A clip with a confirmed trim (effective geometry recorded) must ground
+    title suggestions in the words that survive the trim — regenerating after
+    a trim previously quoted content the delivered video no longer contains."""
+    import uuid as _uuid
+    from unittest.mock import AsyncMock, MagicMock
+
+    from auth import get_current_creator
+    from db import get_session
+    from main import app
+    from models import Clip, Creator
+    from tests._helpers import override_current_creator
+
+    creator = MagicMock(spec=Creator)
+    creator.id = _uuid.uuid4()
+    creator.minutes_balance = 100
+    creator.channel_title = "TestChannel"
+
+    cl = MagicMock(spec=Clip)
+    cl.id = _uuid.uuid4()
+    cl.creator_id = creator.id
+    cl.video_id = _uuid.uuid4()
+    cl.setup_start_s = 300.0
+    cl.start_s = 300.0
+    cl.end_s = 360.0
+    # The trim removed the first 10 clip-relative seconds.
+    cl.effective_geometry_jsonb = {
+        "version": 1,
+        "keep_segments_s": [[10.0, 60.0]],
+        "duration_s": 50.0,
+    }
+
+    transcript = MagicMock()
+    transcript.segments_jsonb = {
+        "segments": [
+            {
+                "start": 300.0,
+                "end": 330.0,
+                "text": "TRIMMEDWORD then KEPTWORD",
+                "words": [
+                    {"word": "TRIMMEDWORD", "start": 302.0, "end": 303.0},
+                    {"word": "KEPTWORD", "start": 315.0, "end": 316.0},
+                ],
+            }
+        ]
+    }
+
+    async def _session():
+        s = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = cl
+        exec_result.scalars = MagicMock(return_value=iter([]))
+        s.execute = AsyncMock(return_value=exec_result)
+        s.scalar = AsyncMock(return_value=transcript)
+        yield s
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _session
+    try:
+        gen = mocker.patch(
+            "knowledge.clip_titles.generate_clip_title_suggestions",
+            new=AsyncMock(
+                return_value=(
+                    {"titles": [], "hook_rewrites": [], "disclaimer": "Estimates only."},
+                    {"input_tokens": 5, "output_tokens": 2, "cache_read": 0, "cache_creation": 0},
+                )
+            ),
+        )
+        mocker.patch("routers.clips.check_positive_balance", new=AsyncMock(return_value=None))
+        mocker.patch("billing.ledger.record_llm_usage", new=AsyncMock())
+        mocker.patch("routers.clips.record_llm_tokens")
+
+        resp = client.post(f"/clips/{cl.id}/title-suggestions")
+        assert resp.status_code == 200, resp.text
+
+        passed_transcript = gen.call_args.args[2]
+        assert "KEPTWORD" in passed_transcript
+        assert "TRIMMEDWORD" not in passed_transcript
+    finally:
+        app.dependency_overrides.clear()

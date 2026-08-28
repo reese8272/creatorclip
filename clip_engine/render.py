@@ -633,8 +633,9 @@ def render_clip_file(
       - ``caption_position``: "top" | "middle" | "bottom" | None (Issue 427) —
         the creator's caption band. None → per-style default (karaoke at the
         ~70% bottom band with face avoidance; minimal/gradient lower-third).
-      - ``captions_enabled``: bool (currently informational — the subtitle key
-        is the load-bearing switch)
+      - ``captions_enabled``: bool (Issue 533) — an explicit ``False`` suppresses
+        caption burn-in regardless of the subtitle key; absent/True defers to
+        the subtitle key (legacy rows never carried this key)
       - ``zoom_on_peak``: bool (Issue 184) — when set and ``peak_s`` is inside the
         clip window, apply a brief punch-in centered on the peak (Principle 4).
         Off by default.
@@ -901,6 +902,14 @@ def render_clip_file(
     ass_path: Path | None = None
     if style_preset:
         subtitle_key = style_preset.get("subtitle")
+        # Issue 533: the creator's captions toggle finally reaches the burn-in
+        # decision. Only an EXPLICIT False suppresses — an absent key keeps
+        # today's behavior, because legacy style_preset rows never carried the
+        # key and must not silently lose their captions. Nulling the key here
+        # (rather than skipping the block) also keeps the unknown-style warning
+        # below from firing on a deliberate opt-out.
+        if style_preset.get("captions_enabled") is False:
+            subtitle_key = None
         if subtitle_key in _ANIMATED_CAPTION_STYLES:
             # Sibling temp file to out_path so we co-cleanup in the finally block.
             # Suffix is required for the {clip_id}_{style}.ass naming hint Issue 133
