@@ -1,11 +1,22 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-26 · **Branch:** `fix/issue-523-stripe-async-payments` ·
-**Working tree:** ✅ **CLEAN**
+**Last updated:** 2026-08-28 · **Branch:** `main` · **Working tree:** ✅ **CLEAN**
 
-> ⚠️ **One PR is open: #135 (Issue 523 — Stripe async payments).** Merging it once green is the
-> first action below. Everything earlier is merged and deployed (**#134**/Issue 484 merged +
-> live-verified 2026-08-25).
+> ⚠️ **One PR is open, ON PURPOSE: #140 (Issue 528 — hard-reject console notify backend), a
+> DRAFT gated on the operator Resend flip (#529). Merge it the same day the flip is confirmed,
+> not before** — it fails boot without `RESEND_API_KEY`.
+
+**Shipped 2026-08-28 — the pre-beta closeout wave (plan `wondrous-petting-shell`), 4 PRs merged
++ deployed:** **#136** (Issue 530 — notification rows commit `pending`, flip to `sent` +
+`provider_message_id` after the provider returns; migration 0065), **#137** (Issue 445 — triage
+UI finished: the Un-keep/Restore 422, first-click Keep/Drop + K/X, post-hoc tags + Undo, AC5
+progress, keyboard nav), **#138** (Issues 531–533 — crop-track trim remap, delivered-word
+grounding, captions toggle), **#139** (Issue 526 — GDPR export UI in Settings). Issues L31
+#530–533 filed and closed same day; #526 closed; #528 drafted.
+
+**Next: the operator track, then the fresh-upload E2E finale** (GO_LIVE Track 4) — see
+`docs/PROJECT_STATE.md` 2026-08-28 (second entry) for the exact list. Start the Resend DNS
+records FIRST (48 h propagation, `docs/RUNBOOKS.md:5-140`).
 
 **Shipped 2026-08-17:** **#119** (the audit itself + Issue 498 items 1–3), **#120** (Issue 521 — the
 lying gate), **#121** (Issue 520 — the personalization SEV1), **#122** (handoff).
@@ -102,7 +113,7 @@ live — that needs ≥21 clips rated.
 
 | Batch | Issues | Note |
 |---|---|---|
-| **H** | 526, 527 | Dead output — the GDPR export has no UI while the Privacy Policy says it does; 527 is six paid capabilities consumed by nothing (mostly delete/wire-up/keep *decisions*, not code). |
+| **H** | ~~526~~, 527 | **526 DONE 2026-08-28** (PR #139 — `DataExportSection` in Settings). 527 remains: six paid capabilities consumed by nothing (mostly delete/wire-up/keep *decisions*, not code). |
 | **D / E / F** | 508–510 / 511–515 / 516–519 | Docs-as-schema, production truthfulness, process artifacts. **508 is the natural follow-on** — the same "derive it, don't type it" rule applied to doc citations. |
 | *also open* | 498 items 4–5, 495 | ~~445~~ **DONE 2026-08-28** — it was mostly SHIPPED 2026-08-12 (commit `7e3582a`, "groundwork"); the completion wave fixed the live 422 on Un-keep/Restore and added first-click Keep/Drop + post-hoc tags/Undo + K/X + progress + keyboard nav. See `docs/issues.md` §445 ledger note. |
 
