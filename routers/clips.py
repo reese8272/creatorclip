@@ -2154,7 +2154,17 @@ async def get_clip_crop_track(
     off at render time, or the clip predates the feature (honest absence:
     the frontend overlay renders nothing). Per-creator isolation via
     ``get_owned``: another creator's clip 404s identically.
+
+    Issue 531: after a confirmed trim, the stored track still describes the
+    PRE-trim timeline, so the overlay drifted against the delivered video
+    (the burned-in crop was always correct — only the overlay lied). The
+    track is projected through ``effective_geometry_jsonb`` at serve time:
+    a projection rather than a rewrite, so rows trimmed before this fix
+    heal too, and a later re-render (which nulls the geometry and rewrites
+    the track) needs no special case.
     """
+    from clip_engine.edits import parse_geometry, remap_crop_track_to_delivered
+
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     if clip.reframe_track_jsonb is None:
         raise HTTPException(
@@ -2164,6 +2174,9 @@ async def get_clip_crop_track(
                 "message": "No crop track exists for this clip.",
             },
         )
+    keep_segments = parse_geometry(clip.effective_geometry_jsonb)
+    if keep_segments is not None:
+        return remap_crop_track_to_delivered(clip.reframe_track_jsonb, keep_segments)
     return clip.reframe_track_jsonb
 
 
@@ -2279,10 +2292,24 @@ async def get_clip_title_suggestions(
     # ([setup_start_s ?? start_s, end_s], midpoint-assigned) — previously this
     # passed the whole video transcript truncated to 1500 chars, so any clip
     # past ~minute 2 was titled against minute-0 content.
+    # Issue 532: a trimmed clip grounds in the DELIVERED words only — the
+    # midpoint window would happily quote content the trim removed (exposure:
+    # regenerate-after-trim). Falls back to the midpoint window when there is
+    # no baked trim or no word-level timings (pre-Deepgram).
+    from clip_engine.edits import extract_delivered_words, parse_geometry
+
     window_start = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
-    clip_transcript = extract_transcript_window(
-        transcript.segments_jsonb if transcript else None, window_start, clip.end_s
+    segments_jsonb = transcript.segments_jsonb if transcript else None
+    keep_segments = parse_geometry(clip.effective_geometry_jsonb)
+    delivered_words = (
+        extract_delivered_words(segments_jsonb, window_start, clip.end_s, keep_segments)
+        if keep_segments is not None
+        else None
     )
+    if delivered_words is not None:
+        clip_transcript = " ".join(w["word"] for w in delivered_words if w["word"])[:1200]
+    else:
+        clip_transcript = extract_transcript_window(segments_jsonb, window_start, clip.end_s)
 
     # Fetch the creator's DNA brief.
     dna = await _get_active_dna(session, creator.id)

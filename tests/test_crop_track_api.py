@@ -374,3 +374,48 @@ def test_clip_model_has_nullable_track_column():
     col = Clip.__table__.columns["reframe_track_jsonb"]
     assert col.nullable is True
     assert isinstance(col.type, PGJSONB)
+
+
+# ── Issue 531: trimmed clips serve a delivered-timeline projection ───────────
+
+
+class TestCropTrackTrimRemap:
+    def test_trimmed_clip_serves_remapped_track(self):
+        """With effective geometry recorded (a confirmed trim), keyframe/cut
+        times are projected onto the delivered timeline and duration_s shrinks
+        — the overlay must describe the video the player is actually playing,
+        not the pre-trim render."""
+        creator = _creator()
+        clip = _clip(creator.id, _TRACK)
+        # Trim kept only clip-relative [1.0, 10.0): the t=0.0/0.2 keyframes and
+        # the 0.2 cut fall inside the removed head and drop.
+        clip.effective_geometry_jsonb = {
+            "version": 1,
+            "keep_segments_s": [[1.0, 10.0]],
+            "duration_s": 9.0,
+        }
+        _overrides(creator, clip)
+        try:
+            resp = TestClient(app).get(f"/clips/{clip.id}/crop-track")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["duration_s"] == 9.0
+            assert body["cuts"] == []
+            # A seam keyframe is synthesized at delivered t=0 with the crop
+            # position sampled at the trim point (past the last keyframe → its x).
+            assert body["keyframes"][0] == {"t": 0.0, "x": 1196.0}
+        finally:
+            _clear()
+
+    def test_untrimmed_clip_serves_the_raw_track(self):
+        """No effective geometry → the stored track passes through untouched."""
+        creator = _creator()
+        clip = _clip(creator.id, _TRACK)
+        clip.effective_geometry_jsonb = None
+        _overrides(creator, clip)
+        try:
+            resp = TestClient(app).get(f"/clips/{clip.id}/crop-track")
+            assert resp.status_code == 200
+            assert resp.json() == _TRACK
+        finally:
+            _clear()
