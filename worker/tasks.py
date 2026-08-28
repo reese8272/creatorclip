@@ -16,7 +16,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -6625,14 +6625,16 @@ def send_notification(
        the relevant channel is disabled).
     2. Compute ``dedupe_key = sha256(creator_id:event_type:entity_id)`` — stable
        across retries, unique per notification event.
-    3. INSERT ``notification_deliveries`` row with the dedupe_key.  If Postgres
-       raises ``IntegrityError``, check the existing row's status: ``sent`` /
-       ``skipped`` means the delivery already succeeded (or was deliberately
-       suppressed) on a prior attempt — return without sending again. A
-       ``failed`` row means the send itself blew up; adopt the row and retry
-       the send (Issue 359 companion).
+    3. INSERT ``notification_deliveries`` row with the dedupe_key, status
+       ``pending`` (Issue 530).  If Postgres raises ``IntegrityError``, check
+       the existing row's status: ``sent`` / ``skipped`` means the delivery
+       already succeeded (or was deliberately suppressed) on a prior attempt —
+       return without sending again. A ``failed`` row (the send blew up — Issue
+       359 companion) or a STALE ``pending`` row (a worker died mid-send —
+       Issue 530) is adopted and the send retried.
     4. Render and send the email via ``notify.mailer.send()`` (which uses Resend's
-       own ``Idempotency-Key`` header as a second deduplication layer).
+       own ``Idempotency-Key`` header as a second deduplication layer), then flip
+       the row ``pending → sent`` and record ``provider_message_id`` (Issue 530).
     5. INSERT a ``notifications`` row (in-app center).
 
     Idempotency guarantee: a Celery at-least-once redelivery or a duplicate
@@ -6763,28 +6765,35 @@ async def _send_notification_async(
         dedupe_key = make_dedupe_key(cid, event_type, entity_id)
 
         # ── 5. Idempotency INSERT into notification_deliveries ────────────────
+        # Issue 530: the row is written PENDING, not sent. `sent` is only
+        # recorded after the provider call returns (step 8) — before this, a
+        # worker killed between the commit and the send left a permanently
+        # latched false `sent` that the retry guard could never adopt.
         delivery = NotificationDelivery(
             creator_id=cid,
             event_type=event_type,
             entity_id=entity_id,
             channel=NotificationChannel.email,
             dedupe_key=dedupe_key,
-            status=NotificationDeliveryStatus.sent,
+            status=NotificationDeliveryStatus.pending,
             # Issue 525: record WHICH backend handled this, because `status` alone
             # cannot tell a real delivery from a console no-op — both write 'sent'.
             handled_by=notify_settings.NOTIFY_BACKEND,
         )
         session.add(delivery)
-        retry_of_failed = False
+        adopted_retry = False
         try:
             await session.flush()
         except IntegrityError:
             # UNIQUE dedupe_key violation → a prior attempt reached this point.
-            # Status-aware dedupe (Issue 359 companion): only a delivery that
-            # actually went out (`sent`) or was deliberately `skipped`
-            # short-circuits. A `failed` row means the SEND itself blew up after
-            # the dedupe row committed — adopt that row and retry the send,
-            # otherwise a single Resend blip permanently loses the email.
+            # Status-aware dedupe (Issue 359 companion + Issue 530): a delivery
+            # that actually went out (`sent`) or was deliberately `skipped`
+            # short-circuits. A `failed` row means the send blew up after the
+            # dedupe row committed — adopt it and retry. A STALE `pending` row
+            # means a worker died between the commit and the send — adopt that
+            # too, otherwise the crash latches the row forever. A FRESH
+            # `pending` row is an in-flight concurrent attempt (the send is
+            # bounded by RESEND_TIMEOUT_S) — short-circuit and let it finish.
             await session.rollback()
             existing = (
                 await session.execute(
@@ -6793,18 +6802,27 @@ async def _send_notification_async(
                     )
                 )
             ).scalar_one_or_none()
-            if existing is None or existing.status != NotificationDeliveryStatus.failed:
+            stale_cutoff = datetime.now(UTC) - timedelta(
+                seconds=max(60.0, _settings.RESEND_TIMEOUT_S * 3)
+            )
+            if existing is None or (
+                existing.status != NotificationDeliveryStatus.failed
+                and not (
+                    existing.status == NotificationDeliveryStatus.pending
+                    and existing.created_at < stale_cutoff
+                )
+            ):
                 logger.info(
-                    "send_notification: dedupe_key=%s already delivered — skipping %s "
-                    "for creator %s",
+                    "send_notification: dedupe_key=%s already delivered or in flight "
+                    "— skipping %s for creator %s",
                     dedupe_key,
                     event_type,
                     creator_id,
                 )
                 return
-            retry_of_failed = True
+            adopted_retry = True
             delivery = existing
-            delivery.status = NotificationDeliveryStatus.sent
+            delivery.status = NotificationDeliveryStatus.pending
             # The rollback expired the rows loaded in steps 1-2 — reload before
             # any attribute access (an async lazy refresh would raise
             # MissingGreenlet). Both rows were committed by the first attempt.
@@ -6847,29 +6865,35 @@ async def _send_notification_async(
                 else {"creator": creator, **payload}
             )
         else:
-            # No email address or opted out — in-app delivery only.
+            # No email address or opted out — in-app delivery only. There is no
+            # provider call to wait for: the in-app row below IS the delivery,
+            # so the row commits `sent` directly (Issue 530).
             delivery.channel = NotificationChannel.inapp
+            delivery.status = NotificationDeliveryStatus.sent
 
         # ── 7. Insert in-app notification row ────────────────────────────────
-        # On a failed-send retry the in-app row already committed with the first
-        # attempt (this commit runs before the send) — don't duplicate it.
-        if prefs.inapp_enabled and not retry_of_failed:
+        # On an adopted retry (prior failed / stale-pending attempt) the in-app
+        # row already committed with the first attempt (this commit runs before
+        # the send) — don't duplicate it.
+        if prefs.inapp_enabled and not adopted_retry:
             notification = _build_inapp_notification(cid, event_type, payload)
             session.add(notification)
 
-        # Commit now — before the blocking mailer call — to free the DB connection.
+        # Commit now — before the blocking mailer call — to free the DB
+        # connection. The email delivery row goes out `pending` and is flipped
+        # to `sent` only after the provider call returns (Issue 530).
         await session.commit()
 
     # ── 8. Send email outside the session ────────────────────────────────────
     # asyncio.wait_for + asyncio.to_thread give a Python-level timeout around
-    # the blocking sync mailer call. On timeout or any send error we open a
-    # fresh session to mark the delivery row failed (the commit in step 7 already
-    # persisted it as NotificationDeliveryStatus.sent). (Issue 349)
+    # the blocking sync mailer call. The row committed `pending` in step 7
+    # (Issue 530); success flips it to `sent` (+ provider_message_id) and
+    # failure flips it to `failed`, each in a fresh short session. (Issue 349)
     if send_to and email_context is not None:
         import asyncio
 
         try:
-            await asyncio.wait_for(
+            provider_message_id = await asyncio.wait_for(
                 asyncio.to_thread(
                     mailer_send,
                     to=send_to,
@@ -6880,11 +6904,23 @@ async def _send_notification_async(
                 ),
                 timeout=_settings.RESEND_TIMEOUT_S,
             )
+            # AdminSessionLocal: same non-RLS notification_deliveries exception
+            # as above. `sent` is recorded only now, after the provider
+            # returned — the whole point of Issue 530.
+            async with db.AdminSessionLocal() as ok_session:
+                ok_delivery = await ok_session.get(NotificationDelivery, delivery_id)
+                if ok_delivery is not None:
+                    ok_delivery.status = NotificationDeliveryStatus.sent
+                    if isinstance(provider_message_id, str):
+                        ok_delivery.provider_message_id = provider_message_id
+                await ok_session.commit()
             logger.info(
-                "send_notification: email sent event_type=%s creator=%s dedupe_key=%s",
+                "send_notification: email sent event_type=%s creator=%s dedupe_key=%s "
+                "provider_message_id=%s",
                 event_type,
                 creator_id,
                 dedupe_key,
+                provider_message_id,
             )
         except Exception as exc:
             logger.error(

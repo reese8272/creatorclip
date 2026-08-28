@@ -24,8 +24,10 @@ envVarGroups:
         value: deepgram
       - key: STORAGE_BACKEND
         value: r2
+      # Not hardcoded (Issue 530): a linked Blueprint pinning `console` under
+      # ENV=production would silently re-break email delivery. Set per-env.
       - key: NOTIFY_BACKEND
-        value: console
+        sync: false
       # LOG_DIR empty => log to stdout only (Render aggregates stdout/stderr).
       # The container FS is ephemeral, so persistent file logs would be lost
       # on every deploy/restart. Keep LOG_JSON=true (config default).

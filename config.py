@@ -1224,9 +1224,11 @@ class Settings(BaseSettings):
                 self.METRICS_ENABLED = False
             # Issue 525: notifications in production must actually leave the box.
             # NOTIFY_BACKEND defaults to "console", whose _send_console logs and
-            # returns None — yet the NotificationDelivery row is committed
-            # status=sent BEFORE the send, so a no-op is indistinguishable from a
-            # delivery. Measured on prod 2026-08-18: ENV=production,
+            # returns None — and console "sends" still end status=sent (the flip
+            # is keyed on the mailer returning, which console always does), so a
+            # no-op remains indistinguishable from a delivery by status alone;
+            # `handled_by` is the tell. (The pre-530 shape was worse: the row was
+            # committed sent BEFORE the send.) Measured on prod 2026-08-18: ENV=production,
             # NOTIFY_BACKEND=console, 17 delivery rows, every one 'sent', not one
             # of them delivered. The dedupe short-circuit only retries rows whose
             # status is 'failed', so those rows are latched and can never be
@@ -1242,7 +1244,7 @@ class Settings(BaseSettings):
                     "Delivery rows will still be written status='sent', so the "
                     "database will claim messages were delivered that never left "
                     "the box. Set NOTIFY_BACKEND=resend (with RESEND_API_KEY and "
-                    "NOTIFY_FROM_EMAIL) to actually deliver.",
+                    "EMAIL_FROM) to actually deliver.",
                     self.NOTIFY_BACKEND,
                 )
             # LOCAL_MEDIA_DIR must be absolute in production WHEN it's actually
