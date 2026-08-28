@@ -5501,7 +5501,7 @@ under `ENV: production` (change to `sync: false`).
 
 ### Issue 531: trim does not remap `reframe_track_jsonb`, so the crop overlay desyncs
 
-- [ ] **Status:** open · **Size:** S · **Lane:** L31 · filed 2026-08-28 · promoted from `docs/OFF_COURSE_BUGS.md` (2026-08-13, SEV3)
+- [x] **Status: DONE 2026-08-28** · **Size:** S · **Lane:** L31 · filed 2026-08-28 · promoted from `docs/OFF_COURSE_BUGS.md` (2026-08-13, SEV3)
 
 After a clip trim, the stored crop track still describes the **pre-trim** timeline: overlay keyframe
 times are not remapped, so the frontend crop overlay drifts against the delivered video. The
@@ -5512,16 +5512,22 @@ burned-in crop in the artifact itself is correct — only the editor overlay lie
 hide the overlay whenever effective geometry differs from the track's basis — is acceptable.
 
 **Acceptance**
-- [ ] After a trim, overlay keyframe times align with the delivered timeline (or the overlay is
-      hidden when they cannot)
-- [ ] Test in the reframe/clip-edit suites (not eval scenarios — those cover window geometry only)
-- [ ] `docs/OFF_COURSE_BUGS.md` row flipped to fixed
+- [x] After a trim, overlay keyframe times align with the delivered timeline — serve-time
+      projection in `GET /clips/{id}/crop-track` (`remap_crop_track_to_delivered`,
+      `clip_engine/edits.py`): cut-interior entries drop, survivors shift, a seam keyframe is
+      synthesized at each keep-segment start with the frontend's own lerp/snap sampling, and
+      `duration_s` becomes the delivered duration. Chosen over a confirm-time rewrite so rows
+      trimmed before the fix heal too and re-render needs no special case
+- [x] Tests: `tests/test_effective_geometry.py::TestMapTimeToDelivered` +
+      `TestRemapCropTrackToDelivered`; `tests/test_crop_track_api.py::TestCropTrackTrimRemap`
+      (remapped serve + raw passthrough)
+- [x] `docs/OFF_COURSE_BUGS.md` row flipped to fixed
 
 ---
 
 ### Issue 532: LLM title grounding reads words the trim removed
 
-- [ ] **Status:** open · **Size:** S · **Lane:** L31 · filed 2026-08-28 · promoted from `docs/OFF_COURSE_BUGS.md` (2026-08-13, SEV4)
+- [x] **Status: DONE 2026-08-28** · **Size:** S · **Lane:** L31 · filed 2026-08-28 · promoted from `docs/OFF_COURSE_BUGS.md` (2026-08-13, SEV4)
 
 `generate_clip_metadata` and the title-suggestions endpoint window the **full source transcript**
 over the clip's original span, so words a trim removed can still ground titles/captions. Exposure is
@@ -5531,15 +5537,20 @@ the on-demand regenerate path after a trim.
 eligible (`worker/tasks.py` `generate_clip_metadata`, `knowledge/clip_titles.py`, the titles route).
 
 **Acceptance**
-- [ ] Grounding for a trimmed clip contains no trimmed-out words (test with a trim fixture)
-- [ ] Both call sites (worker task + on-demand endpoint) go through the same filter
-- [ ] `docs/OFF_COURSE_BUGS.md` row flipped to fixed
+- [x] Grounding for a trimmed clip contains no trimmed-out words
+      (`tests/test_clip_titles.py::test_title_suggestions_exclude_trimmed_words`,
+      `tests/test_clip_metadata_batch.py::test_trimmed_clip_grounds_in_delivered_words_only` —
+      the latter also pins `opening_text` to the first 5 DELIVERED seconds)
+- [x] Both call sites go through the same filter — `extract_delivered_words`
+      (`clip_engine/edits.py`, word-level via `map_words_to_delivered`); returns `None` on
+      no-word-timing transcripts so both callers fall back to the Issue-414 midpoint window
+- [x] `docs/OFF_COURSE_BUGS.md` row flipped to fixed
 
 ---
 
 ### Issue 533: the `captions_enabled` toggle is persisted but no renderer reads it
 
-- [ ] **Status:** open · **Size:** S · **Lane:** L31 · filed 2026-08-28 · promoted from the #495 deferred list
+- [x] **Status: DONE 2026-08-28** · **Size:** S · **Lane:** L31 · filed 2026-08-28 · promoted from the #495 deferred list
 
 The creator-level `captions_enabled` setting is persisted (`models.py`) and written by the style
 learner (`preference/style_learn.py:34`), but `clip_engine/render.py` gates caption burn-in on
@@ -5550,9 +5561,17 @@ learner (`preference/style_learn.py:34`), but `clip_engine/render.py` gates capt
 toggle and the style preset and record it (a toggle set OFF must win — the user's explicit choice).
 
 **Acceptance**
-- [ ] `captions_enabled=false` → no burned captions on a rendered clip, regardless of preset
-- [ ] A test pins toggle-off → no captions and toggle-on → captions
-- [ ] The #495 bullet is marked done in its list
+- [x] `captions_enabled=false` → no burned captions, regardless of preset — the guard nulls the
+      subtitle key in `render_clip_file` (`clip_engine/render.py`). **Precedence recorded:** only
+      an EXPLICIT `False` suppresses; an absent key keeps legacy behavior, because pre-533
+      `style_preset` rows never carried the key and must not silently lose captions. Residual
+      (accepted): the kit API serializes an absent key as `false`, so a never-touched kit can
+      display "off" while a subtitle preset still burns — resolves the first time the creator
+      saves the kit form, which writes the key explicitly
+- [x] `tests/test_render_style.py::test_render_clip_file_captions_disabled_suppresses_subtitles`
+      pins toggle-off → no `subtitles=` filter; the existing passes-style test pins
+      subtitle-key-on → captions
+- [x] The #495 bullet is marked done in its list
 
 ---
 
@@ -6125,8 +6144,9 @@ Found and verified during the audit; deliberately NOT built, per the owner's
 
 - [ ] Brand-kit fields cannot be cleared: `routers/creators.py` skips `null`, returns 200, and the
       UI prints "Brand kit saved." while the value is unchanged
-- [ ] `captions_enabled` toggle is persisted but no renderer reads it (`render.py` gates on
-      `subtitle`) — the `style_preset["background"]` shape again
+- [x] `captions_enabled` toggle is persisted but no renderer reads it (`render.py` gates on
+      `subtitle`) — the `style_preset["background"]` shape again → **DONE 2026-08-28 as
+      Issue 533** (explicit `False` suppresses burn-in; absent key keeps legacy behavior)
 - [ ] `Profile.tsx` "Shorts published" / "Clip ratings" are hardcoded `"—"`; the data exists
 - [ ] Data export (`routers/export.py`) is fully built and has NO UI — GDPR Art. 15/20 relevant
 - [ ] `is_rewatch_spike` is never written, so DNA retention spikes and the Issue-127 signal arm are

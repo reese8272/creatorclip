@@ -443,9 +443,7 @@ def map_words_to_delivered(
     return mapped
 
 
-def map_time_to_delivered(
-    t: float, keep_segments: list[tuple[float, float]]
-) -> float | None:
+def map_time_to_delivered(t: float, keep_segments: list[tuple[float, float]]) -> float | None:
     """Project one clip-relative instant onto the delivered timeline.
 
     Returns ``None`` when the instant falls inside a cut — the moment does not
@@ -486,9 +484,7 @@ def _sample_track_x(keyframes: list[dict], cuts: list[dict], t: float) -> float:
     return float(k0.get("x", 0.0)) + f * (float(k1.get("x", 0.0)) - float(k0.get("x", 0.0)))
 
 
-def remap_crop_track_to_delivered(
-    track: dict, keep_segments: list[tuple[float, float]]
-) -> dict:
+def remap_crop_track_to_delivered(track: dict, keep_segments: list[tuple[float, float]]) -> dict:
     """Project a persisted crop track (``clips.reframe_track_jsonb``, the wire
     contract built by ``clip_engine/reframe.py::_build_track_json``) onto the
     delivered timeline of a trimmed clip (Issue 531).
@@ -529,9 +525,7 @@ def remap_crop_track_to_delivered(
     remapped["keyframes"] = new_keyframes
     remapped["cuts"] = _remap_entries(cuts)
     if isinstance(track.get("shots"), list):
-        remapped["shots"] = _remap_entries(
-            [s for s in track["shots"] if isinstance(s, dict)]
-        )
+        remapped["shots"] = _remap_entries([s for s in track["shots"] if isinstance(s, dict)])
     remapped["duration_s"] = round(sum(b - a for a, b in keep_segments), 3)
     return remapped
 
@@ -566,7 +560,11 @@ def extract_delivered_words(
             if w_end <= origin_s or w_start >= end_s:
                 continue
             words.append(
-                {"word": str(w.get("word", "")), "start": w_start - origin_s, "end": w_end - origin_s}
+                {
+                    "word": str(w.get("word", "")),
+                    "start": w_start - origin_s,
+                    "end": w_end - origin_s,
+                }
             )
     if not saw_word_timings:
         return None

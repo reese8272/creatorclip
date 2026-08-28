@@ -5,7 +5,36 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-28 (latest) — Issue 445 completion: first-click verdicts, post-hoc tags on a page-level strip, purge deferred to 446
+## 2026-08-28 (latest) — Issues 531–533: serve-time crop-track projection, delivered-word grounding, explicit-False captions
+
+**Decision (Issue 531).** The trimmed-clip crop-track fix is a **serve-time projection** in
+`GET /clips/{id}/crop-track` (`remap_crop_track_to_delivered`, `clip_engine/edits.py`), not a
+confirm-time rewrite of `reframe_track_jsonb`. Why: the stored row stays the pre-trim source of
+truth, so (a) clips trimmed before the fix heal with no backfill, (b) re-render — which nulls the
+geometry and rewrites the track — needs no special case, and (c) a second trim keeps composing
+through `effective_geometry_jsonb` instead of requiring pending-relative track math. Seam
+keyframes are synthesized with the frontend's own lerp/snap sampling rule (`_sample_track_x`
+mirrors `cropTrack.ts::sampleCropX`) so the overlay never interpolates across a trim seam the
+delivered video jumps over. The frontend cannot do this itself — `useCropTrack` has no keep
+segments on the wire.
+
+**Decision (Issue 532).** Grounding for trimmed clips filters at the **word level** through the
+existing `map_words_to_delivered`, via one shared `extract_delivered_words` used by both call
+sites (titles endpoint + batched metadata task). It returns `None` when the transcript carries no
+word timings (pre-Deepgram), and callers fall back to the Issue-414 midpoint window — honest
+degradation over silently grounding on nothing. `opening_text` is the first 5 **delivered**
+seconds, not `window_start + 5` (the opening was the visible liar after a head-trim).
+
+**Decision (Issue 533).** Only an **explicit `captions_enabled: False`** suppresses caption
+burn-in; an absent key defers to the subtitle key. Legacy `style_preset` rows never carried the
+key, and flipping absent→suppress would silently strip captions from every clip rendered before
+the toggle existed. Accepted residual: the kit API serializes an absent key as `false`, so a
+never-saved kit can display "off" while a subtitle preset still burns — self-resolving on the
+first kit save, which writes the key explicitly.
+
+---
+
+## 2026-08-28 — Issue 445 completion: first-click verdicts, post-hoc tags on a page-level strip, purge deferred to 446
 
 **Decision.** The 445 completion wave implements the owner's 2026-08-10 ruling as follows:
 
