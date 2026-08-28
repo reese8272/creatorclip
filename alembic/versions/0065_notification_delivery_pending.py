@@ -44,10 +44,16 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Collapse the value being removed first, or the cast below fails.
     op.execute("UPDATE notification_deliveries SET status = 'failed' WHERE status = 'pending'")
+    # 0031 gave the column server_default='sent' (typed as the enum), and PG
+    # refuses to auto-cast a typed default through ALTER COLUMN TYPE ("default
+    # for column cannot be cast automatically") — drop it around the swap and
+    # restore it verbatim so the round-trip schema dump stays byte-identical.
+    op.execute("ALTER TABLE notification_deliveries ALTER COLUMN status DROP DEFAULT")
     op.execute(f"ALTER TYPE {_ENUM} RENAME TO {_ENUM}_old")
     op.execute(f"CREATE TYPE {_ENUM} AS ENUM ('sent', 'skipped', 'failed')")
     op.execute(
         f"ALTER TABLE notification_deliveries "
         f"ALTER COLUMN status TYPE {_ENUM} USING status::text::{_ENUM}"
     )
+    op.execute("ALTER TABLE notification_deliveries ALTER COLUMN status SET DEFAULT 'sent'")
     op.execute(f"DROP TYPE {_ENUM}_old")
