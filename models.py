@@ -1651,8 +1651,17 @@ class NotificationChannel(enum.Enum):
 
 
 class NotificationDeliveryStatus(enum.Enum):
-    """Terminal or intermediate state of a single delivery attempt."""
+    """Terminal or intermediate state of a single delivery attempt.
 
+    ``pending`` (Issue 530) is the only non-terminal state: the row exists (the
+    dedupe claim is committed, freeing the DB connection before the blocking
+    provider call — Issue 349) but the send has not yet returned. ``sent`` may
+    only be written after the provider call succeeds; before Issue 530 the row
+    was committed ``sent`` up front, so a worker killed mid-send left a
+    permanently latched false ``sent``.
+    """
+
+    pending = "pending"
     sent = "sent"
     skipped = "skipped"
     failed = "failed"
@@ -1758,7 +1767,9 @@ class NotificationDelivery(Base):
     status: Mapped[NotificationDeliveryStatus] = mapped_column(
         sa.Enum(NotificationDeliveryStatus, name="notification_delivery_status_enum"),
         nullable=False,
-        default=NotificationDeliveryStatus.sent,
+        # Honest default (Issue 530): a freshly inserted row has not been
+        # delivered yet. `sent` is only written after the provider call returns.
+        default=NotificationDeliveryStatus.pending,
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),

@@ -153,6 +153,65 @@ def test_resend_backend_forwards_idempotency_key() -> None:
     )
 
 
+def test_resend_backend_returns_provider_message_id() -> None:
+    """send() returns the Resend message id so callers can persist it on the
+    delivery row (Issue 530). SendResponse is a plain dict at runtime — the
+    old getattr(response, 'id') access always yielded None."""
+    from notify import mailer
+
+    fake_resend = MagicMock()
+    fake_resend.api_key = None
+    fake_resend.Emails = MagicMock()
+    fake_resend.Emails.send = MagicMock(return_value={"id": "resend-msg-id-530"})
+
+    context = {
+        "creator_name": "Carol",
+        "video_title": "Resend Test",
+        "clip_count": 5,
+        "review_url": "https://autoclip.studio/review/send",
+    }
+
+    with (
+        patch.object(mailer, "_resend_initialised", False),
+        patch.object(
+            mailer,
+            "settings",
+            _fake_settings(
+                "resend", resend_api_key="re_test", email_from="noreply@autoclip.studio"
+            ),
+        ),
+        patch.dict(sys.modules, {"resend": fake_resend}),
+    ):
+        result = mailer.send(
+            to="carol@example.com",
+            template="clips_ready",
+            context=context,
+            idempotency_key="resend-idempotency-key-530",
+        )
+
+    assert result == "resend-msg-id-530"
+
+
+def test_console_backend_returns_none() -> None:
+    """The console backend has no provider id — send() returns None."""
+    from notify import mailer
+
+    with patch.object(mailer, "settings", _fake_settings("console")):
+        result = mailer.send(
+            to="carol@example.com",
+            template="clips_ready",
+            context={
+                "creator_name": "Carol",
+                "video_title": "Console Test",
+                "clip_count": 2,
+                "review_url": "https://autoclip.studio/review/console",
+            },
+            idempotency_key="console-idempotency-key-530",
+        )
+
+    assert result is None
+
+
 def test_resend_backend_params_include_from_to_subject() -> None:
     """resend.Emails.send must receive a params dict with from, to, subject."""
     from notify import mailer

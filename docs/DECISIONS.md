@@ -5,7 +5,40 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-26 (latest) — Stripe: pin card, handle the async pair, sweep on a settlement horizon (Issue 523)
+## 2026-08-28 (latest) — Notification rows are written `pending`, not `sent` (Issue 530; amends Issue 349's ordering record)
+
+**Decision (Issue 530).** `notification_deliveries` gains a `pending` status (migration 0065) and
+the send path is reordered: the row commits `pending` before the blocking mailer call, and `sent`
+is written only after the provider returns — together with `provider_message_id`, which was
+declared since Issue 243 but written by nothing (`mailer.send()` returned `None`; worse, the
+Resend `SendResponse` is a plain dict at runtime, so the existing `getattr(response, "id", None)`
+log access had always yielded `None`). The dedupe guard now adopts `failed` OR *stale* `pending`
+rows (older than `max(60s, RESEND_TIMEOUT_S × 3)`); a fresh `pending` row is a concurrent
+in-flight send and still short-circuits. In-app-only deliveries (no email address / channel off)
+commit `sent` directly — the in-app insert *is* the delivery.
+
+**Why.** The Issue-349 pattern (commit before the blocking send, to free the DB connection) was
+kept, but its side effect was not: the row was committed *already terminal* (`sent`), so a worker
+killed between commit and send left a permanently latched false `sent` the retry guard could never
+adopt — the exact forensic shape of the #529 outage (17 prod rows claiming deliveries that never
+left the box), reproducible even after Resend is provisioned. This is the GO_LIVE standing lesson
+("a green intermediate layer is not a working feature") applied to the DB itself: a status may not
+claim an outcome that has not happened. Deviation from the recorded Issue-349 design is the point;
+its intent (connection freed before the blocking call) is preserved — the pinned ordering test now
+asserts `commit(pending) → send → commit(sent)`.
+
+**Evidence.** `worker/tasks.py` `_send_notification_async`; `models.py`
+`NotificationDeliveryStatus`; `alembic/versions/0065_notification_delivery_pending.py` (real
+downgrade: `pending` collapses to `failed`, the one adoptable status pre-530);
+`tests/test_notifications.py::TestSendNotificationPendingHonesty`;
+`tests/test_mailer.py::test_resend_backend_returns_provider_message_id`. Drive-bys in the same PR:
+the prod warning named a nonexistent `NOTIFY_FROM_EMAIL` (now `EMAIL_FROM`, `config.py`), and
+`render.yaml` hardcoded `NOTIFY_BACKEND: console` under `ENV: production` (now `sync: false`, so a
+linked Blueprint cannot silently re-break delivery).
+
+---
+
+## 2026-08-26 — Stripe: pin card, handle the async pair, sweep on a settlement horizon (Issue 523)
 
 **Decision (Issue 523, PR #135).** Three coupled changes close the audit-CONFIRMED
 take-money-grant-nothing path (a Dashboard toggle enabling ACH/BNPL would have collected money and

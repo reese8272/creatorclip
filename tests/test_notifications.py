@@ -249,7 +249,12 @@ class TestNotificationDeliveryModel:
     def test_delivery_status_enum_values(self) -> None:
         from models import NotificationDeliveryStatus
 
-        assert {s.value for s in NotificationDeliveryStatus} == {"sent", "skipped", "failed"}
+        assert {s.value for s in NotificationDeliveryStatus} == {
+            "pending",
+            "sent",
+            "skipped",
+            "failed",
+        }
 
 
 # ── send_notification task: preference gate ───────────────────────────────────
@@ -320,7 +325,9 @@ class TestSendNotificationTransactionalAlwaysOn:
         mock_creator.email = "test@example.com"
 
         mock_session = AsyncMock()
-        mock_session.get = AsyncMock(side_effect=[mock_creator, prefs])
+        # Third .get() is the Issue-530 success-flip session re-loading the
+        # delivery row to flip pending → sent.
+        mock_session.get = AsyncMock(side_effect=[mock_creator, prefs, MagicMock()])
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         # flush should not raise (no duplicate)
@@ -436,8 +443,11 @@ class TestSendNotificationCommitBeforeMailer:
 
         call_order: list[str] = []
 
+        flip_delivery = MagicMock()
+
         mock_session = AsyncMock()
-        mock_session.get = AsyncMock(side_effect=[mock_creator, prefs])
+        # Third .get() is the Issue-530 success-flip session re-loading the row.
+        mock_session.get = AsyncMock(side_effect=[mock_creator, prefs, flip_delivery])
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.flush = AsyncMock()
@@ -462,9 +472,21 @@ class TestSendNotificationCommitBeforeMailer:
 
             await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
 
-        assert call_order == ["commit", "send"], (
-            "DB commit must precede mailer_send so the connection is freed first (Issue 349)"
+        # Issue 349 ordering preserved (first commit frees the connection before
+        # the blocking send); Issue 530 adds the post-send commit that flips
+        # the row pending → sent.
+        assert call_order == ["commit", "send", "commit"], (
+            "DB commit must precede mailer_send so the connection is freed first "
+            "(Issue 349); the send must be followed by the pending→sent flip "
+            "commit (Issue 530)"
         )
+        from models import NotificationDeliveryStatus
+
+        # The row that went into the pre-send commit must be PENDING — `sent`
+        # may only be written after the provider returns (Issue 530).
+        committed_delivery = mock_session.add.call_args_list[0].args[0]
+        assert committed_delivery.status == NotificationDeliveryStatus.pending
+        assert flip_delivery.status == NotificationDeliveryStatus.sent
 
     @pytest.mark.asyncio
     async def test_mailer_failure_marks_delivery_failed_and_reraises(self) -> None:
@@ -574,8 +596,12 @@ class TestSendNotificationFailedRetry:
         existing.status = NotificationDeliveryStatus.failed
 
         mock_session = AsyncMock()
-        # Steps 1-2 load creator + prefs; the retry path re-gets both after rollback.
-        mock_session.get = AsyncMock(side_effect=[mock_creator, prefs, mock_creator, prefs])
+        # Steps 1-2 load creator + prefs; the retry path re-gets both after
+        # rollback; the fifth .get() is the Issue-530 success-flip session
+        # re-loading the delivery row.
+        mock_session.get = AsyncMock(
+            side_effect=[mock_creator, prefs, mock_creator, prefs, existing]
+        )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.flush = AsyncMock(
@@ -601,11 +627,209 @@ class TestSendNotificationFailedRetry:
 
             await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
 
-        # The send ran, the row was adopted back to `sent`, and no duplicate
-        # in-app notification was added (only the initial delivery add).
+        # The send ran, the adopted row ended `sent` (via the post-send flip,
+        # Issue 530), and no duplicate in-app notification was added (only the
+        # initial delivery add). Two commits: pre-send pending + post-send flip.
         fake_mailer.send.assert_called_once()
         assert existing.status == NotificationDeliveryStatus.sent
         assert mock_session.add.call_count == 1
+        assert mock_session.commit.await_count == 2
+
+
+# ── Issue 530: pending → sent delivery honesty ───────────────────────────────
+
+
+class TestSendNotificationPendingHonesty:
+    """The delivery row is written `pending` and flips to `sent` only after the
+    provider call returns; a stale `pending` (worker died mid-send) is adopted
+    and retried, while a fresh `pending` (concurrent in-flight send) is not."""
+
+    @staticmethod
+    def _prefs(cid: uuid.UUID, *, email: bool = True, inapp: bool = True) -> object:
+        from models import NotificationPreference
+
+        return NotificationPreference(
+            creator_id=cid,
+            email_transactional=email,
+            email_lifecycle=False,
+            inapp_enabled=inapp,
+            push_enabled=False,
+            unsubscribe_token=uuid.uuid4(),
+        )
+
+    def _dupe_session(
+        self,
+        mock_creator: MagicMock,
+        prefs: object,
+        existing: MagicMock,
+    ) -> AsyncMock:
+        """A session whose delivery INSERT hits the dedupe UNIQUE constraint."""
+        from sqlalchemy.exc import IntegrityError
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(
+            side_effect=[mock_creator, prefs, mock_creator, prefs, existing]
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.flush = AsyncMock(
+            side_effect=IntegrityError(
+                "UNIQUE constraint violated", params=None, orig=Exception("duplicate key")
+            )
+        )
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none = MagicMock(return_value=existing)
+        mock_session.execute = AsyncMock(return_value=exec_result)
+        mock_session.rollback = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        return mock_session
+
+    @pytest.mark.asyncio
+    async def test_stale_pending_row_is_adopted_and_retried(self) -> None:
+        """A `pending` row far older than the send timeout means a worker died
+        between the commit and the send — adopt it and retry (Issue 530)."""
+        import sys
+        from datetime import UTC, datetime, timedelta
+
+        from models import NotificationDelivery, NotificationDeliveryStatus
+
+        cid = uuid.uuid4()
+        mock_creator = MagicMock()
+        mock_creator.id = cid
+        mock_creator.email = "test@example.com"
+
+        existing = MagicMock(spec=NotificationDelivery)
+        existing.id = uuid.uuid4()
+        existing.status = NotificationDeliveryStatus.pending
+        existing.created_at = datetime.now(UTC) - timedelta(hours=2)
+
+        mock_session = self._dupe_session(mock_creator, self._prefs(cid), existing)
+
+        fake_mailer = MagicMock()
+        fake_mailer.send = MagicMock()
+
+        with (
+            patch("db.AdminSessionLocal", return_value=mock_session),
+            patch.dict(sys.modules, {"notify.mailer": fake_mailer}),
+        ):
+            from worker.tasks import _send_notification_async
+
+            await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
+
+        fake_mailer.send.assert_called_once()
+        assert existing.status == NotificationDeliveryStatus.sent
+
+    @pytest.mark.asyncio
+    async def test_fresh_pending_row_short_circuits(self) -> None:
+        """A fresh `pending` row is a concurrent in-flight send (bounded by
+        RESEND_TIMEOUT_S) — do NOT double-send; let it finish."""
+        import sys
+        from datetime import UTC, datetime
+
+        from models import NotificationDelivery, NotificationDeliveryStatus
+
+        cid = uuid.uuid4()
+        mock_creator = MagicMock()
+        mock_creator.id = cid
+        mock_creator.email = "test@example.com"
+
+        existing = MagicMock(spec=NotificationDelivery)
+        existing.id = uuid.uuid4()
+        existing.status = NotificationDeliveryStatus.pending
+        existing.created_at = datetime.now(UTC)
+
+        mock_session = self._dupe_session(mock_creator, self._prefs(cid), existing)
+
+        fake_mailer = MagicMock()
+        fake_mailer.send = MagicMock()
+
+        with (
+            patch("db.AdminSessionLocal", return_value=mock_session),
+            patch.dict(sys.modules, {"notify.mailer": fake_mailer}),
+        ):
+            from worker.tasks import _send_notification_async
+
+            await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
+
+        fake_mailer.send.assert_not_called()
+        assert existing.status == NotificationDeliveryStatus.pending
+
+    @pytest.mark.asyncio
+    async def test_success_flip_records_provider_message_id(self) -> None:
+        """After the mailer returns a provider id, the flip session persists it
+        on the row — 'delivered' becomes checkable from the DB (Issue 530)."""
+        import sys
+
+        from models import NotificationDeliveryStatus
+
+        cid = uuid.uuid4()
+        mock_creator = MagicMock()
+        mock_creator.id = cid
+        mock_creator.email = "test@example.com"
+
+        flip_delivery = MagicMock()
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(side_effect=[mock_creator, self._prefs(cid), flip_delivery])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.flush = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+
+        fake_mailer = MagicMock()
+        fake_mailer.send = MagicMock(return_value="resend-msg-abc123")
+
+        with (
+            patch("db.AdminSessionLocal", return_value=mock_session),
+            patch.dict(sys.modules, {"notify.mailer": fake_mailer}),
+        ):
+            from worker.tasks import _send_notification_async
+
+            await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
+
+        assert flip_delivery.status == NotificationDeliveryStatus.sent
+        assert flip_delivery.provider_message_id == "resend-msg-abc123"
+
+    @pytest.mark.asyncio
+    async def test_inapp_only_delivery_commits_sent_directly(self) -> None:
+        """With no email to send, the in-app insert IS the delivery — the row
+        commits `sent` directly and no provider call (or flip session) runs."""
+        import sys
+
+        from models import NotificationChannel, NotificationDelivery, NotificationDeliveryStatus
+
+        cid = uuid.uuid4()
+        mock_creator = MagicMock()
+        mock_creator.id = cid
+        mock_creator.email = "test@example.com"
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(
+            side_effect=[mock_creator, self._prefs(cid, email=False, inapp=True)]
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.flush = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+
+        fake_mailer = MagicMock()
+        fake_mailer.send = MagicMock()
+
+        with (
+            patch("db.AdminSessionLocal", return_value=mock_session),
+            patch.dict(sys.modules, {"notify.mailer": fake_mailer}),
+        ):
+            from worker.tasks import _send_notification_async
+
+            await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
+
+        fake_mailer.send.assert_not_called()
+        delivery = mock_session.add.call_args_list[0].args[0]
+        assert isinstance(delivery, NotificationDelivery)
+        assert delivery.status == NotificationDeliveryStatus.sent
+        assert delivery.channel == NotificationChannel.inapp
         mock_session.commit.assert_awaited_once()
 
 

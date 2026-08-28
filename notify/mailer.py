@@ -156,7 +156,7 @@ def send(
     context: dict,
     idempotency_key: str,
     headers: dict[str, str] | None = None,
-) -> None:
+) -> str | None:
     """Render and send a transactional email.
 
     Args:
@@ -174,8 +174,11 @@ def send(
                  console backend ignores them (logs only that they are present).
 
     Returns:
-        None. Raises on template-render errors, invalid keys, or Resend
-        API errors (let callers / Celery retry logic handle them).
+        The provider message id on a real send (Resend), or None for the
+        console backend (Issue 530 — callers persist this on the delivery row
+        so "delivered" is checkable from the DB). Raises on template-render
+        errors, invalid keys, or Resend API errors (let callers / Celery retry
+        logic handle them).
     """
     _validate_idempotency_key(idempotency_key)
     subject, text_body, html_body = _render(template, context)
@@ -187,8 +190,9 @@ def send(
             idempotency_key=idempotency_key,
             headers=headers,
         )
+        return None
     elif settings.NOTIFY_BACKEND == "resend":
-        _send_resend(
+        return _send_resend(
             to=to,
             subject=subject,
             text_body=text_body,
@@ -230,8 +234,11 @@ def _send_resend(
     html_body: str,
     idempotency_key: str,
     headers: dict[str, str] | None = None,
-) -> None:
+) -> str | None:
     """Send via the Resend SDK with provider-level idempotency.
+
+    Returns the Resend message id (an opaque provider-side id, no PII) so the
+    caller can persist it on the delivery row (Issue 530).
 
     SDK pattern: resend.Emails.send(params_dict, options_dict) where
     options={'idempotency_key': key} threads the key to the 24-hour
@@ -258,12 +265,16 @@ def _send_resend(
     params = cast(resend.Emails.SendParams, params_dict)
     options = cast(resend.Emails.SendOptions, {"idempotency_key": idempotency_key})
     response = resend.Emails.send(params, options)
+    # SendResponse is a TypedDict (plain dict at runtime) — the previous
+    # getattr(response, "id", None) always returned None (Issue 530).
+    resend_id = response.get("id") if isinstance(response, dict) else None
     # Recipient email omitted from log to avoid PII in log sinks.
     logger.info(
         "notify.mailer [resend] resend_id=%s idempotency_key=%s",
-        getattr(response, "id", None),
+        resend_id,
         idempotency_key,
     )
+    return resend_id
 
 
 def _extract_subject(text_body: str) -> str:

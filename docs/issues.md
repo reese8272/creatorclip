@@ -5464,11 +5464,20 @@ not a real setting (should be `EMAIL_FROM`); `render.yaml:27` hardcodes `NOTIFY_
 under `ENV: production` (change to `sync: false`).
 
 **Acceptance**
-- [ ] A row is `pending` at the moment of the pre-send commit; `sent` only after the mailer returns
-- [ ] `sent` rows carry `provider_message_id` when the backend is resend
-- [ ] A stale `pending` row is adopted and retried; a `sent` row still short-circuits
+- [x] A row is `pending` at the moment of the pre-send commit; `sent` only after the mailer returns
+      (`tests/test_notifications.py::TestSendNotificationCommitBeforeMailer` — ordering now
+      `commit(pending) → send → commit(sent)`)
+- [x] `sent` rows carry `provider_message_id` when the backend is resend
+      (`TestSendNotificationPendingHonesty::test_success_flip_records_provider_message_id`; also
+      fixed en route: Resend's `SendResponse` is a dict, so the old `getattr(response, "id")` had
+      always returned None)
+- [x] A stale `pending` row is adopted and retried; a `sent` row still short-circuits; a FRESH
+      `pending` row (concurrent in-flight send) also short-circuits
+      (`test_stale_pending_row_is_adopted_and_retried`, `test_fresh_pending_row_short_circuits`)
 - [ ] Migration round-trips (CI `migration-lint`); enum change follows `docs/MIGRATIONS.md`
-- [ ] The `NOTIFY_FROM_EMAIL` warning text and `render.yaml` drift are fixed
+      (local offline render of upgrade + real downgrade verified; box checks when the PR's
+      migration-lint job is green)
+- [x] The `NOTIFY_FROM_EMAIL` warning text and `render.yaml` drift are fixed
 
 ---
 
