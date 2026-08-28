@@ -11,11 +11,12 @@ adopt. The fix writes the row 'pending' and flips it to 'sent' only after the
 mailer returns; 'pending' is therefore the one non-terminal state and needs to
 exist in the native enum.
 
-ALTER TYPE ... ADD VALUE appends at the end, which is fine: enum order carries
-no meaning for this column and appending keeps the migration-lint round-trip
-byte-identical (downgrade recreates the type without 'pending'; re-upgrade
-appends it back to the same position). Since PostgreSQL 12 ADD VALUE is legal
-inside a transaction as long as the new value is not used in the same
+ADD VALUE ... BEFORE 'sent' (Squawk require-enum-value-ordering wants the
+position explicit): 'pending' sits first, matching the Python enum's
+declaration order in models.py, and the round-trip stays byte-identical — the
+downgrade recreates the type as (sent, skipped, failed) and re-upgrading
+re-inserts 'pending' at the same position. Since PostgreSQL 12 ADD VALUE is
+legal inside a transaction as long as the new value is not used in the same
 transaction — and this migration never writes a row.
 
 The downgrade is REAL (no DOWNGRADE_EXCEPTIONS entry): 'pending' rows collapse
@@ -37,7 +38,7 @@ _ENUM = "notification_delivery_status_enum"
 
 
 def upgrade() -> None:
-    op.execute(f"ALTER TYPE {_ENUM} ADD VALUE IF NOT EXISTS 'pending'")
+    op.execute(f"ALTER TYPE {_ENUM} ADD VALUE IF NOT EXISTS 'pending' BEFORE 'sent'")
 
 
 def downgrade() -> None:
