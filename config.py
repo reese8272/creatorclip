@@ -1234,18 +1234,19 @@ class Settings(BaseSettings):
             # status is 'failed', so those rows are latched and can never be
             # re-sent — which is why this stayed invisible.
             #
-            # WARN, not raise, deliberately: the hard reject that STORAGE_BACKEND
-            # gets below is the right end state, but prod has no RESEND_API_KEY
-            # today, so raising here would fail the next deploy's boot. The reject
-            # is filed as its own issue, gated on Resend being provisioned.
+            # HARD RAISE (Issue 528), matching the STORAGE_BACKEND reject below.
+            # This was a warning while prod had no RESEND_API_KEY — raising then
+            # would have failed the next deploy's boot. With Resend provisioned
+            # (Issue 529) the fail-safe inverts: a misconfigured notify backend
+            # must be an unmissable startup failure, not a silent no-op the DB
+            # dresses up as delivered.
             if self.NOTIFY_BACKEND != "resend":
-                logging.getLogger(__name__).warning(
-                    "NOTIFY_BACKEND=%r in production — notifications are a NO-OP. "
-                    "Delivery rows will still be written status='sent', so the "
-                    "database will claim messages were delivered that never left "
-                    "the box. Set NOTIFY_BACKEND=resend (with RESEND_API_KEY and "
-                    "EMAIL_FROM) to actually deliver.",
-                    self.NOTIFY_BACKEND,
+                raise ValueError(
+                    "NOTIFY_BACKEND must be 'resend' in production — the console "
+                    "backend delivers nothing while notification rows still end "
+                    "status='sent' (17 such rows on prod, 2026-08-18). Set "
+                    "NOTIFY_BACKEND=resend with RESEND_API_KEY and EMAIL_FROM. "
+                    f"Got {self.NOTIFY_BACKEND!r}."
                 )
             # LOCAL_MEDIA_DIR must be absolute in production WHEN it's actually
             # used (i.e. STORAGE_BACKEND=local). With STORAGE_BACKEND=r2 the

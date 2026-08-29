@@ -78,6 +78,10 @@ def test_production_without_metrics_token_auto_disables_metrics():
         R2_ACCESS_KEY_ID="ak",
         R2_SECRET_ACCESS_KEY="sk",
         R2_BUCKET="bucket",
+        # Issue 528: production hard-rejects a non-delivering notify backend.
+        NOTIFY_BACKEND="resend",
+        RESEND_API_KEY="re_test_key_not_real",
+        EMAIL_FROM="hello@autoclip.studio",
     )
     assert s.METRICS_ENABLED is False  # auto-disabled, so the endpoint isn't registered
 
@@ -98,6 +102,10 @@ def test_production_keeps_metrics_enabled_with_token():
         R2_ACCESS_KEY_ID="ak",
         R2_SECRET_ACCESS_KEY="sk",
         R2_BUCKET="bucket",
+        # Issue 528: production hard-rejects a non-delivering notify backend.
+        NOTIFY_BACKEND="resend",
+        RESEND_API_KEY="re_test_key_not_real",
+        EMAIL_FROM="hello@autoclip.studio",
     )
     assert s.METRICS_ENABLED is True
     assert s.METRICS_TOKEN == "scrape-secret"
@@ -120,6 +128,10 @@ def _prod_kwargs(**over):
         R2_ACCESS_KEY_ID="ak",
         R2_SECRET_ACCESS_KEY="sk",
         R2_BUCKET="bucket",
+        # Issue 528: production hard-rejects a non-delivering notify backend.
+        NOTIFY_BACKEND="resend",
+        RESEND_API_KEY="re_test_key_not_real",
+        EMAIL_FROM="hello@autoclip.studio",
     )
     base.update(over)
     return base

@@ -470,6 +470,10 @@ def test_config_validator_allows_relative_local_media_dir_in_prod_when_r2() -> N
         os.environ["R2_ACCESS_KEY_ID"] = "ak"
         os.environ["R2_SECRET_ACCESS_KEY"] = "sk"
         os.environ["R2_BUCKET"] = "bucket"
+        # Issue 528: production hard-rejects a non-delivering notify backend.
+        os.environ["NOTIFY_BACKEND"] = "resend"
+        os.environ["RESEND_API_KEY"] = "re_test_key_not_real"
+        os.environ["EMAIL_FROM"] = "hello@autoclip.studio"
 
         # Must NOT raise — LOCAL_MEDIA_DIR is unused with STORAGE_BACKEND=r2.
         s = Settings()
@@ -488,6 +492,14 @@ def test_config_validator_allows_relative_local_media_dir_in_prod_when_r2() -> N
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        # The r2 creds were only set for this test; clear them so they don't leak.
-        for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"):
+        # The r2/notify creds were only set for this test; clear them so they don't leak.
+        for k in (
+            "R2_ACCOUNT_ID",
+            "R2_ACCESS_KEY_ID",
+            "R2_SECRET_ACCESS_KEY",
+            "R2_BUCKET",
+            "NOTIFY_BACKEND",
+            "RESEND_API_KEY",
+            "EMAIL_FROM",
+        ):
             os.environ.pop(k, None)
