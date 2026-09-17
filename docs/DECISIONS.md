@@ -5,7 +5,74 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-28 (latest) — Issues 531–533: serve-time crop-track projection, delivered-word grounding, explicit-False captions
+## 2026-09-17 (latest) — Lane L32 scope: the livestream recap stays inside the `origin=upload` boundary
+
+**Decision.** Lane **L32 — Livestream / long-form recap** (Issues 534–539) is filed, and it
+**confirms rather than reverses** the recap scope boundary locked on 2026-06-22: source is
+`origin=upload` files only — **no live capture, no YouTube download**. `docs/PRD.md:107`
+("Live-stream ingestion", out of scope for v1) stands unamended. **#381** (chat-density via live
+capture) stays open and unbuilt.
+
+**Why.** The trigger for the lane is a named beta creator who livestreams 90-minute shows with large
+YouTube guests and **records locally** — real source files exist, so the product ask ("turn my stream
+into a recap, chapters and Shorts") is fully served by the upload path. The 2026-06-22 boundary is
+bound to the Issue-139 YouTube ToS ruling, i.e. it is a *legal* constraint rather than a scheduling
+one. Reopening a settled legal boundary for zero product gain is the worst available trade. The
+competitive case for the lane is unchanged and independent of live capture:
+`docs/COMPETITIVE_RESEARCH.md:51` — *"Nobody owns 'best-in-class YouTube livestream/VOD → highlights
++ shorts'"* — and `:156`, which makes it the Stage-1 wedge.
+
+**Decision — the centerpiece is deliberately NOT filed yet.** Batch A (#534–#538) is prerequisite
+work; **#539** is the 90-minute fresh-upload drill. The stream-native long-form segment pass, which is
+the lane's actual product content, is filed as Batch B **from #539's measurements**. Why: its design
+turns on numbers nobody has (whether livestream audio yields any real silences at an absolute −60 dBFS
+floor; whether `video_context.structure` is coherent at 90 minutes; where the 12 candidates land on a
+long timeline), and filing it now would be building from memory — the one thing `CLAUDE.md`'s One Rule
+forbids. Batch A exists **only** so the drill can produce interpretable evidence.
+
+**Decision — pricing is untouched by this lane.** A 90-minute stream debits 90 minutes of a minute
+pack (`billing/ledger.py:70-72`, `worker/tasks.py:2236-2242`), and `docs/COMPETITIVE_RESEARCH.md:50`
+records that per-minute economics structurally punish long content. Acknowledged and deferred: it is a
+pricing decision to make after the creator has run real streams, and any tier work lands first on
+**#527**'s dead `GET /billing/packs` and the hardcoded prices in `Pricing.tsx:21-29`. **#97**
+("Livestream recap video — subscription perk") is superseded accordingly: capability → L32,
+packaging → #527.
+
+**Evidence that prompted the lane's shape** — three defects verified by reading the running code, not
+inferred:
+1. `knowledge/chapters.py:90` reads `timeline_jsonb.get("silences", [])` while
+   `ingestion/signals.py:118-122` emits silences nested inside `events`. Every video in production has
+   shipped four evenly-spaced *fabricated* chapter boundaries, and the recap's
+   `CHAPTER_STRADDLE_PENALTY` has been demoting candidates against arbitrary quarter-points. It is the
+   only wrong reader — `clip_engine/candidates.py:122,144,168` and `clip_engine/scoring.py:204` all
+   read the same object correctly. (Issue 534.)
+2. `clip_engine/render.py:1391-1396` derives a 5400 s ffmpeg budget for a 90-minute source while
+   `worker/tasks.py:7229` inherits `CELERY_SOFT_TIME_LIMIT_S = 3000`, and the path decodes the whole
+   VOD twice. The recap cannot complete on the lane's own target input. **Rejected fix:** a per-task
+   `soft_time_limit` override — `worker/celery_app.py:103-107` derives the hard limit *and*
+   `visibility_timeout` from the same global, so breaking `soft < hard < visibility_timeout` makes
+   Redis redeliver a still-running task. **Chosen fix:** per-segment input seek, the pattern
+   `render_clip_file` already proves. (Issue 535.)
+3. `clip_engine/candidates.py:311-314` cuts to a fixed global top-N by prominence *before* the
+   `MIN_CLIP_S` filter and *before* NMS, with no temporal stratification and no refill from the tail —
+   so a 90-minute stream gets the same 12 candidates as a 10-minute one, and `routers/clips.py:2756-2759`
+   builds the recap from exactly those rows. (Instrumented by Issue 536; the fix is Batch B, sized
+   from the real histogram rather than guessed.)
+
+**Also recorded, for Batch B:** `analysis/video_context.py:101` asks Claude for `structure` — a
+chronological, non-overlapping, coverage-complete sectioning of the whole video. It is validated
+(`:246-257`), persisted to `VideoContext.context_jsonb`, and read by **nothing**; the only consumer of
+the context payload is `clip_engine/ranking.py:349`, which takes `moments` and discards the rest. It
+is the leading candidate input for the long-form segment pass, but `validate_context` checks only
+in-bounds and non-empty label — none of the three properties the prompt promises — so promoting it
+from decoration to a segmentation input requires hardening that validator first.
+
+**Source.** Plan `serene-enchanting-sky` (2026-09-17); owner decisions in-session on sequencing
+(operator track first), ambition (fix verified defects, then reassess) and pricing (leave alone).
+
+---
+
+## 2026-08-28 — Issues 531–533: serve-time crop-track projection, delivered-word grounding, explicit-False captions
 
 **Decision (Issue 531).** The trimmed-clip crop-track fix is a **serve-time projection** in
 `GET /clips/{id}/crop-track` (`remap_crop_track_to_delivered`, `clip_engine/edits.py`), not a

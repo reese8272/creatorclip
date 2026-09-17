@@ -4,12 +4,18 @@
 queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `docs/DECISIONS.md`
 (2026-08-03). This file is the live queue.
 
-> **Active lane: L30 — Deep standards & process audit (Issues 498–527).** Filed 2026-08-17 from
-> `docs/assessment/DEEP_AUDIT_2026-08-17/`. Start at `REPORT.md`, then `SYNTHESIS_process.md`.
-> **#520 (personalization is a measured no-op) and #521 (the gate that certifies it) outrank
-> everything else on consequence** — schedule them alongside Batch A. Lanes L26–L29 below are
-> complete; this header previously read "Active lane: L26" while L27/L28/L29 had closed, which the
-> audit flagged as a tracker-drift defect.
+> **Active lane: L32 — Livestream / long-form recap (Issues 534–539).** Filed 2026-09-17 (plan
+> `serene-enchanting-sky`). Batch A (#534–#538) is prerequisite work for **#539**, the 90-minute
+> fresh-upload drill that is simultaneously the beta's last gate and this lane's evidence base. The
+> stream-native segment pass is deliberately **not filed yet** — it gets filed as Batch B from #539's
+> measurements rather than from memory.
+>
+> **Lanes L26–L31 are complete.** L30 (deep standards & process audit, #498–527) closed except for
+> #495, #496, #498 items 4–5, #508–519 and #527, which remain open and unscheduled; its corpus is at
+> `docs/assessment/DEEP_AUDIT_2026-08-17/` — start at `REPORT.md`, then `SYNTHESIS_process.md`.
+> L31 (pre-beta closeout) shipped 2026-08-28. *This header is a recurring drift site: it once read
+> "Active lane: L26" while L27/L28/L29 had closed, and "L30" while L31 had shipped. Update it when a
+> lane opens.*
 
 **Historical — lane L26 declaration (superseded by L30 above):**
 **Active lane: L26 — A→B Auto-Clipping MVP (Issues 414–426).** Declared 2026-08-04 (user decision;
@@ -5581,6 +5587,378 @@ toggle and the style preset and record it (a toggle set OFF must win — the use
 
 ---
 
+## Lane L32 — LIVESTREAM / LONG-FORM RECAP (Issues 534–539, filed 2026-09-17)
+
+Scope locked by owner 2026-09-17 (plan `serene-enchanting-sky`). Trigger: a named beta creator who
+livestreams 90-minute shows with large YouTube guests and **records locally** — real `origin=upload`
+source files exist. He wants three things per stream, in priority order: a YouTube-ready 16:9 recap,
+chapters + timestamps for the full-VOD description, and Shorts. `docs/COMPETITIVE_RESEARCH.md:51`
+already names this as the unowned whitespace and `:156` makes it the Stage-1 wedge.
+
+**Batch A (#534–#538) is prerequisite work for the drill, not the feature.** A finding earned a place
+here only if leaving it broken makes the 90-minute drill *fail* or its output *uninterpretable*.
+**#539 is the drill itself** — an operator session in the #529 mould whose deliverable is a recorded
+evidence block, not code. The stream-native segment pass (the actual centerpiece) is deliberately
+**NOT filed yet**: its design depends on numbers only #539 produces, and filing it now would be
+building from memory. It gets filed as Batch B from #539's evidence.
+
+**Scope boundary — CONFIRMED, not reversed.** `docs/DECISIONS.md` (2026-06-22) binds recap to
+`origin=upload` only: **no live capture, no YouTube download**, tied to the Issue-139 YouTube ToS
+ruling. Because the creator has local OBS files, this lane needs nothing from reversing it. The
+`docs/PRD.md:107` "Live-stream ingestion" out-of-scope line stands unamended.
+
+**#97** ("Livestream recap video — subscription perk", parked in the deferred lot) is **superseded**:
+its capability by this lane's Batch B, its subscription packaging by **#527**. Do not re-promote it.
+
+**Explicitly out of scope for L32:** live capture or stream ingest of any kind (**#381** stays open
+and unbuilt); YouTube VOD download; **#483** contain/fit letterbox (its own body says don't build
+until a creator uploads screen-share-heavy sources — a talking-head interview is not that; if #539
+shows otherwise, that evidence *promotes #483*, it does not move the work here); **#401** source-edit
+export (shares `LongFormEditor.tsx` and the 16:9 render path with #535 — guaranteed collision);
+**#432** render concurrency (prod already runs a dedicated `render` queue at `--concurrency=1`);
+**#430** camera-region detection (flipping a reframe flag contaminates the drill); **#495**
+`is_rewatch_spike` (principle #6 has no data for a fresh upload); **#527** billing-pack packaging and
+any subscription tier; chunked/parallel transcription; and a multipart sibling for
+`POST /clips/ingest` (that is **#395**'s territory — note `routers/clips.py:1745` hardcodes
+`UPLOAD_MAX_MB = 500`, so a 90-minute file cannot use that endpoint at all).
+
+**Pricing is deliberately untouched.** A 90-minute stream burns 90 minutes of a minute pack
+(`billing/ledger.py:70-72`), and `docs/COMPETITIVE_RESEARCH.md:50` says per-minute economics
+structurally punish long content. That is a pricing decision to make after the creator has run real
+streams through the product, and any tier work lands on #527's dead `GET /billing/packs` first.
+
+---
+
+### Issue 534: chapter boundaries are derived from a key the signal producer has never written
+
+- [ ] **Status:** open · **Size:** XS · **Lane:** L32 Batch A · filed 2026-09-17
+
+**Severity: SEV2 — a user-facing LLM feature has produced fabricated output for every video in
+production since it shipped, and it silently degrades recap selection as well.**
+
+`find_chapter_boundaries` reads silences off the top level of the signal timeline
+(`knowledge/chapters.py:90`):
+
+```python
+for silence in timeline_jsonb.get("silences", []):
+```
+
+`build_signal_timeline` has never emitted that key. It returns `{"version", "duration_s", "events"}`
+(`ingestion/signals.py:118-122`), with silences nested inside `events` as `{"type": "silence", ...}`
+(`ingestion/signals.py:70-71`). Both production call sites pass exactly that object:
+`worker/tasks.py:6442-6444` (YouTube chapter generation) and `routers/clips.py:2780-2783` (the recap's
+chapter-straddle demotion).
+
+So `.get("silences", [])` always returns `[]`, `raw` stays `{0.0}`, and control falls through to the
+`MIN_CHAPTERS` even-spacing fill at `knowledge/chapters.py:102-112`. **Every video gets exactly four
+evenly-spaced boundaries.** For a 90-minute stream: 0:00 / 22:30 / 45:00 / 67:30.
+
+This is a lone wrong reader, not a shape disagreement — every other consumer reads the same object
+correctly by filtering on the event type: `clip_engine/candidates.py:122,144,168` and
+`clip_engine/scoring.py:204`.
+
+Two consequences, one of which is not obvious:
+
+1. Chapter titles are real (Claude names whatever span it is handed) but the **spans are fabricated**,
+   so the feature has always been cosmetic.
+2. `CHAPTER_STRADDLE_PENALTY = 0.8` (`clip_engine/summary_select.py:33`) is currently demoting recap
+   candidates for straddling **arbitrary quarter-points of the video**. That is active selection
+   noise, not a neutral no-op.
+
+The reason unit tests never caught it: `tests/test_chapters.py:56-67` hand-constructs
+`{"silences": [...]}` — a shape no producer in the repo emits. The test suite has been green over a
+dead integration. A corroborating tell that the shape drifted *after* the feature worked:
+`knowledge/chapters.py:222-226` raised `max_tokens` to 2000 with the comment *"a 1h+ video yields 20+
+chapters whose JSON exceeded the 512-token cap"* — an outcome the current code cannot produce.
+
+**Fix:** read silences off `events` filtering `type == "silence"`, matching the four correct readers.
+Correct the test fixture to the real `events` shape in the same change, or the green test is simply
+re-armed against the next reader.
+
+**Do not write the acceptance as "chapters are good."** `ingestion/audio.py:22-31` gates silence at an
+**absolute** −60 dBFS floor with a 0.3 s minimum, and `knowledge/chapters.py` then requires ≥2.0 s. A
+90-minute livestream with a music bed, alerts, and two people in conversation may produce very few
+qualifying windows. Fixing this could correctly yield **zero** real boundaries — that is an answer,
+and it is the single most important number #539 produces. Whether the fallback then needs rethinking
+is Batch B's question, gated on that measurement.
+
+**Acceptance**
+- [ ] `find_chapter_boundaries` reads silences from `events` with a `type` filter; a timeline in the
+      real producer shape yields the real boundaries
+- [ ] `tests/test_chapters.py` fixtures use the shape `build_signal_timeline` actually emits; the old
+      `{"silences": [...]}` fixture is gone, not merely supplemented
+- [ ] Non-vacuity demonstrated: revert the one-line fix and a named test goes red
+- [ ] A regression test pins that a timeline carrying silences **only** under `events` produces more
+      than the `MIN_CHAPTERS` fallback — i.e. the fallback is no longer the universal path
+- [ ] The recap straddle path (`routers/clips.py:2780-2783`) is covered by a test asserting real
+      boundaries reach `select_recap_segments`
+- [ ] The real silence-boundary count on a 90-minute livestream is recorded in #539 (may legitimately
+      be zero — record it either way)
+
+---
+
+### Issue 535: the recap render decodes the whole VOD twice, inside a budget that kills it first
+
+- [ ] **Status:** open · **Size:** M · **Lane:** L32 Batch A · filed 2026-09-17
+
+**Severity: SEV2 — the recap, which is this lane's primary deliverable, cannot complete on a
+90-minute source. Zero renders have run on prod since deploy, so this has never surfaced.**
+
+`render_summary_file` derives its ffmpeg budget from the **source** length
+(`clip_engine/render.py:1391-1396`):
+
+```python
+timeout_s = max(300.0, total_dur * 4, src_dur if src_dur < float("inf") else 0.0)
+```
+
+For a 90-minute source that is `max(300, 2400, 5400)` = **5400 s**. But `render_summary`
+(`worker/tasks.py:7229`) declares no `soft_time_limit`, so it inherits
+`task_soft_time_limit = settings.CELERY_SOFT_TIME_LIMIT_S` = **3000 s** (`worker/celery_app.py:102`,
+`config.py:779`). **Celery kills the task 2400 s before ffmpeg's own timeout can fire**, and
+`SoftTimeLimitExceeded` is classified terminal with no retry (`worker/tasks.py:7261-7270`).
+
+It is worse than one decode against the wrong budget. The path decodes the whole VOD **twice**:
+`_measure_concat_loudnorm` (`clip_engine/render.py:1090-1113`, called at `:1398-1400`) runs a full
+measurement pass before the render's own pass. The code already predicted this
+(`clip_engine/render.py:1370-1375`): *"the extra decode cost on multi-hour VODs is accepted for the
+beta (a seek-per-segment multi-input graph is the optimization if recap renders become a
+bottleneck)."* It has become the bottleneck.
+
+**Fix: convert to per-segment input seek** — the pattern `render_clip_file` already proves at
+`clip_engine/render.py:1015-1023` (`-ss {start_s} -accurate_seek -i {src} -t {duration}`), where
+per-clip cost is proportional to clip length rather than source length. Recap cost then tracks ~600 s
+of output instead of 5400 s of input twice, landing comfortably inside the existing budget with **no
+global knob touched**.
+
+**Reject the per-task `soft_time_limit` override.** It looks like the one-line fix and it is actively
+dangerous here. `worker/celery_app.py:103-107` derives *both* `task_time_limit` and
+`broker_transport_options.visibility_timeout` from the same global, and the comment at `:96-99` names
+the invariant explicitly: `soft < hard < visibility_timeout`. An override above 3000 s is still killed
+by the global hard limit; raising *that* pushes runtime past the visibility timeout, at which point
+**Redis redelivers a still-running task**. Breaking a queue-wide invariant to accommodate one task is
+the wrong trade.
+
+Sized M rather than S because `_measure_concat_loudnorm` (`:1090`) and `_audio_segment_filter`
+(`:1072`, which hardcodes `[0:a]`) are shared with `render_cleaned_clip_file` and must not regress it.
+The seams are good: `build_summary_filtergraph` (`:1293`) and `build_summary_render_cmd` (`:1325`) are
+both documented pure and unit-testable without ffmpeg.
+
+**CHECK phase required before building** (the One Rule — do not build this from memory):
+- Per-input `-ss`/`-t` seek with an N-input concat filter vs. the current single-input trim graph vs.
+  the concat demuxer over intermediates: current practice for frame-accurate multi-segment stitching,
+  and the known `-accurate_seek` pitfalls on **long-GOP, possibly VFR OBS recordings** specifically.
+- Is two-pass `loudnorm` still the standard for EBU R128 delivery, or has single-pass become
+  acceptable? The second full decode is half the cost problem, and dropping it is the cheapest
+  available fix if the standard has moved.
+
+**Acceptance**
+- [ ] The recap render's ffmpeg cost is proportional to output duration, not source duration; the
+      derived timeout for a 90-minute source sits inside `CELERY_SOFT_TIME_LIMIT_S` with margin
+- [ ] `CELERY_SOFT_TIME_LIMIT_S`, `task_time_limit` and `visibility_timeout` are **unchanged**; no
+      per-task `soft_time_limit` override is introduced
+- [ ] `render_cleaned_clip_file` output is unchanged — pinned by a test over the shared
+      `_measure_concat_loudnorm` / `_audio_segment_filter` path
+- [ ] Filtergraph and argv builders stay pure and unit-tested without ffmpeg; a real-ffmpeg smoke
+      confirms 1920×1080 output and the expected segment count
+- [ ] Two-pass loudnorm either retained or replaced with a CHECK-cited justification in
+      `docs/DECISIONS.md`
+- [ ] A 90-minute source renders end to end in #539 (this is the AC that actually closes it)
+
+---
+
+### Issue 536: the candidate-pool breadcrumb is `logger.debug`, so a 90-minute run cannot be read
+
+- [ ] **Status:** open · **Size:** XS · **Lane:** L32 Batch A · filed 2026-09-17
+
+The drill's most important artifact is *where on the timeline the candidates landed and why the rest
+were discarded*. Today that is unobservable in production.
+
+`extract_candidates` builds a dense 0.5 s timeline, finds peaks with a 30 s minimum spacing
+(`clip_engine/candidates.py:186-219`), then cuts to the top N by prominence **before** the
+`MIN_CLIP_S` filter and **before** NMS (`clip_engine/candidates.py:311-314`):
+
+```python
+order = np.argsort(prominences)[::-1]
+peak_indices_ordered = peak_indices[order][:max_candidates]
+```
+
+so the pool can only shrink from there — NMS (`:344-364`) suppresses without refilling from peak
+N+1. The breadcrumb that would explain the result exists at `clip_engine/candidates.py:376-383`
+(`peaks=%d pre_nms=%d after_nms=%d final=%d`) but is `logger.debug`, and production runs at INFO.
+
+Without it, "the 90-minute stream yielded 9 clips, all between 00:12 and 00:31" cannot distinguish
+three situations with three different fixes: few peaks detected · many peaks, cut by the global top-N
+· many peaks, suppressed by NMS.
+
+**Fix:** promote the breadcrumb to INFO and extend it with what Batch B actually needs — a per-decile
+peak histogram, the wall-clock temporal span the final candidates cover, and the count discarded by
+the pre-NMS top-N cut specifically (distinct from the NMS-suppressed count). This is instrumentation
+only; **no selection behaviour changes in this issue.** Whether to stratify the pool temporally is
+Batch B's question, and the bucket size should be chosen from the real histogram rather than guessed.
+
+**Acceptance**
+- [ ] The breadcrumb is emitted at INFO and appears in a production-level log
+- [ ] It reports: peaks detected · discarded by the top-N cut · discarded by `MIN_CLIP_S` · suppressed
+      by NMS · final count · temporal span covered · per-decile histogram
+- [ ] The three discard reasons are separately attributed, not summed
+- [ ] No change to which candidates are produced — pinned by an existing-behaviour test
+- [ ] No PII and no transcript text in the log line
+- [ ] The numbers for a real 90-minute stream are recorded in #539
+
+---
+
+### Issue 537: long-source ingest headroom — transcription timeout and audio-analysis memory, measured
+
+- [ ] **Status:** open · **Size:** S · **Lane:** L32 Batch A · filed 2026-09-17
+
+Two independent ways for the 90-minute drill to die at stage two, before producing any evidence. Both
+are **measure-then-decide**, not speculative rewrites.
+
+**(1) Transcription timeout.** `TRANSCRIPTION_TIMEOUT_S = 300` (`config.py:232`) is applied as a
+single `asyncio.wait_for` around the whole call (`worker/tasks.py:2325-2328`), covering the upload of
+a ~173 MB WAV (90 min at the ~115 MB/h documented at `ingestion/transcribe.py:56-73`) *plus* diarized
+transcription *plus* the response download. Transcription is **not chunked** — one `transcribe_file`
+call for the entire WAV (`ingestion/transcribe.py:180-189`). The size guard is not the problem
+(1024 MB allows ~9 h); the wall clock is. The failure mode compounds it: `asyncio.TimeoutError` falls
+to the generic handler at `worker/tasks.py:508-512` and **retries 3×, re-uploading 173 MB each time**,
+burning ~20 minutes of the drill before `RefundOnFailureTask` refunds.
+
+Raising it is one line and the invariant is already machine-checked — `config.py:1187-1199` asserts
+`TRANSCRIPTION_TIMEOUT_S < CELERY_SOFT_TIME_LIMIT_S - 30` (= 2970), so a larger value is legal with no
+other change, plus a `.env.example` entry per #509.
+
+**CHECK before assuming that is the fix:** Deepgram's current documented max size and duration for a
+single pre-recorded request, the recommended client timeout, and **whether callback (async) mode is
+now the recommended path for long files** instead of holding a synchronous request open. A yes turns
+this from "raise a constant" into "change the integration shape" — a different size and a different
+issue — and it interacts with the `config.py:1187` invariant by removing the task from the critical
+path entirely.
+
+**(2) Audio-analysis memory.** `extract_audio_events` loads the decoded audio in one shot
+(`ingestion/audio.py:69-81`, `librosa.load(..., sr=16000, mono=True, duration=cap_s)`). Below the 4 h
+`AUDIO_ANALYSIS_MAX_DURATION_S` cap nothing truncates, so 90 min = 5400 s × 16000 Hz × 4 bytes ≈
+**345 MB** of float array, plus decode buffers and the derived `rms`/`zcr`/`rms_db`/`times` arrays
+(`:103-128`) — plausibly 0.6–1.0 GB peak per worker slot. The config comment at `config.py:258-262`
+names this exact OOM vector; the 4 h cap solved the multi-hour case and left the 1–4 h case
+non-streaming.
+
+Why it can't be waved through: `task_reject_on_worker_lost = True` (`worker/celery_app.py:91`) means
+an OOM-killed worker **requeues the same task into the same OOM**. That is not a failed drill, it is a
+box that thrashes until someone notices. The flag's justification ("safe because the tasks are
+idempotent") does not cover deterministic OOM, where redelivery is guaranteed to repeat the kill.
+
+**Fix:** load a real 90-minute WAV on the dev box, record peak RSS, compare against prod VM RAM minus
+resident workers. **Record the number in this issue body either way.** If it clears with headroom,
+ship nothing for part (2). If it does not, the blockwise/streaming rewrite blocks the drill and gets
+its own sizing.
+
+**Acceptance**
+- [ ] Deepgram long-file guidance checked against current docs and cited; the chosen shape (raise the
+      timeout vs. callback mode) is justified in `docs/DECISIONS.md`
+- [ ] If the timeout is raised: the new value is in `config.py` and `.env.example`, and the
+      `config.py:1187-1199` invariant test still passes
+- [ ] The retry path no longer re-uploads on a timeout that cannot succeed a second time (or, if it
+      still does, that is a recorded deliberate choice with a reason)
+- [ ] **Measured peak RSS for a 90-minute WAV through `extract_audio_events` is recorded here**, with
+      the prod VM's available RAM alongside it
+- [ ] A verdict is written: streaming rewrite needed, or not needed and why
+
+---
+
+### Issue 538: the whole-video context prompt still says "up to 4 moments" after the cap went to 6
+
+- [ ] **Status:** open · **Size:** XS · **Lane:** L32 Batch A · filed 2026-09-17
+
+`config.py:534` sets `LLM_CANDIDATES_MAX = 6`, with the comment *"4 → 6 with the wider pool
+(2026-08-05)"*. The constant was raised; the prompt was not. `analysis/video_context.py:106` still
+asks for *"up to 4 clip-worthy moments"* and `:124` still says *"Fewer, stronger moments beat four
+weak ones."* The structured-output schema (`:131-167`) has no `maxItems`, so **the prompt text is the
+effective binding constraint** and the validator cap at `:288` is dead headroom.
+
+On a 90-minute stream — where the LLM pass is the only part of the pipeline that reads the whole
+transcript as prose, and therefore the only part that can surface a calm moment the energy detector
+cannot see — "up to 4" is a severe under-ask. Two free candidates are left on the table on every run,
+including the drill's.
+
+**Fix:** update both strings to match `LLM_CANDIDATES_MAX`, ideally interpolating the constant so they
+cannot drift again rather than retyping the number (the house rule is *"derive it, don't type it"* —
+Lane L30's whole thesis).
+
+**Change only the count.** Do **not** touch the 30–90 s span constraint at
+`analysis/video_context.py:114-116`. That constraint is the baseline the long-form segment pass has to
+beat; moving it before the drill makes the before/after comparison meaningless.
+
+**Acceptance**
+- [ ] Both prompt strings agree with `LLM_CANDIDATES_MAX`, derived rather than retyped
+- [ ] A test fails if the constant and the prompt text diverge again
+- [ ] The 30–90 s span constraint at `:114-116` is byte-identical
+- [ ] `validate_context`'s cap at `:288` is exercised by a test (it has been unreachable in practice)
+
+---
+
+### Issue 539: OPERATOR — the 90-minute fresh-upload E2E on prod, with #395's live drills folded in
+
+- [ ] **Status:** open · **Size:** L (operator session, 2–4 h) · **Lane:** L32 · filed 2026-09-17 · **BETA BLOCKER** · **blocked by #534–#538**
+
+The linchpin. It is simultaneously the beta's last gate (GO_LIVE Track 4) and this lane's entire
+evidence base. **The deliverable is a recorded evidence block, not code.** Use one of the creator's
+real 90-minute stream recordings — not a synthetic file.
+
+**#395 is not a separate upload.** #395 (resumable direct-to-R2 multipart) is BUILT with only its live
+drills remaining and is already a named BETA BLOCKER. A 90-minute OBS recording is 4–8 GB and
+exercises exactly that path. Fold #395's live-drill acceptance in here and tick it here. If multipart
+fails at that size, this lane stops at step one and the real first task becomes finishing #395.
+
+**Pre-flight, do not skip:** `.venv/bin/python scripts/r2_set_cors.py https://autoclip.studio`. The
+`ExposeHeaders: ["ETag"]` it sets is load-bearing — without it multipart completes stall at 100% with
+opaque CORS errors (DECISIONS 2026-08-05). Confirm `ExposeHeaders` in the echoed readback; ~30 s to
+propagate.
+
+**Do NOT flip `CAMERA_REGION_DETECT_ENABLED` or `OVERLAY_BAND_DETECT_ENABLED` for this run.** Both
+default `False` (`config.py:462`, `:493`) and both are code-complete but unproven; enabling them
+contaminates the one measurement this session exists to produce. They get their own run afterwards.
+
+**CHECK before the session, not after:** OBS's 2026 default recording containers and codecs (mkv vs.
+fragmented mp4 vs. record-then-remux), and **whether `ffprobe` duration is reliable on an OBS-remuxed
+or interrupted recording**. This is not a rendering nicety — `billing/ledger.py:70-72` and
+`worker/tasks.py:2236-2242` bill exactly against the ffprobe duration, so a container that misreports
+is a **billing-correctness** defect that lands on the creator's first upload.
+
+**Acceptance — the three #395 drills**
+- [ ] A >2 GB file uploads end to end (browser multipart, `UPLOAD_MAX_FILE_GB = 20`, 25 MiB parts)
+- [ ] Reload mid-upload resumes without re-sending parts, including the "ghost file" re-select path
+- [ ] A 60-minute JWT expiring mid-upload pauses, survives re-login, and resumes
+- [ ] Evidence recorded against `docs/GO_LIVE.md:73`
+
+**Acceptance — live ACs this upload collapses**
+- [ ] #524 render output guard exercised (0 renders since deploy)
+- [ ] #525/#529 notification delivered, with a row reading `handled_by='resend'` + `provider_message_id`
+- [ ] #484's fix visible in real output
+- [ ] #427/#448 frame checks via `scripts/clip_audit.py`
+- [ ] #520's personalization-active path, if ≥21 clips get rated in the session
+
+**Acceptance — the measurements Batch B consumes** (each is a number written into this issue)
+- [ ] Real silence boundaries found post-#534: count and duration distribution
+- [ ] Per-decile peak histogram from #536; top-N-discarded / NMS-suppressed / final counts; the
+      wall-clock temporal span the final candidates actually cover
+- [ ] `video_context.structure` pasted **verbatim** — section count, lengths, whether it is genuinely
+      chronological / non-overlapping / covering, and whether the labels are coherent
+- [ ] Speaker-turn count over the full VOD from `extract_speaker_turns`, **plus wall-clock for that
+      call** (`clip_engine/speaker_map.py:309-323` restarts its full scan after every absorption, so
+      it is O(n²) in turn count — measure before calling it a problem)
+- [ ] Per-stage wall clock and peak RSS; recap render wall clock post-#535
+- [ ] The generated chapter `description_block`, pasted verbatim and judged by eye
+- [ ] ffprobe duration vs. the file's own claim, and the minutes actually debited
+- [ ] What the creator records to: container, codec, bitrate
+
+**Acceptance — the judgment no gate covers**
+- [ ] The owner answers **"would you post these?"** on the clips and the recap, and records the verdict
+- [ ] The creator answers the same question separately, and **his verdict is recorded as the one that
+      matters** (`docs/GO_LIVE.md:254-256`: the eval harness proves window *geometry* — it has never
+      proven a clip is good)
+
+---
+
 ## Tracker hygiene
 
 This file is the **sole authority** for the next free issue number (Issue 498 item 6). The number is
@@ -5593,7 +5971,7 @@ made the next filed issue collide with #520. Deleting the competing copies made 
 authoritative without making it correct — the mechanism is the fix. `docs/OFF_COURSE_BUGS.md`,
 2026-08-18.)*
 
-- Next free issue number: **534**.
+- Next free issue number: **540**.
 
 ---
 
