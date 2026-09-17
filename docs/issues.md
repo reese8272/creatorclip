@@ -5631,7 +5631,8 @@ streams through the product, and any tier work lands on #527's dead `GET /billin
 
 ### Issue 534: chapter boundaries are derived from a key the signal producer has never written
 
-- [ ] **Status:** open · **Size:** XS · **Lane:** L32 Batch A · filed 2026-09-17
+- [ ] **Status: CODE-COMPLETE 2026-09-17** (branch `docs/l32-livestream-recap-lane`) — only the
+      live-measurement AC remains, owed by #539 · **Size:** XS · **Lane:** L32 Batch A · filed 2026-09-17
 
 **Severity: SEV2 — a user-facing LLM feature has produced fabricated output for every video in
 production since it shipped, and it silently degrades recap selection as well.**
@@ -5683,17 +5684,36 @@ and it is the single most important number #539 produces. Whether the fallback t
 is Batch B's question, gated on that measurement.
 
 **Acceptance**
-- [ ] `find_chapter_boundaries` reads silences from `events` with a `type` filter; a timeline in the
-      real producer shape yields the real boundaries
-- [ ] `tests/test_chapters.py` fixtures use the shape `build_signal_timeline` actually emits; the old
-      `{"silences": [...]}` fixture is gone, not merely supplemented
-- [ ] Non-vacuity demonstrated: revert the one-line fix and a named test goes red
-- [ ] A regression test pins that a timeline carrying silences **only** under `events` produces more
-      than the `MIN_CHAPTERS` fallback — i.e. the fallback is no longer the universal path
-- [ ] The recap straddle path (`routers/clips.py:2780-2783`) is covered by a test asserting real
+- [x] `find_chapter_boundaries` reads silences from `events` with a `type` filter; a timeline in the
+      real producer shape yields the real boundaries (`knowledge/chapters.py`, adopting the
+      `candidates.py` / `scoring.py` idiom)
+- [x] Fixtures use the shape `build_signal_timeline` actually emits; the old `{"silences": [...]}`
+      fixture is gone, not merely supplemented. **Both sites** — `tests/test_chapters.py` and a second
+      set in `tests/test_llm_robustness.py::TestChapterBoundaries` that the filing missed. Each builds
+      through the real producer via a helper, so the shape cannot silently diverge again, and
+      `test_real_timeline_has_no_top_level_silences_key` pins the producer contract directly
+- [x] Non-vacuity demonstrated: reverting the diff turns **four** named tests red —
+      `test_find_chapter_boundaries_silence_gaps`,
+      `test_find_chapter_boundaries_beat_the_evenly_spaced_fallback`,
+      `test_find_chapter_boundaries_max_density`,
+      `test_create_summary_passes_real_silence_boundaries_to_selection`
+- [x] A regression test pins that a timeline carrying silences **only** under `events` produces more
+      than the `MIN_CHAPTERS` fallback. The assertion is deliberately **two-sided** — real boundaries
+      present *and* the fill absent — because a one-sided assertion passes on the broken reader
+      whenever a silence happens to land near a quarter-point
+- [x] The recap straddle path (`routers/clips.py:2780-2783`) is covered by a test asserting real
       boundaries reach `select_recap_segments`
+      (`tests/test_summary_endpoints.py::test_create_summary_passes_real_silence_boundaries_to_selection`)
 - [ ] The real silence-boundary count on a 90-minute livestream is recorded in #539 (may legitimately
       be zero — record it either way)
+
+**Build note (2026-09-17).** Two things the filing did not anticipate. (1) The bad fixture shape had a
+**second** home in `tests/test_llm_robustness.py`; the full-suite run is what surfaced it, after the
+targeted run was green — a reminder that a fixture-shape defect is a *population* problem, not a file
+problem. (2) `test_max_chapter_period_enforced_for_long_silences` was passing **vacuously**: its
+assertion (`61.0 not in boundaries`) is trivially true whenever the fallback runs, and its docstring
+claimed 60.0 survives the density rule when 60.0 sits 60 s from 0.0, under the 180 s minimum. Both are
+corrected. Suite 3339 passed / 0 failed; Layer 0 all green (coverage 85.02).
 
 ---
 
