@@ -83,13 +83,25 @@ def find_chapter_boundaries(
     Always includes 0.0 as first boundary. Silences >= SILENCE_THRESHOLD_S are candidates.
     Enforces MAX_CHAPTER_PERIOD_S minimum gap between chapters.
     Fills up to MIN_CHAPTERS if the video has few silences.
+
+    ``timeline_jsonb`` is a ``build_signal_timeline`` payload
+    (``{"version", "duration_s", "events"}``), where silences are TYPED ENTRIES
+    INSIDE ``events`` — there is no top-level ``"silences"`` key and there never
+    was. Reading one is Issue 534: it returned ``[]`` for every video ever
+    processed, so every chapter list was the evenly-spaced MIN_CHAPTERS fill
+    below rather than real content boundaries, and the recap's chapter-straddle
+    demotion (clip_engine/summary_select.py) was penalising candidates against
+    arbitrary fractions of the runtime. Match the event-filter idiom used by the
+    other readers of this object (clip_engine/candidates.py, clip_engine/scoring.py).
     """
     raw: set[float] = {0.0}
 
     if timeline_jsonb:
-        for silence in timeline_jsonb.get("silences", []):
-            start = float(silence.get("start_s", 0))
-            end = float(silence.get("end_s", 0))
+        for event in timeline_jsonb.get("events", []):
+            if event.get("type") != "silence":
+                continue
+            start = float(event.get("start_s", 0))
+            end = float(event.get("end_s", 0))
             if end - start >= SILENCE_THRESHOLD_S and 0 < start < video_duration_s:
                 raw.add(round(start, 1))
 

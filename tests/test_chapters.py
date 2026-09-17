@@ -131,7 +131,7 @@ def test_find_chapter_boundaries_max_density() -> None:
     # Dense real silences fill the list past MIN_CHAPTERS, so the evenly-spaced
     # fallback never runs and the density rule is the only thing shaping the gaps.
     assert len(bounds) >= MIN_CHAPTERS
-    gaps = [b - a for a, b in zip(bounds, bounds[1:], strict=True)]
+    gaps = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
     assert all(g >= MAX_CHAPTER_PERIOD_S for g in gaps), gaps
 
 
