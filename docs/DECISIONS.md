@@ -33,7 +33,44 @@ new `scripts/doctor.py --e2e` check).
 
 ---
 
-## 2026-09-21 (latest) — Issue 537 CHECK + measurements: sync Deepgram kept with an 1800 s terminal timeout; the OOM was librosa's framed matrix, fixed blockwise in-issue
+## 2026-09-21 (latest) — Issue 488: entity naming pinned structurally, not templated; role addresses chosen; delivery is an operator prerequisite
+
+**What was decided.** `static/privacy.html` + `static/tos.html` now name **Ludwick Solutions
+LLC** as operator and (privacy page) data controller; every `reesepludwick@gmail.com` contact in
+the three static pages is replaced with role addresses on the product domain —
+`privacy@autoclip.studio` (GDPR/CCPA rights, COPPA reports, breach channel) and
+`support@autoclip.studio` (general ToS + accessibility questions). `docs/COMPLIANCE.md` names the
+controlling entity.
+
+**Deviation from the issue's stated approach, and why.** The issue proposed introducing the
+entity name "once, in config, referenced from the templates." The legal pages are plain static
+HTML served by a `StaticFiles` mount — there is no template layer, and adding a render step to
+the two pages Google's OAuth review fetches would add a moving part to surfaces whose whole value
+is being maximally dumb and always servable. The drift risk the config-constant idea targets is
+covered the way this repo already guards these pages: structural pins
+(`tests/test_static.py::test_legal_pages_name_the_operating_entity` +
+`test_no_personal_email_in_any_user_facing_surface`, which sweeps `static/`, `notify/templates/`
+and `frontend/src/` at the source tree so a personal-address reintroduction anywhere user-facing
+fails). The Issue-252 pin that asserted the personal Gmail WAS the breach contact is updated to
+pin the role address.
+
+**Two role addresses, not one.** Privacy/breach/COPPA traffic is legally distinct from general
+support and may need separate handling (DPO designation later); Cloudflare Email Routing forwards
+cost nothing per address.
+
+**Operator-owed remainder (deliberately not done in code):** (1) both role addresses must
+actually DELIVER before the pages ship to non-friends — Cloudflare Email Routing forwards, to be
+set up in the same sitting as the #529 Resend DNS records (both touch the same DNS zone);
+(2) Stripe `business_profile.support_email` → the role address, and `support_address` +
+`MAILING_ADDRESS` (#246) → a PO box/CMRA, never the home address — held until the mailbox exists.
+Publishing a dead contact address would be worse than the personal Gmail it replaces, so the
+sequencing is: forwards live → pages deploy → Stripe profile updated.
+
+**Date:** 2026-09-21.
+
+---
+
+## 2026-09-21 — Issue 537 CHECK + measurements: sync Deepgram kept with an 1800 s terminal timeout; the OOM was librosa's framed matrix, fixed blockwise in-issue
 
 **CHECK findings (Deepgram, current docs).** Prerecorded direct upload max **2 GB**; the **sync
 endpoint itself 504s when server-side processing exceeds 10 minutes** (Nova models) — independent

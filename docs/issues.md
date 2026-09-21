@@ -6612,7 +6612,10 @@ re-creating the *other* half of #485.
 
 ### Issue 488: name the legal entity in the ToS and Privacy Policy — the operator is now an LLC
 
-- [ ] **Status:** open · **Size:** S · filed 2026-08-14 · **Lane:** L28 ·
+- [ ] **Status:** **CODE-COMPLETE 2026-09-21** — pages + tests + COMPLIANCE done; remaining ACs
+      are operator-owed (email-forwarding for the role addresses, Stripe support fields, PO box)
+      and are paired with the #529 DNS session since both touch the same Cloudflare zone ·
+      **Size:** S · filed 2026-08-14 · **Lane:** L28 ·
       **Required before non-friend users; also read by Google's OAuth review (#29)**
 
 **Severity: medium — a compliance-accuracy gap, not a bug.**
@@ -6645,17 +6648,23 @@ than hardcoding it in two HTML files — the same mistake as any duplicated cons
 user-facing legal surface for the personal address.
 
 **Acceptance**
-- [ ] `static/privacy.html` and `static/tos.html` identify **Ludwick Solutions LLC** as the operator
-      and data controller
-- [ ] Breach-report and COPPA contacts point to a role address on the domain (e.g.
-      `privacy@autoclip.studio`), not a personal Gmail
-- [ ] Stripe `business_profile.support_email` set to the same role address (closes an Issue 486
-      residual)
+- [x] `static/privacy.html` and `static/tos.html` identify **Ludwick Solutions LLC** as the operator
+      and data controller (new "Who we are" section on privacy; §1 on ToS; pinned by
+      `test_legal_pages_name_the_operating_entity`). Config-constant approach deliberately not
+      taken — the pages have no template layer; deviation in DECISIONS 2026-09-21
+- [x] Breach-report, GDPR/CCPA-rights and COPPA contacts → `privacy@autoclip.studio`; general
+      ToS/accessibility questions → `support@autoclip.studio` (the Issue-252 pin that asserted the
+      Gmail address is updated to pin the role address). **Operator: the Cloudflare Email Routing
+      forwards must be live before this deploys to non-friends** — same sitting as #529's DNS
+- [ ] Stripe `business_profile.support_email` set to the role address (operator — after the
+      forward delivers; closes an Issue 486 residual)
 - [ ] Stripe `support_address` + `MAILING_ADDRESS` (#246) both set to a PO box or CMRA mailbox —
-      **not** the owner's home address, since both are printed publicly
-- [ ] `docs/COMPLIANCE.md` names the controlling entity
-- [ ] The existing structural doc tests still pass (`tests/test_static.py` pins these pages)
-- [ ] No personal email address remains in any user-facing surface — grep clean
+      **not** the owner's home address, since both are printed publicly (operator)
+- [x] `docs/COMPLIANCE.md` names the controlling entity
+- [x] The existing structural doc tests still pass (`tests/test_static.py` 51 passed)
+- [x] No personal email address remains in any user-facing surface —
+      `test_no_personal_email_in_any_user_facing_surface` sweeps `static/`, `notify/templates/`
+      and `frontend/src/` at the source tree
 
 ---
 

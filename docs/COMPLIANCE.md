@@ -1,7 +1,16 @@
 # CreatorClip — Compliance & YouTube API ToS
 
-**Last updated**: 2026-06-23
+**Last updated**: 2026-09-21
 Update this file any time data classes, retention policy, API scopes, or privacy posture changes.
+
+**Controlling entity (Issue 488, 2026-09-21):** the service (product name **AutoClip**) is
+operated by **Ludwick Solutions LLC**, which is the data controller for personal data processed
+through it and the merchant of record for billing (Issue 486, DECISIONS 2026-08-14). The
+public-facing legal pages (`static/privacy.html`, `static/tos.html`) name the entity and route
+privacy/breach/COPPA contact to `privacy@autoclip.studio` and general contact to
+`support@autoclip.studio` — role addresses on the product domain, never a personal inbox.
+(Operator prerequisite: both addresses must actually deliver — Cloudflare Email Routing forwards,
+set up alongside the #529 Resend DNS records.)
 
 ---
 
