@@ -5,7 +5,57 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-09-21 (latest) — Issue 535 CHECK: per-segment input seek confirmed; two-pass loudnorm retained, measured over the assembled recap
+## 2026-09-21 (latest) — Issue 537 CHECK + measurements: sync Deepgram kept with an 1800 s terminal timeout; the OOM was librosa's framed matrix, fixed blockwise in-issue
+
+**CHECK findings (Deepgram, current docs).** Prerecorded direct upload max **2 GB**; the **sync
+endpoint itself 504s when server-side processing exceeds 10 minutes** (Nova models) — independent
+of any client timeout; **callback (async) mode is the documented remedy** for long files (returns
+a `request_id` immediately, POSTs the transcript to your URL, 10 retries × 30 s); URL-based
+ingestion (`url` param, e.g. a presigned R2 URL) exists and would eliminate the ~173 MB upload
+entirely; no official nova-3 speed factor is published. (developers.deepgram.com: getting-started
+max processing time, /docs/callback, /docs/payload-too-large, /reference/listen-remote)
+
+**Decision — keep the sync shape for the drill; raise `TRANSCRIPTION_TIMEOUT_S` 300 → 1800.**
+Rationale: 300 s cannot cover upload+diarized ASR+download for a 90-minute WAV, but nothing
+measured yet says the sync path fails — Deepgram's 10-minute processing cap is the real ceiling,
+and nova-3 batch throughput almost certainly clears 90 minutes of audio well inside it. The
+callback/URL-ingestion integration is a different shape (public endpoint, task redesign) built on
+numbers we don't have; **#539 records the real transcription wall clock**, and if it approaches
+the 10-minute processing cap, the callback+presigned-URL shape gets filed from that evidence.
+1800 s satisfies the machine-checked invariant (`< CELERY_SOFT_TIME_LIMIT_S - 30 = 2970`).
+
+**Decision — the job-level timeout is now TERMINAL (no retry).** `asyncio.wait_for` expiry used to
+fall into the generic `self.retry` and re-upload ~173 MB three times into the same deterministic
+wall (~20 wasted minutes before the refund). Hung sockets are already converted to retryable SDK
+errors by `TRANSCRIPTION_HTTP_TIMEOUT_S=120`, so a job-level expiry means the provider was
+genuinely processing for the entire budget — a retry repeats it. Same terminal treatment as
+`SoftTimeLimitExceeded` (`worker/tasks.py::transcribe_video`).
+
+**Measurement — `extract_audio_events` peak RSS on a real 90-minute WAV** (172.8 MB pink noise,
+16 kHz mono, generated with ffmpeg `anoisesrc`; dev box, `.venv` python 3.12):
+- **Before: peak RSS 2227 MB** (load: 641 MB — the 346 MB float32 array + decode buffers;
+  `librosa.feature.rms`: **+1568 MB** — it pads a full copy then materializes the 4×-overlap
+  framed matrix; wall 21.9 s).
+- **After: peak RSS 968 MB, wall 13.1 s** — blockwise rms/zcr (`_framewise_rms`/`_framewise_zcr`,
+  `ingestion/audio.py`): frame-local features computed per 8192-frame block (`center=False` over a
+  pre-padded array), **bit-identical** to the full-array librosa calls
+  (`tests/test_signals.py::test_blockwise_features_match_librosa_exactly`, ragged prime-sized
+  blocks).
+
+**Verdict: the full streaming-load rewrite is NOT needed.** The issue anticipated "blockwise/
+streaming gets its own sizing" — the measurement showed the offender was a frame-local 50-line
+change, not a pipeline redesign, so it shipped inside #537 (this note is the recorded deviation).
+Residual: worst case at the 4 h `AUDIO_ANALYSIS_MAX_DURATION_S` cap is ~2×922 MB array+pad ≈
+2 GB — acceptable now, revisit only if multi-hour sources become routine. Prod worker runs
+`--concurrency=4` on the default queue → worst-case 4 × ~1 GB concurrent analyses; the VM's RAM
+is recorded during #539's pre-flight (`free -h`) alongside the per-stage RSS measurement #539
+already owes.
+
+**Date:** 2026-09-21.
+
+---
+
+## 2026-09-21 — Issue 535 CHECK: per-segment input seek confirmed; two-pass loudnorm retained, measured over the assembled recap
 
 **What was decided.** `render_summary_file` moves from a single-input whole-VOD trim graph to
 **per-segment input seeks** (`-ss <start> -t <dur> -accurate_seek -i <src>` per segment) for BOTH

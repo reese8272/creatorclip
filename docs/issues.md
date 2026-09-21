@@ -5853,7 +5853,10 @@ Batch B's question, and the bucket size should be chosen from the real histogram
 
 ### Issue 537: long-source ingest headroom — transcription timeout and audio-analysis memory, measured
 
-- [ ] **Status:** open · **Size:** S · **Lane:** L32 Batch A · filed 2026-09-17
+- [ ] **Status:** **CODE-COMPLETE 2026-09-21** — measurements recorded below; remaining: the prod
+      VM RAM blank (a `free -h` during #539's pre-flight) and #539's live transcription wall clock ·
+      **Size:** S · **Lane:** L32 Batch A · filed 2026-09-17 · CHECK + verdict in
+      `docs/DECISIONS.md` 2026-09-21
 
 Two independent ways for the 90-minute drill to die at stage two, before producing any evidence. Both
 are **measure-then-decide**, not speculative rewrites.
@@ -5897,15 +5900,24 @@ ship nothing for part (2). If it does not, the blockwise/streaming rewrite block
 its own sizing.
 
 **Acceptance**
-- [ ] Deepgram long-file guidance checked against current docs and cited; the chosen shape (raise the
-      timeout vs. callback mode) is justified in `docs/DECISIONS.md`
-- [ ] If the timeout is raised: the new value is in `config.py` and `.env.example`, and the
-      `config.py:1187-1199` invariant test still passes
-- [ ] The retry path no longer re-uploads on a timeout that cannot succeed a second time (or, if it
-      still does, that is a recorded deliberate choice with a reason)
-- [ ] **Measured peak RSS for a 90-minute WAV through `extract_audio_events` is recorded here**, with
-      the prod VM's available RAM alongside it
-- [ ] A verdict is written: streaming rewrite needed, or not needed and why
+- [x] Deepgram long-file guidance checked against current docs and cited (2 GB max; the sync
+      endpoint 504s past 10 min of server processing; callback mode is the documented long-file
+      remedy; URL ingestion exists); chosen shape — sync retained, timeout 300 → 1800 s, callback
+      re-evaluated against #539's measured wall clock — justified in `docs/DECISIONS.md` 2026-09-21
+- [x] Timeout raised: `config.py` `TRANSCRIPTION_TIMEOUT_S = 1800` + `.env.example` updated; the
+      `< CELERY_SOFT_TIME_LIMIT_S - 30` invariant validator passes (1800 < 2970)
+- [x] The retry path no longer re-uploads on a timeout that cannot succeed a second time — the
+      job-level `TimeoutError` is now terminal (no retry, refund fires once), mirrored on the
+      soft-timeout handler
+      (`tests/test_worker_invariants.py::test_transcribe_job_level_timeout_is_terminal_no_reupload`)
+- [ ] **Measured peak RSS for a 90-minute WAV through `extract_audio_events`: 2227 MB before →
+      968 MB after the blockwise fix** (172.8 MB 16 kHz mono WAV; offender was
+      `librosa.feature.rms`'s framed-matrix materialization, +1568 MB; wall 21.9 s → 13.1 s;
+      blockwise output bit-identical, pinned by test). Prod VM available RAM: ________ (operator:
+      `free -h` during #539 pre-flight — worker `--concurrency=4` ⇒ worst case ~4 GB concurrent)
+- [x] A verdict is written: **streaming-load rewrite NOT needed** — the measured offender was
+      frame-local and fixed in-issue (deviation recorded in DECISIONS); residual 4 h-cap worst
+      case ~2 GB noted
 
 ---
 

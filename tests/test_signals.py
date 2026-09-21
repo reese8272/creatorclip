@@ -107,6 +107,32 @@ def test_merge_runs_run_at_end():
     assert len(events) == 1
 
 
+# ── blockwise frame features (Issue 537) ──────────────────────────────────────
+
+
+def test_blockwise_features_match_librosa_exactly():
+    """Issue 537: the bounded-memory blockwise rms/zcr must be bit-identical to
+    the full-array librosa calls they replace — small blocks force stitching
+    across many boundaries so any off-by-one in the padding math fails here."""
+    import librosa
+
+    from ingestion.audio import _framewise_rms, _framewise_zcr
+
+    rng = np.random.default_rng(42)
+    y = (rng.standard_normal(16000 * 10) * 0.1).astype(np.float32)
+
+    # block_frames=37 (prime → ragged last block) forces stitching across many
+    # boundaries so any off-by-one in the padding math fails loudly.
+    np.testing.assert_array_equal(
+        _framewise_rms(y, hop_length=512, block_frames=37),
+        librosa.feature.rms(y=y, hop_length=512)[0],
+    )
+    np.testing.assert_array_equal(
+        _framewise_zcr(y, hop_length=512, block_frames=37),
+        librosa.feature.zero_crossing_rate(y=y, hop_length=512)[0],
+    )
+
+
 # ── extract_audio_events ──────────────────────────────────────────────────────
 
 
