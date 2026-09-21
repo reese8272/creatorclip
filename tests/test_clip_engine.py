@@ -6,6 +6,8 @@ Includes eval harness that loads YAML scenario fixtures and asserts the
 """
 
 import glob
+import json
+import logging
 import os
 
 import numpy as np
@@ -204,6 +206,63 @@ def test_extract_candidates_sorted_chronologically():
     candidates = extract_candidates(tl)
     starts = [c["setup_start_s"] for c in candidates]
     assert starts == sorted(starts)
+
+
+def test_candidate_pool_breadcrumb_at_info_with_attributed_discards(caplog):
+    """Issue 536: the pool breadcrumb must be readable in a production log
+    (INFO, not DEBUG) and attribute each discard reason separately — the top-N
+    cut, the MIN_CLIP_S drop, NMS suppression and the snap drop have four
+    different fixes. The counts must reconcile back to peaks detected, and the
+    line carries numbers only (no transcript text). Instrumentation only: the
+    candidates produced are pinned unchanged."""
+    tl = _make_timeline([40.0, 80.0, 120.0, 160.0])
+    baseline = extract_candidates(tl, max_candidates=2)
+    with caplog.at_level(logging.INFO, logger="clip_engine.candidates"):
+        candidates = extract_candidates(tl, max_candidates=2)
+    assert candidates == baseline  # no selection behaviour change
+
+    line = next(
+        r.getMessage() for r in caplog.records if r.getMessage().startswith("extract_candidates:")
+    )
+    for key in (
+        "peaks=",
+        "top_n_cut=",
+        "min_clip_dropped=",
+        "nms_suppressed=",
+        "snap_dropped=",
+        "final=",
+        "span=",
+        "duration_s=",
+        "peak_decile_histogram=",
+    ):
+        assert key in line, f"breadcrumb missing {key}: {line}"
+
+    fields = dict(
+        part.split("=", 1) for part in line.removeprefix("extract_candidates: ").split() if "=" in part
+    )
+    peaks = int(fields["peaks"])
+    accounted = (
+        int(fields["top_n_cut"])
+        + int(fields["min_clip_dropped"])
+        + int(fields["nms_suppressed"])
+        + int(fields["snap_dropped"])
+        + int(fields["final"])
+    )
+    assert peaks == accounted, line
+    assert int(fields["final"]) == len(candidates)
+    # Histogram covers the whole timeline in 10 buckets and sums to peaks.
+    hist = json.loads(line.split("peak_decile_histogram=")[1])
+    assert len(hist) == 10
+    assert sum(hist) == peaks
+
+
+def test_candidate_pool_breadcrumb_zero_peaks(caplog):
+    """Issue 536: a zero-peak run logs too — 'few peaks detected' is one of the
+    three situations the 90-minute drill must distinguish."""
+    with caplog.at_level(logging.INFO, logger="clip_engine.candidates"):
+        result = extract_candidates({"duration_s": 0.0, "events": []})
+    assert result == []
+    assert any("peaks=0 final=0" in r.getMessage() for r in caplog.records)
 
 
 def test_extract_candidates_end_after_peak():

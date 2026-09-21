@@ -103,7 +103,7 @@ ANALYSIS TASK — return a JSON object with:
 - narrative_arcs: the stories/threads that build and resolve across the video.
 - tone: the delivery style in one short phrase.
 - audience_relevance: 1-2 sentences on who this serves and why they stay.
-- moments: up to 4 clip-worthy moments, each {{start_s, end_s, reason,
+- moments: up to {max_moments} clip-worthy moments, each {{start_s, end_s, reason,
   principle, confidence}}.
 
 MOMENT SELECTION — the part only you can do:
@@ -121,7 +121,7 @@ MOMENT SELECTION — the part only you can do:
 - reason: one sentence on why THIS span works for THIS creator's audience.
 - confidence: 0.0-1.0 — your estimate of fit for this creator, not a promise
   of performance. Never promise virality.
-- Fewer, stronger moments beat four weak ones. Return an empty list if
+- Fewer, stronger moments beat {max_moments} weak ones. Return an empty list if
   nothing qualifies.
 """
 )
@@ -317,7 +317,10 @@ def _build_request(
     identity_text is creator-authored (attacker-influenceable) and rides the
     user turn via wrap_untrusted — never the system role (Issues 224/463).
     """
-    static_text = _SYSTEM_STATIC.format(principles="\n".join(f"- {p}" for p in CLIPPING_PRINCIPLES))
+    static_text = _SYSTEM_STATIC.format(
+        principles="\n".join(f"- {p}" for p in CLIPPING_PRINCIPLES),
+        max_moments=settings.LLM_CANDIDATES_MAX,
+    )
     system: list[dict] = [{"type": "text", "text": static_text}]
     # dna_system_block returns None when there is no brief, so the `if dna_brief`
     # guard this used to carry is now redundant — and checking the block itself

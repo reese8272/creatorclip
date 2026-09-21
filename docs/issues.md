@@ -5793,7 +5793,8 @@ both documented pure and unit-testable without ffmpeg.
 
 ### Issue 536: the candidate-pool breadcrumb is `logger.debug`, so a 90-minute run cannot be read
 
-- [ ] **Status:** open · **Size:** XS · **Lane:** L32 Batch A · filed 2026-09-17
+- [ ] **Status:** **CODE-COMPLETE 2026-09-21** — only the live-measurement AC remains, owed by
+      #539 · **Size:** XS · **Lane:** L32 Batch A · filed 2026-09-17
 
 The drill's most important artifact is *where on the timeline the candidates landed and why the rest
 were discarded*. Today that is unobservable in production.
@@ -5822,12 +5823,18 @@ only; **no selection behaviour changes in this issue.** Whether to stratify the 
 Batch B's question, and the bucket size should be chosen from the real histogram rather than guessed.
 
 **Acceptance**
-- [ ] The breadcrumb is emitted at INFO and appears in a production-level log
-- [ ] It reports: peaks detected · discarded by the top-N cut · discarded by `MIN_CLIP_S` · suppressed
-      by NMS · final count · temporal span covered · per-decile histogram
-- [ ] The three discard reasons are separately attributed, not summed
-- [ ] No change to which candidates are produced — pinned by an existing-behaviour test
-- [ ] No PII and no transcript text in the log line
+- [x] The breadcrumb is emitted at INFO and appears in a production-level log
+      (`clip_engine/candidates.py` end of `extract_candidates`; the zero-peak early return logs
+      too, so "few peaks detected" is distinguishable from silence;
+      `tests/test_clip_engine.py::test_candidate_pool_breadcrumb_at_info_with_attributed_discards`)
+- [x] It reports: peaks detected · discarded by the top-N cut · discarded by `MIN_CLIP_S` · suppressed
+      by NMS · final count · temporal span covered · per-decile histogram (plus `snap_dropped`,
+      a fourth attributed reason the original list missed — the post-snap MIN_CLIP_S drop)
+- [x] The discard reasons are separately attributed, not summed — the test reconciles
+      `peaks == top_n_cut + min_clip_dropped + nms_suppressed + snap_dropped + final`
+- [x] No change to which candidates are produced — the test asserts the returned list is identical
+      with and without capture; the full eval-scenario gate stays green (88 passed)
+- [x] No PII and no transcript text in the log line — numbers only
 - [ ] The numbers for a real 90-minute stream are recorded in #539
 
 ---
@@ -5892,7 +5899,7 @@ its own sizing.
 
 ### Issue 538: the whole-video context prompt still says "up to 4 moments" after the cap went to 6
 
-- [ ] **Status:** open · **Size:** XS · **Lane:** L32 Batch A · filed 2026-09-17
+- [x] **Status:** **DONE 2026-09-21** · **Size:** XS · **Lane:** L32 Batch A · filed 2026-09-17
 
 `config.py:534` sets `LLM_CANDIDATES_MAX = 6`, with the comment *"4 → 6 with the wider pool
 (2026-08-05)"*. The constant was raised; the prompt was not. `analysis/video_context.py:106` still
@@ -5914,10 +5921,17 @@ Lane L30's whole thesis).
 beat; moving it before the drill makes the before/after comparison meaningless.
 
 **Acceptance**
-- [ ] Both prompt strings agree with `LLM_CANDIDATES_MAX`, derived rather than retyped
-- [ ] A test fails if the constant and the prompt text diverge again
-- [ ] The 30–90 s span constraint at `:114-116` is byte-identical
-- [ ] `validate_context`'s cap at `:288` is exercised by a test (it has been unreachable in practice)
+- [x] Both prompt strings agree with `LLM_CANDIDATES_MAX`, derived rather than retyped —
+      `_SYSTEM_STATIC` gained a `{max_moments}` placeholder formatted from
+      `settings.LLM_CANDIDATES_MAX` in `_build_request` (still byte-identical across calls, so the
+      block-2 cache marker is untouched)
+- [x] A test fails if the constant and the prompt text diverge again
+      (`tests/test_video_context.py::test_moment_count_in_prompt_derives_from_config`)
+- [x] The 30–90 s span constraint is byte-identical — byte-pinned by
+      `test_span_constraint_untouched_by_538` so it cannot silently move before the drill
+- [x] `validate_context`'s cap is exercised by a test — the pre-existing
+      `test_validate_caps_moments_by_confidence` already fed `LLM_CANDIDATES_MAX + 1` valid moments
+      and asserted the confidence-ordered cap; no new test needed
 
 ---
 
