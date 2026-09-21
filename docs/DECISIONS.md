@@ -5,6 +5,34 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-09-21 (latest) — Issue 540: pgvector for Homebrew pg16 needed no source compile — the bottle already ships it
+
+**What changed.** Issue 540's premise (filed 2026-09-21, see `docs/issues.md`) was that pgvector
+would need to be **compiled from source** against `$(brew --prefix postgresql@16)/bin/pg_config`,
+because `share/postgresql@16/extension/` had no `vector.control` at filing time. On the box this
+issue actually builds against, `brew install pgvector` pours a **prebuilt bottle** that installs
+`vector.control` + the shared library under `share/postgresql@1{6,7,8}/extension/` simultaneously
+(`/home/linuxbrew/.linuxbrew/Cellar/pgvector/0.8.3/`, `INSTALL_RECEIPT.json` confirms
+`poured_from_bottle: true`, `used_options: []` — no custom `--with-postgresql@16` flag needed). No
+source compile step was required; a from-source fallback (`make USE_PGXS=1 PG_CONFIG=$(brew
+--prefix postgresql@16)/bin/pg_config install`) is still the documented escape hatch if a future
+bottle drops pg16 support, but was not needed here.
+
+**Why.** Issue 540 required the exact install sequence recorded so the next box can repeat it;
+verifying what was actually on disk (`find … -iname vector.control`, `INSTALL_RECEIPT.json`) showed
+the simpler path already worked, correcting the issue's own written premise before repeating it as
+a runbook.
+
+**Source/evidence.** `brew info pgvector` (bottle for postgresql@16/17/18); local inspection of
+`/home/linuxbrew/.linuxbrew/Cellar/pgvector/0.8.3/INSTALL_RECEIPT.json` and
+`share/postgresql@16/extension/vector.control` under the pg16 Cellar keg; `SELECT 1 FROM
+pg_available_extensions WHERE name = 'vector'` returns a row against `creatorclip_e2e` (also the
+new `scripts/doctor.py --e2e` check).
+
+**Date:** 2026-09-21.
+
+---
+
 ## 2026-09-21 (latest) — Issue 537 CHECK + measurements: sync Deepgram kept with an 1800 s terminal timeout; the OOM was librosa's framed matrix, fixed blockwise in-issue
 
 **CHECK findings (Deepgram, current docs).** Prerecorded direct upload max **2 GB**; the **sync

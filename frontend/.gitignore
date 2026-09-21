@@ -19,6 +19,8 @@ dist-ssr
 /e2e/.results
 /e2e/.report
 /e2e/.report-prod
+/e2e/.report-local
+/e2e/.audit
 /e2e/__screenshots__
 /e2e/.auth
 

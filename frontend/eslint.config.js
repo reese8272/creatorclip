@@ -52,7 +52,9 @@ export default defineConfig([
   // the react-hooks plugin otherwise false-positives on Playwright's `use()`
   // fixture callback (it is not a React Hook).
   {
-    files: ['e2e/**/*.ts', '*.config.{ts,js}'],
+    // `playwright.config.*.ts` catches the prod/local config variants, which
+    // the `*.config.{ts,js}` glob alone does not match.
+    files: ['e2e/**/*.ts', '*.config.{ts,js}', 'playwright.config.*.ts'],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },

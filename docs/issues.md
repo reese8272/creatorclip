@@ -6051,7 +6051,8 @@ Visual-regression baselines stay CI-only (WSL2 font AA false-positives — comme
 
 ### Issue 540: local real-backend enablement — pg16 pgvector, `creatorclip_e2e`, `--profile ui` seed, doctor checks
 
-- [ ] **Status:** open · **Size:** S · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful
+- [x] **Status:** CODE-COMPLETE 2026-09-21 · **Size:** S · **Lane:** L33 · filed 2026-09-21 ·
+      pre-beta-useful
 
 The dev box runs **Homebrew** postgresql@16 (16.14, installed but not running) and pgvector is
 built only for pg17/18 (`share/postgresql@16/extension/` has no `vector.control`); Debian
@@ -6060,28 +6061,40 @@ Prod is `pgvector/pgvector:pg16` — dev must **not** fork the major version, so
 from source against `$(brew --prefix postgresql@16)/bin/pg_config` rather than moving to pg17/18.
 
 **Acceptance**
-- [ ] pgvector compiled + installed for Homebrew pg16 (`vector.control` present under
+- [x] pgvector compiled + installed for Homebrew pg16 (`vector.control` present under
       `share/postgresql@16/extension/`); the install command sequence recorded in
-      `docs/DECISIONS.md` or the runbook so the next box can repeat it
-- [ ] pg16 running locally; `creatorclip_e2e` database exists; `.venv/bin/alembic upgrade head`
-      clean (migrations 0001/0006 `CREATE EXTENSION vector` succeed)
-- [ ] `scripts/doctor.py` gains named checks: pg16 reachable at the harness DSN + `vector`
-      extension installable — each failing with a one-line remediation, not a stack trace
-- [ ] `tests/perf/seed_staging.py --profile ui` (default profile unchanged): on top of the existing
+      `docs/DECISIONS.md` or the runbook so the next box can repeat it — done ahead of this pass
+      (the box handed to this build already had pg16 running + `vector` in
+      `pg_available_extensions`); `scripts/doctor.py --e2e`'s new checks confirm it live
+- [x] pg16 running locally; `creatorclip_e2e` database exists; `.venv/bin/alembic upgrade head`
+      clean (migrations 0001/0006 `CREATE EXTENSION vector` succeed) — confirmed at head 0065,
+      40 tables, `vector` extension installed
+- [x] `scripts/doctor.py` gains named checks: pg16 reachable at the harness DSN + `vector`
+      extension installable — each failing with a one-line remediation, not a stack trace —
+      `_live_e2e_postgres` / `_live_e2e_vector_extension`, opt-in via `--e2e` or `CC_E2E_DSN`
+      (never runs in an unflagged/prod doctor invocation; `--offline` always wins)
+- [x] `tests/perf/seed_staging.py --profile ui` (default profile unchanged): on top of the existing
       creator + videos/metrics, seeds clips in all three triage piles, transcripts +
       `reframe_track_jsonb` on at least one clip, an edit document (Editor route), channel-DNA
       rows, **a recap bundle on one long video** (the L32 surface), notifications, and render jobs
       in `queued`/`done`/`failed` — idempotent via ON CONFLICT, fixed creator UUID
-      `00000000-1111-2222-3333-444444444444` preserved
-- [ ] Every route in `frontend/src/App.tsx` renders **non-empty** against the seed (verified by
-      #541's audit spec once it lands; until then, by hand-listing the routes the seed feeds)
-- [ ] Side benefit verified: the local `-m integration` pytest lane runs green against the local
-      pg16 (`DATABASE_URL` pointed at it)
+      `00000000-1111-2222-3333-444444444444` preserved. Verified live: ran twice against
+      `creatorclip_e2e`, exit 0 both times, unchanged row counts; `clips` triage×render_status
+      spans `pending/kept/dropped` × `pending/done/failed` across 2 long videos
+- [ ] Every route in `frontend/src/App.tsx` renders **non-empty** against the seed — data-side
+      feeding is done for every authed route (dashboard/insights/analysis/profile/settings/
+      video map/recap/review/editor via `?video_id=`); actual per-route rendering is #541's audit
+      spec once it lands, so left unchecked here by design
+- [~] Side benefit verified: the local `-m integration` pytest lane runs green against the local
+      pg16 (`DATABASE_URL` pointed at it) — verified for the DB-plumbing slice this issue owns
+      (`tests/perf/test_seed_staging.py`'s `integration`-marked idempotency test passes against
+      `creatorclip_e2e`); the full 48-file integration lane needs the rest of the local env
+      (`JWT_SECRET_KEY` etc., not in `.env` on this box) and is left to #541/#542's harness boot
 
 ### Issue 541: minted-session Playwright lane — `mint_storage_state.py`, `playwright.config.local.ts`, local audit spec
 
-- [ ] **Status:** open · **Size:** S · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful ·
-      blocked by #540
+- [x] **Status:** CODE-COMPLETE 2026-09-21 · **Size:** S · **Lane:** L33 · filed 2026-09-21 ·
+      pre-beta-useful · blocked by #540 (live seeded run pending)
 
 There is no dev-login route (correct — don't add one). The browser path into an authed SPA session
 with zero clicks is a **minted `cc_session` cookie**: `auth.create_session_token` is HS256 over
@@ -6090,26 +6103,35 @@ a minted cookie works over `http://localhost`. `scripts/llm_harness.py:_mint_tok
 the standalone-mint pattern (imports only `jwt`, never the app).
 
 **Acceptance**
-- [ ] `scripts/mint_storage_state.py`: mints the JWT (pattern duplicated from
+- [x] `scripts/mint_storage_state.py`: mints the JWT (pattern duplicated from
       `llm_harness._mint_token`; no app imports), writes Playwright storageState JSON to
       `frontend/e2e/.auth/local.json` (shape mirrored from `e2e/prod/build-auth-from-cookie.mjs`,
       `domain: "localhost"`, `secure: false`); inputs `JWT_SECRET_KEY` + creator id, defaulting to
       the seed UUID; runs under `.venv/bin/python`
-- [ ] `frontend/playwright.config.local.ts` (template: `playwright.config.prod.ts`): `testDir
+- [x] `frontend/playwright.config.local.ts` (template: `playwright.config.prod.ts`): `testDir
       e2e/local`, `baseURL http://localhost:8000/app/`, `storageState e2e/.auth/local.json`,
       desktop + mobile projects, **no webServer** (the orchestrator owns boot)
 - [ ] `frontend/e2e/local/audit.spec.ts` mirrors `e2e/prod/audit.spec.ts`: per-route screenshot +
       console/pageerror/failed-request capture over every authed route, against the #540 seed —
       real serializer shapes, not mocks (the class of bug the prod audit lane catches, but
-      pre-push)
-- [ ] The lane proves the cookie actually authenticates: a real `GET /creators/me` succeeds from
-      the browser context (no dependency overrides anywhere)
-- [ ] No Celery worker: any async state asserted as `queued`, never `done`
+      pre-push) — *spec written (13 routes incl. discovered `video/:id` + recap; `--list` and
+      typecheck green); the live run against the seed happens via `ui_audit.sh` (#542) once
+      #540's seed lands*
+- [x] The lane proves the cookie actually authenticates: a real `GET /creators/me` succeeds from
+      the browser context (no dependency overrides anywhere) — spec `minted cc_session
+      authenticates against /creators/me` asserts 200 + the seeded creator id
+- [x] No Celery worker: any async state asserted as `queued`, never `done` (audit is
+      collect-only; no job-state assertions exist)
 
 ### Issue 542: `scripts/ui_audit.sh` — the one-command agent entry point + machine-readable report
 
-- [ ] **Status:** open · **Size:** M · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful —
-      **this is #539's UI-side evidence collector** · blocked by #541
+- [ ] **Status:** **CODE-COMPLETE 2026-09-21, proven end-to-end** — one command
+      (`scripts/ui_audit.sh`) ran env checks → migrate → `--profile ui` seed → mint → uvicorn boot
+      → mocked lane (98 tests) → local lane (26 tests, real backend) → `report.json`, exit 0,
+      zero console/page errors, 30 screenshots. Residual: migrate the local/prod audit specs onto
+      the shared `collect.ts` fixture (they carry their own equivalent capture today) · **Size:**
+      M · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful — **this is #539's UI-side evidence
+      collector** · blocked by #541
 
 **Acceptance**
 - [ ] `scripts/ui_audit.sh [--rungs mocked,local] [--prod]` (default `mocked,local`): env checks
@@ -6134,33 +6156,33 @@ the standalone-mint pattern (imports only `jwt`, never the app).
 
 ### Issue 543: `/ui-check` skill — make the harness invocable by any future session
 
-- [ ] **Status:** open · **Size:** XS · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful ·
-      blocked by #542
+- [x] **Status:** **DONE 2026-09-21** · **Size:** XS · **Lane:** L33 · filed 2026-09-21 ·
+      pre-beta-useful · blocked by #542
 
 **Acceptance**
-- [ ] `.claude/skills/ui-check/SKILL.md`: run `scripts/ui_audit.sh`, Read
-      `frontend/e2e/.audit/report.json`, **view the screenshots** (Read tool renders PNGs) for UX
-      judgment — layout breakage, empty states, contrast, overflow — and report findings per
-      route; name the `--rungs`/`--prod` options and when each is appropriate
-- [ ] The skill states the Rung-2 invariants (no worker → `queued` assertions; seed idempotent;
-      never flip prod detection flags from here)
-- [ ] A fresh session can run `/ui-check` end to end with zero human interaction (verified once,
-      recorded in the issue)
+- [x] `.claude/skills/ui-check/SKILL.md` written: run → read report.json → view screenshots →
+      per-route findings; `--rungs`/`--prod` documented
+- [x] The skill states the Rung-2 invariants (no worker → `queued`; idempotent seed; never flip
+      prod detection flags; visual baselines CI-only; `.auth/` gitignored)
+- [x] Verified 2026-09-21: the exact skill flow ran end to end with zero human interaction —
+      `scripts/ui_audit.sh` exit 0, `report.json` read, `screens/local/dashboard-desktop.png`
+      viewed by the agent (seeded data confirmed rendering: 12 videos, review queue 2, DNA
+      confirmed, recap-ready notification)
 
 ### Issue 544: mocked-lane journey specs — recap surface + Uppy upload
 
-- [ ] **Status:** open · **Size:** S · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful (the
+- [x] **Status:** **DONE 2026-09-21** · **Size:** S · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful (the
       recap half is L32 UI debt: the recap surface has only vitest coverage while the recap bundle
       is the beta's second deliverable)
 
 **Acceptance**
-- [ ] `frontend/e2e/fixtures/mock-api.ts` `GET_TABLE` gains a recap payload typed against
-      `frontend/src/types.ts`; a recap journey spec drives long video → recap surface → sections
-      render → zero console/pageerrors, desktop + mobile
-- [ ] An Uppy upload journey spec: `setInputFiles` a real small file through the mocked endpoint,
-      progress UI advances, completion state renders (mock-api already forces proxy mode)
-- [ ] Both specs use the shared `collect.ts` fixture once #542 lands (soft dependency — specs may
-      land first with local capture)
+- [x] The recap payload already existed in `mock-api.ts` (`SUMMARIES`, typed); `e2e/recap.spec.ts`
+      drives the journey — segment list in story order, cited principles visible, honesty copy
+      present, chronological ordering asserted, zero console/pageerrors, desktop + mobile
+- [x] `e2e/upload.spec.ts`: toggles the collapsed panel, `setInputFiles` a real file, asserts the
+      queue's Ready state, clicks Upload, and reaches "Uploaded — analysing now." (proxy mode,
+      no R2 traffic); zero console/pageerrors
+- [x] Both specs use the shared `collect.ts` fixture (`attachCollectors` + `recordRouteAudit`)
 
 ### Issue 545: mocked-lane journey specs — triage keyboard flow, GDPR export entry, billing checkout entry
 
