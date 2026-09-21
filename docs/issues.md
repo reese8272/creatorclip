@@ -5913,7 +5913,7 @@ its own sizing.
 - [ ] **Measured peak RSS for a 90-minute WAV through `extract_audio_events`: 2227 MB before →
       968 MB after the blockwise fix** (172.8 MB 16 kHz mono WAV; offender was
       `librosa.feature.rms`'s framed-matrix materialization, +1568 MB; wall 21.9 s → 13.1 s;
-      blockwise output bit-identical, pinned by test). Prod VM available RAM: ________ (operator:
+      blockwise output numerically identical — RMS within one float32 ulp across CPUs, ZCR exact — pinned by test). Prod VM available RAM: ________ (operator:
       `free -h` during #539 pre-flight — worker `--concurrency=4` ⇒ worst case ~4 GB concurrent)
 - [x] A verdict is written: **streaming-load rewrite NOT needed** — the measured offender was
       frame-local and fixed in-issue (deviation recorded in DECISIONS); residual 4 h-cap worst

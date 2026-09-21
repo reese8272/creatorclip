@@ -66,7 +66,7 @@ genuinely processing for the entire budget — a retry repeats it. Same terminal
   framed matrix; wall 21.9 s).
 - **After: peak RSS 968 MB, wall 13.1 s** — blockwise rms/zcr (`_framewise_rms`/`_framewise_zcr`,
   `ingestion/audio.py`): frame-local features computed per 8192-frame block (`center=False` over a
-  pre-padded array), **bit-identical** to the full-array librosa calls
+  pre-padded array), numerically identical to the full-array librosa calls (RMS within one float32 ulp — SIMD reduction order over strided windows differs per CPU; ZCR exact)
   (`tests/test_signals.py::test_blockwise_features_match_librosa_exactly`, ragged prime-sized
   blocks).
 

@@ -339,7 +339,18 @@ def gate_pip_audit() -> dict:
         return {"status": "skipped", "detail": "pip-audit output unparseable"}
     deps = data.get("dependencies", data if isinstance(data, list) else [])
     vulns = sum(len(d.get("vulns", [])) for d in deps)
-    return {"status": "ok", "value": vulns, "metric": "pip_audit_vulns", "compare": "max"}
+    result: dict = {"status": "ok", "value": vulns, "metric": "pip_audit_vulns", "compare": "max"}
+    if vulns:
+        # Name the findings — a bare count on a remote CI runner is undebuggable
+        # (this cost a full CI round on 2026-09-21: local env showed different
+        # packages than the hosted toolcache, and nothing said which).
+        result["detail"] = "; ".join(
+            f"{d.get('name')}=={d.get('version')}: "
+            + ",".join(v.get("id", "?") for v in d.get("vulns", []))
+            for d in deps
+            if d.get("vulns")
+        )
+    return result
 
 
 def gate_freshness() -> dict:
@@ -657,6 +668,8 @@ def main() -> int:
         val = results[name].get("value", results[name].get("detail", ""))
         print(f"  {name:10s} {st:8s} {val}")
         if st == "fail":
+            if detail := results[name].get("detail"):
+                print(f"             └─ {detail}")
             failed.append(name)
         elif st == "skipped":
             skipped.append(name)
