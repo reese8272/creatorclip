@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from clip_engine.summary_select import select_recap_segments
 from config import settings
 from db import get_session
 from main import app
@@ -191,6 +192,65 @@ def test_create_summary_enqueues_render_202(client):
     assert body["status"] == "queued"
     assert body["stream_url"] == f"/tasks/{body['summary_id']}/events"
     task_mock.delay.assert_called_once_with(body["summary_id"])
+
+
+def test_create_summary_passes_real_silence_boundaries_to_selection(client):
+    """Issue 534 — the chapter-straddle demotion must see REAL content boundaries.
+
+    `create_summary` reads `Signals.timeline_jsonb` and hands the derived
+    boundaries to `select_recap_segments` as the straddle-penalty input. Before
+    534 the reader looked for a top-level "silences" key the producer never
+    emits, so every recap on every video was demoted against the evenly-spaced
+    MIN_CHAPTERS fill — arbitrary fractions of the runtime, i.e. active
+    selection noise rather than a neutral no-op.
+
+    The timeline here is built by the real producer, and the assertion is
+    two-sided: the real boundaries are present AND the fallback fill is absent.
+    A one-sided assertion would pass on the broken reader for a video whose
+    silences happened to land near a quarter-point.
+    """
+    from ingestion.signals import build_signal_timeline
+
+    creator = _creator()
+    video = _video(creator.id)  # duration_s = 1800.0 → fill would be 450/900/1350
+    clips = [_clip(start_s=10, end_s=70, score=0.9), _clip(start_s=200, end_s=260, score=0.7)]
+
+    signals = MagicMock(spec=Signals)
+    signals.timeline_jsonb = build_signal_timeline(
+        {
+            "duration_s": 1800.0,
+            "energy_spikes": [],
+            "silences": [
+                {"start_s": float(t), "end_s": float(t) + 3.0}
+                for t in (200, 400, 600, 800, 1000, 1200)
+            ],
+            "laughter": [],
+        },
+        [],
+    )
+    _set_overrides(creator, _fake_session(video=video, clips=clips, signals=signals))
+
+    fake_task = MagicMock()
+    fake_task.id = "task-1"
+    with (
+        patch("routers.clips.check_positive_balance", new=AsyncMock()),
+        patch("dna.profile.get_active", new=AsyncMock(return_value=None)),
+        patch("worker.tasks.render_summary") as task_mock,
+        patch("worker.progress.aset_owner", new=AsyncMock()),
+        patch(
+            "clip_engine.summary_select.select_recap_segments",
+            wraps=select_recap_segments,
+        ) as select_mock,
+    ):
+        task_mock.delay.return_value = fake_task
+        resp = _post(client, video.id)
+
+    assert resp.status_code == 202, resp.text
+    chapters = select_mock.call_args.kwargs["chapters"]
+    stamps = {c["timestamp_s"] for c in chapters}
+
+    assert {200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0} <= stamps
+    assert not {450.0, 900.0, 1350.0} & stamps, f"fell back to the evenly-spaced fill: {stamps}"
 
 
 def test_create_summary_enqueue_failure_marks_failed_503(client):

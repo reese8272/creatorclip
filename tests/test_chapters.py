@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from auth import get_current_creator
 from db import get_session
 from knowledge.chapters import (
+    MAX_CHAPTER_PERIOD_S,
     MIN_CHAPTERS,
     find_chapter_boundaries,
     format_timestamp,
@@ -46,6 +47,37 @@ def test_format_timestamp_negative_clamps_to_zero() -> None:
 
 
 # ── Unit: find_chapter_boundaries ─────────────────────────────────────────────
+#
+# Issue 534: every fixture below is built by the REAL producer
+# (``ingestion.signals.build_signal_timeline``) rather than hand-written.
+# The defect this section exists to catch was precisely a hand-written fixture
+# agreeing with a reader that disagreed with the producer: the reader looked for
+# a top-level ``"silences"`` key that ``build_signal_timeline`` has never emitted
+# (silences live under ``events`` as ``{"type": "silence", ...}``), so every video
+# in production fell through to the evenly-spaced MIN_CHAPTERS fill. The unit
+# tests were green the whole time. Do not reintroduce a hand-built timeline here.
+
+
+def _real_timeline(silences: list[tuple[float, float]], duration_s: float) -> dict:
+    """A signal timeline in the shape ``build_signal_timeline`` actually emits."""
+    from ingestion.signals import build_signal_timeline
+
+    return build_signal_timeline(
+        {
+            "duration_s": duration_s,
+            "energy_spikes": [],
+            "silences": [{"start_s": s, "end_s": e} for s, e in silences],
+            "laughter": [],
+        },
+        [],
+    )
+
+
+def test_real_timeline_has_no_top_level_silences_key() -> None:
+    """Pins the producer contract the reader must match — the defect in one line."""
+    timeline = _real_timeline([(200.0, 203.0)], 600.0)
+    assert "silences" not in timeline
+    assert any(e.get("type") == "silence" for e in timeline["events"])
 
 
 def test_find_chapter_boundaries_always_starts_at_zero() -> None:
@@ -55,24 +87,31 @@ def test_find_chapter_boundaries_always_starts_at_zero() -> None:
 
 def test_find_chapter_boundaries_silence_gaps() -> None:
     """Silences spaced >= MAX_CHAPTER_PERIOD_S apart all become boundaries."""
-    timeline = {
-        "silences": [
-            {"start_s": 200.0, "end_s": 203.0},
-            {"start_s": 400.0, "end_s": 402.5},
-        ]
-    }
+    timeline = _real_timeline([(200.0, 203.0), (400.0, 402.5)], 600.0)
     bounds = find_chapter_boundaries(timeline, 600.0)
     assert 0.0 in bounds
     assert any(abs(b - 200.0) < 1.0 for b in bounds)
     assert any(abs(b - 400.0) < 1.0 for b in bounds)
 
 
+def test_find_chapter_boundaries_beat_the_evenly_spaced_fallback() -> None:
+    """Real silences must produce boundaries the MIN_CHAPTERS fill cannot invent.
+
+    This is the assertion that actually distinguishes "the silences were read"
+    from "the reader found nothing and the fallback ran". With the pre-Issue-534
+    reader a 30-minute video always returned exactly the fill at 450/900/1350.
+    """
+    silences = [(float(t), float(t) + 3.0) for t in (200, 400, 600, 800, 1000, 1200)]
+    timeline = _real_timeline(silences, 1800.0)
+    bounds = find_chapter_boundaries(timeline, 1800.0)
+
+    assert len(bounds) > MIN_CHAPTERS
+    fill = {round(i * 1800.0 / MIN_CHAPTERS, 1) for i in range(1, MIN_CHAPTERS)}
+    assert not fill & set(bounds), f"boundaries collapsed to the fallback fill: {bounds}"
+
+
 def test_find_chapter_boundaries_short_silences_ignored() -> None:
-    timeline = {
-        "silences": [
-            {"start_s": 50.0, "end_s": 51.0},  # only 1s — below threshold
-        ]
-    }
+    timeline = _real_timeline([(50.0, 51.0)], 600.0)  # 1s — below SILENCE_THRESHOLD_S
     bounds = find_chapter_boundaries(timeline, 600.0)
     assert all(abs(b - 50.0) > 0.5 for b in bounds if b > 0)
 
@@ -84,18 +123,16 @@ def test_find_chapter_boundaries_min_chapters_enforced() -> None:
 
 def test_find_chapter_boundaries_max_density() -> None:
     """One chapter per 3 minutes maximum — boundaries too close together are filtered."""
-    # Many very close silences
-    timeline = {
-        "silences": [
-            {"start_s": float(t), "end_s": float(t) + 3.0}
-            for t in range(5, 600, 10)  # every 10 seconds
-        ]
-    }
+    silences = [(float(t), float(t) + 3.0) for t in range(5, 600, 10)]  # every 10s
+    timeline = _real_timeline(silences, 600.0)
     bounds = find_chapter_boundaries(timeline, 600.0)
-    # Consecutive boundaries must be >= 90s apart (half of MAX_CHAPTER_PERIOD_S)
-    for _i in range(len(bounds) - 1):
-        pass  # main invariant: list is sorted and no crash
+
     assert bounds == sorted(bounds)
+    # Dense real silences fill the list past MIN_CHAPTERS, so the evenly-spaced
+    # fallback never runs and the density rule is the only thing shaping the gaps.
+    assert len(bounds) >= MIN_CHAPTERS
+    gaps = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
+    assert all(g >= MAX_CHAPTER_PERIOD_S for g in gaps), gaps
 
 
 def test_find_chapter_boundaries_empty_signals() -> None:

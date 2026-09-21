@@ -205,6 +205,34 @@ def test_system_blocks_byte_identical_with_and_without_identity() -> None:
     assert sys_with == sys_without
 
 
+def test_moment_count_in_prompt_derives_from_config() -> None:
+    """Issue 538: the prompt's moment budget must be LLM_CANDIDATES_MAX, derived
+    not retyped. The constant went 4 → 6 on 2026-08-05 and the prompt silently
+    kept asking for 4 — the schema has no maxItems, so the prompt text is the
+    binding constraint and the validator cap was dead headroom."""
+    system, _ = _build_request("t", 100.0, None, None)
+    static_text = system[0]["text"]
+    n = settings.LLM_CANDIDATES_MAX
+    assert f"up to {n} clip-worthy moments" in static_text
+    assert f"Fewer, stronger moments beat {n} weak ones" in static_text
+    # No stale hardcoded count survives anywhere in the moment instructions.
+    assert "up to 4 clip-worthy" not in static_text or n == 4
+    assert "beat four weak ones" not in static_text
+
+
+def test_span_constraint_untouched_by_538() -> None:
+    """Issue 538 changes ONLY the count. The 30-90s span constraint is the
+    baseline the Batch-B long-form segment pass must beat — byte-pinned so a
+    well-meaning edit can't silently move the goalposts before the drill."""
+    system, _ = _build_request("t", 100.0, None, None)
+    static_text = system[0]["text"]
+    assert (
+        "- Each moment must be a self-contained 30-90 second span: the setup AND the\n"
+        "  payoff both inside [start_s, end_s]. Target 60-90 seconds per moment; spans\n"
+        "  over 90 seconds are hard-trimmed downstream, losing your chosen ending."
+    ) in static_text
+
+
 def test_transcript_is_untrusted_user_turn_only() -> None:
     transcript = "SECRET-MARKER transcript content"
     system, messages = _build_request(transcript, 100.0, "brief", "identity")

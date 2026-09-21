@@ -1069,19 +1069,30 @@ def render_clip_file(
 _CLEAN_AFADE_S = 0.005
 
 
-def _audio_segment_filter(idx: int, start: float, end: float) -> str:
+def _audio_segment_filter(
+    idx: int, start: float, end: float, input_index: int | None = None
+) -> str:
     """Build the ``atrim``+``afade`` audio-filter line for one kept segment.
 
     A 5ms ``afade`` in/out brackets every splice for click prevention; the fade
     is halved for any segment shorter than ``2 × _CLEAN_AFADE_S`` so it never
     exceeds half the segment duration (which ffmpeg rejects). Shared by the
     measurement and apply passes so both see byte-identical audio (Issue 135/181).
+
+    ``input_index`` (Issue 535): ``None`` keeps the single-input shape — absolute
+    ``atrim`` against ``[0:a]`` (render_cleaned_clip_file, whole-source decode).
+    With an index, the segment is its OWN seeked input, so the line reads
+    ``[N:a]`` and trims the already-seeked stream ``0..duration``.
     """
     seg_dur = end - start
     afade_s = min(_CLEAN_AFADE_S, seg_dur / 2.0)
     fade_out_st = max(0.0, seg_dur - afade_s)
+    if input_index is None:
+        head = f"[0:a]atrim=start={start:.3f}:end={end:.3f}"
+    else:
+        head = f"[{input_index}:a]atrim=start=0:end={seg_dur:.3f}"
     return (
-        f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,"
+        f"{head},asetpts=PTS-STARTPTS,"
         f"afade=t=in:st=0:d={afade_s},"
         f"afade=t=out:st={fade_out_st:.3f}:d={afade_s}[a{idx}];"
     )
@@ -1093,6 +1104,7 @@ def _measure_concat_loudnorm(
     out_path: Path,
     label: str,
     timeout_s: float,
+    per_segment_seek: bool = False,
 ) -> str | None:
     """Measure loudness of the CONCATENATED segment audio and return the
     second-pass ``loudnorm`` filter string (Issue 181 contract: the loudnorm
@@ -1103,8 +1115,16 @@ def _measure_concat_loudnorm(
     Segment afades come from ``_audio_segment_filter`` so measurement and apply
     passes see byte-identical audio. Shared by ``render_cleaned_clip_file`` and
     ``render_summary_file``.
+
+    ``per_segment_seek`` (Issue 535): the recap path opens the source once PER
+    SEGMENT with an input-side ``-ss``/``-t`` seek, so the measurement decodes
+    only the selected minutes instead of the whole VOD. The cleaned-clip path
+    keeps the single-input decode (its sources are already clip-length).
     """
-    measure_lines = [_audio_segment_filter(idx, s, e) for idx, (s, e) in enumerate(segments)]
+    measure_lines = [
+        _audio_segment_filter(idx, s, e, input_index=idx if per_segment_seek else None)
+        for idx, (s, e) in enumerate(segments)
+    ]
     a_inputs = "".join(f"[a{idx}]" for idx in range(len(segments)))
     measure_lines.append(
         f"{a_inputs}concat=n={len(segments)}:v=0:a=1[outa];"
@@ -1113,13 +1133,16 @@ def _measure_concat_loudnorm(
     measure_script_path = out_path.with_suffix(".measure.filter")
     measure_script_path.parent.mkdir(parents=True, exist_ok=True)
     measure_script_path.write_text("\n".join(measure_lines))
+    if per_segment_seek:
+        input_args = build_summary_input_args(source_path, segments)
+    else:
+        input_args = ["-i", str(source_path)]
     try:
         return _measure_loudnorm_filter(
             [
                 "ffmpeg",
                 "-y",
-                "-i",
-                str(source_path),
+                *input_args,
                 "-filter_complex_script",
                 str(measure_script_path),
                 "-map",
@@ -1273,21 +1296,55 @@ _SUMMARY_VIDEO_FADE_S = 0.1
 _SUMMARY_FORMAT = "16:9"
 
 
-def _video_segment_filter(idx: int, start: float, end: float, out_w: int, out_h: int) -> str:
+def _video_segment_filter(
+    idx: int, start: float, end: float, out_w: int, out_h: int, input_index: int | None = None
+) -> str:
     """Build the ``trim``+``scale``+``fade`` video-filter line for one recap segment.
 
     ``setsar=1`` normalizes the sample aspect ratio so ``concat`` never rejects
     segments whose scaled SAR differs. fade ``st`` values are segment-relative
     because ``setpts=PTS-STARTPTS`` resets timestamps to 0 per segment.
+
+    ``input_index`` (Issue 535): with an index the segment is its own seeked
+    input — ``[N:v]``, trimmed ``0..duration``; ``None`` keeps the absolute
+    single-input trim.
     """
     seg_dur = end - start
     fade_s = min(_SUMMARY_VIDEO_FADE_S, seg_dur / 2.0)
     fade_out_st = max(0.0, seg_dur - fade_s)
+    if input_index is None:
+        head = f"[0:v]trim=start={start:.3f}:end={end:.3f}"
+    else:
+        head = f"[{input_index}:v]trim=start=0:end={seg_dur:.3f}"
     return (
-        f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,"
+        f"{head},setpts=PTS-STARTPTS,"
         f"scale={out_w}:{out_h},setsar=1,"
         f"fade=t=in:st=0:d={fade_s:.3f},fade=t=out:st={fade_out_st:.3f}:d={fade_s:.3f}[v{idx}];"
     )
+
+
+def build_summary_input_args(source_path: Path, segments: list[tuple[float, float]]) -> list[str]:
+    """PURE argv builder for the recap's per-segment input seeks (Issue 535).
+
+    One ``-ss <start> -t <dur> -accurate_seek -i <src>`` group per segment:
+    input-side ``-ss`` jumps to the nearest keyframe before the target and —
+    because we re-encode with ``-accurate_seek`` (the ffmpeg default, passed
+    explicitly to guard a future regression to stream copy) — decodes forward
+    to the exact timestamp. Decode cost is proportional to the selected
+    minutes, not the source length.
+    """
+    args: list[str] = []
+    for start, end in segments:
+        args += [
+            "-ss",
+            f"{start:.3f}",
+            "-t",
+            f"{end - start:.3f}",
+            "-accurate_seek",
+            "-i",
+            str(source_path),
+        ]
+    return args
 
 
 def build_summary_filtergraph(
@@ -1297,11 +1354,15 @@ def build_summary_filtergraph(
     """Build the ``filter_complex`` script for a 16:9 multi-segment recap.
 
     PURE — no subprocess, no filesystem — so the graph shape is unit-testable
-    without ffmpeg. Per segment: ``trim``/``atrim`` + ``setpts``/``asetpts=
-    PTS-STARTPTS``, per-segment ``scale`` to the 16:9 preset, a light video
-    fade in/out and a 5ms ``afade`` at every splice; then
-    ``concat=n=N:v=1:a=1``. When ``loudnorm_filter`` is provided (the measured
-    second-pass string) it is chained onto the concatenated audio.
+    without ffmpeg. Each segment is its own seeked input (Issue 535 — pair
+    with ``build_summary_input_args``): ``[N:v]``/``[N:a]`` trimmed
+    ``0..duration`` + ``setpts``/``asetpts=PTS-STARTPTS``, per-segment
+    ``scale`` to the 16:9 preset, a light video fade in/out and a 5ms
+    ``afade`` at every splice; then ``concat=n=N:v=1:a=1`` (the concat FILTER,
+    not the demuxer — one continuous audio encode, so independently-seeked
+    segments cannot leave AAC priming clicks at splices). When
+    ``loudnorm_filter`` is provided (the measured second-pass string) it is
+    chained onto the concatenated audio.
 
     Returns ``(script_text, audio_out_label)`` where ``audio_out_label`` is the
     ``-map`` target for audio (``[outa]``, or ``[outaln]`` when normalized).
@@ -1310,8 +1371,8 @@ def build_summary_filtergraph(
     lines: list[str] = []
     concat_inputs: list[str] = []
     for idx, (start, end) in enumerate(segments):
-        lines.append(_video_segment_filter(idx, start, end, out_w, out_h))
-        lines.append(_audio_segment_filter(idx, start, end))
+        lines.append(_video_segment_filter(idx, start, end, out_w, out_h, input_index=idx))
+        lines.append(_audio_segment_filter(idx, start, end, input_index=idx))
         concat_inputs.append(f"[v{idx}][a{idx}]")
     concat_line = f"{''.join(concat_inputs)}concat=n={len(segments)}:v=1:a=1[outv][outa]"
     audio_out = "[outa]"
@@ -1323,15 +1384,19 @@ def build_summary_filtergraph(
 
 
 def build_summary_render_cmd(
-    source_path: Path, script_path: Path, out_path: Path, audio_out: str
+    source_path: Path,
+    script_path: Path,
+    out_path: Path,
+    audio_out: str,
+    segments: list[tuple[float, float]],
 ) -> list[str]:
-    """PURE argv builder for the recap render: single ``-i`` source, graph via
-    ``-filter_complex_script`` (never inline — OS arg-length limits at scale)."""
+    """PURE argv builder for the recap render: one seeked ``-i`` per segment
+    (``build_summary_input_args``), graph via ``-filter_complex_script``
+    (never inline — OS arg-length limits at scale)."""
     return [
         "ffmpeg",
         "-y",
-        "-i",
-        str(source_path),
+        *build_summary_input_args(source_path, segments),
         "-filter_complex_script",
         str(script_path),
         "-map",
@@ -1368,15 +1433,19 @@ def render_summary_file(
     are sorted chronologically here so the stitched recap always plays in
     narrative order even if a caller passes them shuffled.
 
-    Decode approach: a single-input trim graph — ffmpeg decodes the whole VOD
-    once and drops frames outside the trims. Simple and frame-accurate;
-    the extra decode cost on multi-hour VODs is accepted for the beta (a
-    seek-per-segment multi-input graph is the optimization if recap renders
-    become a bottleneck). Two-pass loudnorm is measured on the CONCATENATED
-    audio (Issue 181 contract) and degrades to a flat render on failure.
+    Decode approach (Issue 535): per-segment input seek — each segment is its
+    own ``-ss/-t -accurate_seek -i`` input, so BOTH passes (loudnorm measure
+    and render) decode only the selected minutes, never the whole VOD. Cost is
+    proportional to output duration, which is what keeps a 90-minute source
+    inside the global Celery soft limit with no per-task override (the
+    override is rejected: it breaks ``soft < hard < visibility_timeout`` and
+    Redis would redeliver a running task). Two-pass loudnorm is measured on
+    the CONCATENATED audio (Issue 181 contract — loudness is a property of
+    the assembled program, not the source) and degrades to a flat render on
+    failure.
 
-    When ``timeout_s`` is ``None`` a budget is derived from the source
-    duration (the whole-VOD decode dominates on long sources).
+    When ``timeout_s`` is ``None`` a budget is derived from the OUTPUT
+    duration (per-segment seek makes source length irrelevant to cost).
 
     Raises ``ValueError`` for empty/invalid ``segments``; ``RuntimeError`` on
     ffmpeg failure.
@@ -1390,13 +1459,13 @@ def render_summary_file(
 
     if timeout_s is None:
         total_dur = sum(e - s for s, e in segments)
-        src_dur = _source_duration_s(source_path)
-        # 4× the recap duration covers the encode; 1× the source duration covers
-        # the whole-VOD decode (ffmpeg decodes well above real time); floor 300s.
-        timeout_s = max(300.0, total_dur * 4, src_dur if src_dur < float("inf") else 0.0)
+        # 4× the recap duration covers seek + decode + encode; floor 300s. The
+        # source-duration term is gone — with per-segment input seeks the VOD
+        # length no longer appears in the cost model (Issue 535).
+        timeout_s = max(300.0, total_dur * 4)
 
     loudnorm_filter = _measure_concat_loudnorm(
-        source_path, segments, out_path, "summary render", timeout_s
+        source_path, segments, out_path, "summary render", timeout_s, per_segment_seek=True
     )
     script_text, audio_out = build_summary_filtergraph(segments, loudnorm_filter)
 
@@ -1406,7 +1475,7 @@ def render_summary_file(
     script_path.write_text(script_text)
     try:
         _run(
-            build_summary_render_cmd(source_path, script_path, out_path, audio_out),
+            build_summary_render_cmd(source_path, script_path, out_path, audio_out, segments),
             "summary render",
             timeout_s=timeout_s,
         )

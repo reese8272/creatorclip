@@ -119,6 +119,43 @@ def test_legal_pages_carry_no_retired_brand_name(client):
         assert "CreatorClip" not in resp.text, f"retired brand name in {path}"
 
 
+def test_legal_pages_name_the_operating_entity(client):
+    # Issue 488: the service bills under Ludwick Solutions LLC (Issue 486), and
+    # GDPR/CCPA expect the privacy policy to name the data controller. Google's
+    # OAuth review (#29) checks entity consistency between the billing merchant,
+    # the consent screen, and these pages. The pages are plain static HTML (no
+    # template layer), so this structural pin — not a shared constant — is the
+    # drift guard (deviation recorded in DECISIONS 2026-09-21).
+    for path in ("/static/tos.html", "/static/privacy.html"):
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert "Ludwick Solutions LLC" in resp.text, f"operating entity missing from {path}"
+    privacy = client.get("/static/privacy.html").text
+    assert "data controller" in privacy, "privacy policy must identify the data controller"
+
+
+def test_no_personal_email_in_any_user_facing_surface():
+    # Issue 488: a personal Gmail as the breach-report channel is both a
+    # credibility problem and an operational single-point-of-failure. Contact
+    # routes are role addresses on the product domain. Swept at the source tree
+    # (not just served pages) so a reintroduction anywhere user-facing fails.
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    surfaces = [
+        *sorted((root / "static").glob("*.html")),
+        *sorted((root / "notify" / "templates").rglob("*")),
+        *sorted((root / "frontend" / "src").rglob("*.tsx")),
+        *sorted((root / "frontend" / "src").rglob("*.ts")),
+    ]
+    offenders = [
+        str(p.relative_to(root))
+        for p in surfaces
+        if p.is_file() and "reesepludwick@gmail.com" in p.read_text(errors="ignore")
+    ]
+    assert offenders == [], f"personal email in user-facing surfaces: {offenders}"
+
+
 def test_root_landing_describes_proof_of_lift_outcome_loop(client):
     # The differentiator this page must describe accurately (not generic
     # marketing copy) is the published-clip outcome loop shipped in Issue 374.
@@ -1783,8 +1820,10 @@ def test_privacy_page_has_breach_contact(client):
     assert "breach" in text.lower(), (
         "privacy.html must reference data breach contact / notification (Issue 252)."
     )
-    assert "reesepludwick@gmail.com" in text, (
-        "privacy.html must include the breach contact email (Issue 252)."
+    # Issue 488 moved the breach channel from a personal Gmail to a role
+    # address on the product domain (see test_no_personal_email_in_any_user_facing_surface).
+    assert "privacy@autoclip.studio" in text, (
+        "privacy.html must include the breach contact email (Issues 252/488)."
     )
 
 

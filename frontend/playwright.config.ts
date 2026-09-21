@@ -12,9 +12,11 @@ const BASE_URL = `http://localhost:${PORT}/app/`
 
 export default defineConfig({
   testDir: './e2e',
-  // The live-site audit (e2e/prod/*) has its own config (playwright.config.prod.ts):
-  // real backend, real auth, no Vite dev server. Keep it out of the mocked run.
-  testIgnore: '**/prod/**',
+  // The live-site audit (e2e/prod/*) and the seeded local-backend audit
+  // (e2e/local/*) have their own configs (playwright.config.prod.ts /
+  // playwright.config.local.ts): real backend, real auth, no Vite dev server.
+  // Keep both out of the mocked run.
+  testIgnore: ['**/prod/**', '**/local/**'],
   outputDir: './e2e/.results',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,

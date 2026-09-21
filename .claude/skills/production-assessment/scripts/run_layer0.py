@@ -300,6 +300,10 @@ PIP_AUDIT_IGNORES = {
     # pytest-asyncio<0.25 caps pytest<9 — a test-stack cascade, not a runtime
     # exposure (dev/CI only). Lift when the test stack is bumped together.
     "GHSA-6w46-j5rx-g56g",
+    # Same advisory class surfaced under a new id 2026-09 (fix: pytest 9.0.3
+    # only) — identical rationale and identical lift condition as the line
+    # above: dev/CI-only tool, blocked on the pytest-9 test-stack bump.
+    "PYSEC-2026-1845",
     # NOTE (Issue 143, 2026-06-17): starlette PYSEC-2026-161 was lifted from this
     # list — the starlette 1.x migration (FastAPI 0.137.1 + starlette 1.3.1) shipped,
     # so it now has a real fix in our compatible range. See docs/DECISIONS.md.
@@ -335,7 +339,18 @@ def gate_pip_audit() -> dict:
         return {"status": "skipped", "detail": "pip-audit output unparseable"}
     deps = data.get("dependencies", data if isinstance(data, list) else [])
     vulns = sum(len(d.get("vulns", [])) for d in deps)
-    return {"status": "ok", "value": vulns, "metric": "pip_audit_vulns", "compare": "max"}
+    result: dict = {"status": "ok", "value": vulns, "metric": "pip_audit_vulns", "compare": "max"}
+    if vulns:
+        # Name the findings — a bare count on a remote CI runner is undebuggable
+        # (this cost a full CI round on 2026-09-21: local env showed different
+        # packages than the hosted toolcache, and nothing said which).
+        result["detail"] = "; ".join(
+            f"{d.get('name')}=={d.get('version')}: "
+            + ",".join(v.get("id", "?") for v in d.get("vulns", []))
+            for d in deps
+            if d.get("vulns")
+        )
+    return result
 
 
 def gate_freshness() -> dict:
@@ -653,6 +668,8 @@ def main() -> int:
         val = results[name].get("value", results[name].get("detail", ""))
         print(f"  {name:10s} {st:8s} {val}")
         if st == "fail":
+            if detail := results[name].get("detail"):
+                print(f"             └─ {detail}")
             failed.append(name)
         elif st == "skipped":
             skipped.append(name)

@@ -107,6 +107,42 @@ def test_merge_runs_run_at_end():
     assert len(events) == 1
 
 
+# ── blockwise frame features (Issue 537) ──────────────────────────────────────
+
+
+def test_blockwise_features_match_librosa_exactly():
+    """Issue 537: the bounded-memory blockwise rms/zcr must reproduce the
+    full-array librosa calls they replace — small blocks force stitching
+    across many boundaries so any off-by-one in the padding math fails here.
+
+    Tolerance, not bit-equality: the per-frame reduction is the same math on
+    the same samples, but SIMD summation order over a strided window can
+    differ from the full-array call by one float32 ulp on some CPUs (a CI
+    runner produced a single 7e-09 deviation on 2026-09-21). A padding
+    off-by-one shifts a whole 512-sample hop and blows through any tolerance,
+    so the test still catches the failure it exists for."""
+    import librosa
+
+    from ingestion.audio import _framewise_rms, _framewise_zcr
+
+    rng = np.random.default_rng(42)
+    y = (rng.standard_normal(16000 * 10) * 0.1).astype(np.float32)
+
+    # block_frames=37 (prime → ragged last block) forces stitching across many
+    # boundaries so any off-by-one in the padding math fails loudly.
+    np.testing.assert_allclose(
+        _framewise_rms(y, hop_length=512, block_frames=37),
+        librosa.feature.rms(y=y, hop_length=512)[0],
+        rtol=1e-6,
+        atol=1e-7,
+    )
+    # ZCR is a count of sign changes — integer-derived, genuinely exact.
+    np.testing.assert_array_equal(
+        _framewise_zcr(y, hop_length=512, block_frames=37),
+        librosa.feature.zero_crossing_rate(y=y, hop_length=512)[0],
+    )
+
+
 # ── extract_audio_events ──────────────────────────────────────────────────────
 
 

@@ -1,6 +1,16 @@
 # LEFT_OFF.md — CreatorClip / AutoClip Session Handoff
 
-**Last updated:** 2026-08-28 · **Branch:** `main` · **Working tree:** ✅ **CLEAN**
+**Last updated:** 2026-09-21 · **Branch:** `docs/l32-livestream-recap-lane` (PR to main in flight)
+
+> **2026-09-21 — beta-close plan is locked; this file's 2026-08-28 state below is superseded on
+> two points:** (1) the "fresh-upload E2E finale" is now **Issue 539** (Lane L32, filed
+> 2026-09-17): a 90-minute livestream recording drives the drill, with #535–#538 as prerequisite
+> code (see `docs/issues.md` § L32) — GO_LIVE Track 4 formally points there now; (2) a new
+> **Lane L33 (#540–546)** adds the hands-off, terminal-only UI verification harness
+> (`scripts/ui_audit.sh` + seeded real-backend Playwright lane + `/ui-check` skill), built in
+> parallel so it collects the UI-side evidence during #539. Current sequence and full detail:
+> `docs/PROJECT_STATE.md` 2026-09-21. The operator track is unchanged — **start the Resend DNS
+> records FIRST (#529, 48 h propagation)**.
 
 > ⚠️ **One PR is open, ON PURPOSE: #140 (Issue 528 — hard-reject console notify backend), a
 > DRAFT gated on the operator Resend flip (#529). Merge it the same day the flip is confirmed,

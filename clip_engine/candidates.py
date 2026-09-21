@@ -304,6 +304,13 @@ def extract_candidates(
     """
     times, signal, peak_indices, properties = _detect_peaks(timeline)
     if len(signal) == 0 or len(peak_indices) == 0:
+        # Zero-peak runs must be readable in a production log too (Issue 536):
+        # "few peaks detected" is one of the three situations the drill has to
+        # distinguish, and silence here would make it indistinguishable.
+        logger.info(
+            "extract_candidates: peaks=0 final=0 (signal_len=%d)",
+            len(signal),
+        )
         return []
 
     # Sort by prominence descending; take top max_candidates
@@ -367,17 +374,6 @@ def extract_candidates(
     candidates = [{k: v for k, v in c.items() if k != "_prominence"} for c in kept]
     candidates.sort(key=lambda c: c["setup_start_s"])
 
-    # Breadcrumb for "why did I get N clips?" debugging (Issue 328): peaks found →
-    # survived the MIN_CLIP_S length filter → survived NMS dedup → final count.
-    logger.debug(
-        "extract_candidates: peaks=%d pre_nms=%d after_nms=%d final=%d (duration_s=%.1f)",
-        len(peak_indices),
-        len(pre_nms),
-        len(kept),
-        len(candidates),
-        duration_s,
-    )
-
     # Principle #12 — Clean Context Boundary: snap both cut points to the nearest
     # sentence boundary so clips never start or end mid-sentence. Only runs when
     # word-level transcript is provided; falls back gracefully when absent.
@@ -412,5 +408,40 @@ def extract_candidates(
                 continue
             snapped.append(c)
         candidates = snapped
+
+    # Candidate-pool breadcrumb (Issue 328, promoted debug → INFO by Issue 536):
+    # a 90-minute run must be readable from a production log. Each discard reason
+    # is attributed separately — "few peaks", "cut by the global top-N",
+    # "too short" and "NMS-suppressed" have three different fixes. Numbers only;
+    # never transcript text.
+    top_n_cut = len(peak_indices) - len(peak_indices_ordered)
+    min_clip_dropped = len(peak_indices_ordered) - len(pre_nms)
+    nms_suppressed = len(pre_nms) - len(kept)
+    snap_dropped = len(kept) - len(candidates)
+    if candidates:
+        span_start = min(c["setup_start_s"] for c in candidates)
+        span_end = max(c["end_s"] for c in candidates)
+    else:
+        span_start = span_end = 0.0
+    decile_hist = [0] * 10
+    if duration_s > 0:
+        peak_times = times[peak_indices]
+        decile_hist = np.histogram(peak_times, bins=10, range=(0.0, duration_s))[0].tolist()
+    logger.info(
+        "extract_candidates: peaks=%d top_n_cut=%d min_clip_dropped=%d nms_suppressed=%d "
+        "snap_dropped=%d final=%d span=[%.1fs..%.1fs] span_s=%.1f duration_s=%.1f "
+        "peak_decile_histogram=%s",
+        len(peak_indices),
+        top_n_cut,
+        min_clip_dropped,
+        nms_suppressed,
+        snap_dropped,
+        len(candidates),
+        span_start,
+        span_end,
+        span_end - span_start,
+        duration_s,
+        decile_hist,
+    )
 
     return candidates

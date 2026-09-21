@@ -6266,6 +6266,10 @@ unit lane 15 green; ruff + mypy clean.
 - **Livestream auto-recap (subscription perk)** — auto-recap from each *live* stream (carry-over Issue 97).
   Distinct from the uploaded-VOD recap now in scope (190–192); revisit once live ingestion is on the table
   (cf. Issue 150 OBS capture).
+  **SUPERSEDED 2026-09-17 — do not re-promote.** Lane **L32** (Issues 534–539) takes the capability
+  half, and **#527** owns the subscription-packaging half. The live-capture premise is also wrong for
+  the actual user: the beta creator records locally, so `origin=upload` covers it and the 2026-06-22
+  ToS boundary stays intact. Live capture itself remains out of scope and unbuilt (**#381**).
 - **Phase-3 backlog** — thumbnail rendering (DALL-E/SD), vision signals (MediaPipe/face-emotion), no-auth
   demo mode, per-Short mini-editor browse, all-in-one hub direction. Full list in
   `docs/archive/issues_snapshot_2026-06-22.md`.

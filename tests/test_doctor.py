@@ -183,3 +183,68 @@ def test_live_stripe_skips_without_key():
     from scripts.doctor import Status, _live_stripe
 
     assert _live_stripe({}, []).status is Status.SKIP
+
+
+# ── local e2e box checks (Issue 540) — opt-in, never affects a prod run ─────
+
+
+def test_e2e_section_absent_by_default():
+    # A plain audit() call (no e2e kwarg) must never include the opt-in
+    # section — the whole point is that an unflagged/prod doctor run is
+    # structurally unaffected by this dev-box addition.
+    titles = [t for t, _ in audit({}, offline=False, full=False)]
+    assert not any("e2e" in t.lower() for t in titles)
+
+
+def test_e2e_section_present_when_requested():
+    titles = [t for t, _ in audit({}, offline=False, full=False, e2e=True)]
+    assert any("e2e" in t.lower() for t in titles)
+
+
+def test_e2e_section_absent_when_offline_even_if_requested():
+    # --offline (format-only, no network) must win over --e2e: a live DB probe
+    # is exactly what --offline promises never to do.
+    titles = [t for t, _ in audit({}, offline=True, full=False, e2e=True)]
+    assert not any("e2e" in t.lower() for t in titles)
+
+
+def test_live_e2e_postgres_ok():
+    from scripts.doctor import Status, _live_e2e_postgres
+
+    fake_conn = MagicMock()
+    fake_conn.__enter__.return_value = fake_conn
+    with patch("psycopg.connect", return_value=fake_conn):
+        result = _live_e2e_postgres("postgresql://x:y@localhost:5432/creatorclip_e2e")
+    assert result.status is Status.OK
+
+
+def test_live_e2e_postgres_fail_names_the_start_command():
+    from scripts.doctor import Status, _live_e2e_postgres
+
+    with patch("psycopg.connect", side_effect=OSError("connection refused")):
+        result = _live_e2e_postgres("postgresql://x:y@localhost:5432/creatorclip_e2e")
+    assert result.status is Status.FAIL
+    assert "pg_ctl" in result.detail or "brew services" in result.detail
+
+
+def test_live_e2e_vector_extension_ok_when_available():
+    from scripts.doctor import Status, _live_e2e_vector_extension
+
+    fake_conn = MagicMock()
+    fake_conn.__enter__.return_value = fake_conn
+    fake_conn.execute.return_value.fetchone.return_value = (1,)
+    with patch("psycopg.connect", return_value=fake_conn):
+        result = _live_e2e_vector_extension("postgresql://x:y@localhost:5432/creatorclip_e2e")
+    assert result.status is Status.OK
+
+
+def test_live_e2e_vector_extension_fail_names_pgvector_install():
+    from scripts.doctor import Status, _live_e2e_vector_extension
+
+    fake_conn = MagicMock()
+    fake_conn.__enter__.return_value = fake_conn
+    fake_conn.execute.return_value.fetchone.return_value = None
+    with patch("psycopg.connect", return_value=fake_conn):
+        result = _live_e2e_vector_extension("postgresql://x:y@localhost:5432/creatorclip_e2e")
+    assert result.status is Status.FAIL
+    assert "pgvector" in result.detail

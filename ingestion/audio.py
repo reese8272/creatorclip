@@ -12,7 +12,9 @@ ingestion pipeline can degrade gracefully (skip waveform, log warning) without c
 
 import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
@@ -38,6 +40,72 @@ _EMPTY_EVENTS: dict = {
     "silences": [],
     "laughter": [],
 }
+
+# Blockwise frame-feature computation (Issue 537). librosa.feature.rms on a full
+# 90-minute array materializes the 4x-overlap framed matrix (~1.6 GB measured on
+# a 5400 s WAV — peak RSS 2.2 GB vs. 0.35 GB for the audio itself). RMS and ZCR
+# are frame-local (frame i reads only samples [i*hop, i*hop+frame_length)), so
+# per-block center=False calls over a pre-padded array reproduce the full-array
+# centered call EXACTLY while bounding the transient to the block size.
+_ANALYSIS_FRAME_LENGTH = 2048  # librosa default, pinned — the padding math assumes it
+_ANALYSIS_BLOCK_FRAMES = 8192  # ~67 MB transient per block at frame_length 2048
+
+
+def _blockwise_frames(
+    y: np.ndarray,
+    feature_block: Callable[[np.ndarray], np.ndarray],
+    pad_mode: Literal["constant", "edge"],
+    frame_length: int = _ANALYSIS_FRAME_LENGTH,
+    hop_length: int = 512,
+    block_frames: int = _ANALYSIS_BLOCK_FRAMES,
+) -> np.ndarray:
+    """Apply a frame-local librosa feature over ``y`` in bounded-memory blocks.
+
+    ``pad_mode`` replicates the centering pad the full-array call would use
+    (librosa: ``constant`` for rms, ``edge`` for zero_crossing_rate); each
+    block is then computed with ``center=False`` and stitched. Output is
+    identical to the single-call centered result.
+    """
+    padded = np.pad(y, frame_length // 2, mode=pad_mode)
+    n_frames = 1 + (len(padded) - frame_length) // hop_length
+    chunks: list[np.ndarray] = []
+    for f0 in range(0, n_frames, block_frames):
+        f1 = min(f0 + block_frames, n_frames)
+        window = padded[f0 * hop_length : (f1 - 1) * hop_length + frame_length]
+        chunks.append(feature_block(window))
+    return np.concatenate(chunks)
+
+
+def _framewise_rms(
+    y: np.ndarray, hop_length: int = 512, block_frames: int = _ANALYSIS_BLOCK_FRAMES
+) -> np.ndarray:
+    import librosa
+
+    return _blockwise_frames(
+        y,
+        lambda w: librosa.feature.rms(
+            y=w, frame_length=_ANALYSIS_FRAME_LENGTH, hop_length=hop_length, center=False
+        )[0],
+        pad_mode="constant",
+        hop_length=hop_length,
+        block_frames=block_frames,
+    )
+
+
+def _framewise_zcr(
+    y: np.ndarray, hop_length: int = 512, block_frames: int = _ANALYSIS_BLOCK_FRAMES
+) -> np.ndarray:
+    import librosa
+
+    return _blockwise_frames(
+        y,
+        lambda w: librosa.feature.zero_crossing_rate(
+            y=w, frame_length=_ANALYSIS_FRAME_LENGTH, hop_length=hop_length, center=False
+        )[0],
+        pad_mode="edge",
+        hop_length=hop_length,
+        block_frames=block_frames,
+    )
 
 
 def extract_audio_events(audio_path: str | Path) -> dict:
@@ -101,14 +169,16 @@ def extract_audio_events(audio_path: str | Path) -> dict:
     duration_s = float(len(y) / sr)
     frame_dur = hop / sr
 
-    rms = librosa.feature.rms(y=y, hop_length=hop)[0]
+    # Blockwise (Issue 537): identical values to librosa.feature.rms/zcr on the
+    # full array, without materializing the 4x-overlap framed matrix.
+    rms = _framewise_rms(y, hop_length=hop)
     rms_norm = rms / (rms.max() + 1e-8)
     # Absolute loudness in dBFS — librosa loads float audio in [-1, 1], so ref=1.0
     # is full scale. top_db=None disables the relative-to-max clipping so truly
     # silent frames keep their real (very low) level. (Issue 352 Batch E)
     rms_db = librosa.amplitude_to_db(rms, ref=1.0, top_db=None)
 
-    zcr = librosa.feature.zero_crossing_rate(y=y, hop_length=hop)[0]
+    zcr = _framewise_zcr(y, hop_length=hop)
     zcr_norm = zcr / (zcr.max() + 1e-8)
 
     times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop)

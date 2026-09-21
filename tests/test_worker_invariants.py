@@ -110,6 +110,42 @@ def test_ingest_chain_soft_timeout_marks_failed_without_retry(
     assert reason and "timed out" in reason
 
 
+def test_transcribe_job_level_timeout_is_terminal_no_reupload(monkeypatch) -> None:
+    """Issue 537: the TRANSCRIPTION_TIMEOUT_S asyncio.wait_for firing must NOT
+    fall into the generic retry handler — a retry re-uploads a ~173 MB WAV into
+    the same deterministic timeout, three times, burning ~20 minutes before the
+    refund. Terminal like the soft-timeout, so RefundOnFailureTask fires once."""
+    from worker import tasks
+
+    statuses: list[tuple[IngestStatus, str | None]] = []
+
+    async def _creator(video_id):
+        return "creator-1"
+
+    async def _set_status(video_id, status, reason=None):
+        statuses.append((status, reason))
+
+    async def _job_timeout(video_id, creator_id=None):
+        raise TimeoutError()  # what asyncio.wait_for raises on expiry (3.11+)
+
+    monkeypatch.setattr(tasks, "_creator_id_for_video", _creator)
+    monkeypatch.setattr(tasks, "_set_status", _set_status)
+    monkeypatch.setattr(tasks, "_transcribe_async", _job_timeout)
+
+    def _no_retry(**kwargs):
+        raise AssertionError("job-level timeout must not retry (it re-uploads the audio)")
+
+    monkeypatch.setattr(tasks.transcribe_video, "retry", _no_retry)
+
+    with pytest.raises(TimeoutError):
+        tasks.transcribe_video(str(uuid.uuid4()))
+
+    assert len(statuses) == 1
+    status, reason = statuses[0]
+    assert status == IngestStatus.failed
+    assert reason and "timed out" in reason
+
+
 # ── 3. Keyset pagination bounds the sweep/export loads ────────────────────────
 
 

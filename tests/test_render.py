@@ -1458,12 +1458,15 @@ _RECAP_SEGMENTS = [(10.0, 25.0), (100.0, 130.0), (500.0, 520.0)]
 
 
 def test_build_summary_filtergraph_shape():
-    """Three segments → 3 trim/atrim pairs, per-segment 16:9 scale + video fades
-    + splice afades, concatenated with concat=n=3:v=1:a=1."""
+    """Three segments → one seeked input per segment (Issue 535): [N:v]/[N:a]
+    trimmed 0..duration, per-segment 16:9 scale + video fades + splice afades,
+    concatenated with concat=n=3:v=1:a=1."""
     script, audio_out = build_summary_filtergraph(_RECAP_SEGMENTS)
 
-    assert script.count("[0:v]trim=") == 3
-    assert script.count("[0:a]atrim=") == 3
+    for idx, (s, e) in enumerate(_RECAP_SEGMENTS):
+        dur = e - s
+        assert f"[{idx}:v]trim=start=0:end={dur:.3f}" in script
+        assert f"[{idx}:a]atrim=start=0:end={dur:.3f}" in script
     assert script.count(",setpts=PTS-STARTPTS") == 3
     assert script.count(",asetpts=PTS-STARTPTS") == 3
     assert script.count("scale=1920:1080") == 3  # per-segment 16:9 preset
@@ -1483,15 +1486,109 @@ def test_build_summary_filtergraph_chains_loudnorm_after_concat():
     assert audio_out == "[outaln]"
 
 
-def test_build_summary_render_cmd_single_input_script_graph(tmp_path):
+def test_build_summary_render_cmd_seeked_input_per_segment(tmp_path):
+    """Issue 535: one -ss/-t/-accurate_seek/-i group per segment — decode cost
+    proportional to output duration, never the source length."""
     cmd = build_summary_render_cmd(
-        Path("/abs/src.mp4"), tmp_path / "g.filter", tmp_path / "out.mp4", "[outaln]"
+        Path("/abs/src.mp4"),
+        tmp_path / "g.filter",
+        tmp_path / "out.mp4",
+        "[outaln]",
+        _RECAP_SEGMENTS,
     )
-    assert cmd.count("-i") == 1  # single-input trim graph (whole-VOD decode)
+    assert cmd.count("-i") == len(_RECAP_SEGMENTS)
+    assert cmd.count("-ss") == len(_RECAP_SEGMENTS)
+    assert cmd.count("-accurate_seek") == len(_RECAP_SEGMENTS)
+    # Each -ss/-t pair is an INPUT option (before its -i) with the right values.
+    for s, e in _RECAP_SEGMENTS:
+        ss_at = cmd.index("-ss", cmd.index(f"{s:.3f}") - 1)
+        assert cmd[ss_at + 1] == f"{s:.3f}"
+        assert cmd[ss_at + 2] == "-t" and cmd[ss_at + 3] == f"{e - s:.3f}"
+        assert cmd[ss_at + 4] == "-accurate_seek" and cmd[ss_at + 5] == "-i"
     assert "-filter_complex_script" in cmd  # never inline args (OS arg limits)
     assert "-filter_complex" not in cmd
     assert cmd[cmd.index("-map") + 1] == "[outv]"
     assert "[outaln]" in cmd
+
+
+def test_summary_budget_is_output_proportional(tmp_path):
+    """Issue 535: the derived ffmpeg budget must not contain a source-duration
+    term. A 90-minute source with a 10-minute recap gets max(300, 600*4)=2400s
+    — inside CELERY_SOFT_TIME_LIMIT_S=3000 with margin — where the old formula
+    produced 5400s and Celery killed the task 2400s early."""
+    captured = {}
+
+    def _fake_run(cmd, label, timeout_s=120.0):
+        captured["timeout_s"] = timeout_s
+
+    ten_min_recap = [(float(i * 500), float(i * 500 + 60)) for i in range(10)]  # 600s output
+    with (
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", return_value=None),
+        patch("clip_engine.render._verify_rendered_output"),
+        patch(
+            "clip_engine.render._source_duration_s",
+            side_effect=AssertionError("budget must not probe the source duration"),
+        ),
+    ):
+        render_summary_file(
+            source_path=Path("/fake/90min-vod.mp4"),
+            segments=ten_min_recap,
+            out_path=tmp_path / "recap.mp4",
+            timeout_s=None,
+        )
+    assert captured["timeout_s"] == 2400.0
+    from config import settings as _settings
+
+    assert captured["timeout_s"] < _settings.CELERY_SOFT_TIME_LIMIT_S
+
+
+def test_measure_pass_uses_seeked_inputs_for_summary(tmp_path):
+    """Issue 535: the loudnorm measure pass must also decode per-segment — it
+    was the second whole-VOD decode. Its argv carries one seeked -i per
+    segment, and its filter lines are byte-identical to the apply pass's audio
+    lines (the Issue 135/181 measurement contract)."""
+    captured = {}
+
+    def _fake_measure(cmd, label, timeout_s):
+        captured["measure_cmd"] = cmd
+        captured["measure_script"] = Path(cmd[cmd.index("-filter_complex_script") + 1]).read_text()
+        return None
+
+    def _fake_run(cmd, label, timeout_s=120.0):
+        captured["render_script"] = Path(cmd[cmd.index("-filter_complex_script") + 1]).read_text()
+
+    with (
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", _fake_measure),
+        patch("clip_engine.render._verify_rendered_output"),
+    ):
+        render_summary_file(
+            source_path=Path("/fake/vod.mp4"),
+            segments=list(_RECAP_SEGMENTS),
+            out_path=tmp_path / "recap.mp4",
+            timeout_s=120.0,
+        )
+    mc = captured["measure_cmd"]
+    assert mc.count("-i") == len(_RECAP_SEGMENTS)
+    assert mc.count("-ss") == len(_RECAP_SEGMENTS)
+    # Measure and apply passes see byte-identical per-segment audio lines.
+    measure_audio_lines = [ln for ln in captured["measure_script"].splitlines() if "atrim=" in ln]
+    render_audio_lines = [ln for ln in captured["render_script"].splitlines() if "atrim=" in ln]
+    assert measure_audio_lines == render_audio_lines
+
+
+def test_cleaned_clip_audio_filter_unchanged_by_535():
+    """Issue 535 AC: render_cleaned_clip_file's shared helper is byte-pinned in
+    its default (single-input) form — the recap's per-input mode must not
+    regress the cleaned-clip path."""
+    from clip_engine.render import _audio_segment_filter
+
+    assert _audio_segment_filter(1, 40.0, 45.5) == (
+        "[0:a]atrim=start=40.000:end=45.500,asetpts=PTS-STARTPTS,"
+        "afade=t=in:st=0:d=0.005,"
+        "afade=t=out:st=5.495:d=0.005[a1];"
+    )
 
 
 def test_render_summary_file_writes_script_and_maps_normalized_audio(tmp_path):
@@ -1527,7 +1624,7 @@ def test_render_summary_file_sorts_segments_chronologically(tmp_path):
     captured = {}
 
     def _fake_run(cmd, label, timeout_s=120.0):
-        captured["script"] = Path(cmd[cmd.index("-filter_complex_script") + 1]).read_text()
+        captured["cmd"] = cmd
 
     with (
         patch("clip_engine.render._run", _fake_run),
@@ -1540,7 +1637,10 @@ def test_render_summary_file_sorts_segments_chronologically(tmp_path):
             timeout_s=120.0,
         )
 
-    assert "[0:v]trim=start=5.000" in captured["script"].splitlines()[0]
+    # Chronological order shows up in the seek args now (Issue 535): the first
+    # seeked input must be the earliest segment.
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("-ss") + 1] == "5.000"
 
 
 @pytest.mark.parametrize("segments", [[], [(10.0, 10.0)], [(-1.0, 5.0)]])

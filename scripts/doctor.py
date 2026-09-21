@@ -16,6 +16,9 @@ Usage (run from the project root):
     python scripts/doctor.py --full     # also probe Anthropic, Voyage, Deepgram, R2, Stripe
     python scripts/doctor.py --offline  # presence + format only, no network
     python scripts/doctor.py --json     # machine-readable output
+    python scripts/doctor.py --e2e      # ALSO check the local pg16+pgvector e2e box (Issue 540)
+                                         # opt-in only — never runs in a prod doctor invocation;
+                                         # also triggers if $CC_E2E_DSN is set
 
 See docs/SECRETS.md for the full registry.
 """
@@ -378,6 +381,56 @@ def _live_deepgram(env: dict[str, str], secrets: list[str]) -> Result:
         return Result("deepgram auth", Status.FAIL, _scrub(str(exc), secrets))
 
 
+_E2E_DSN_DEFAULT = "postgresql://creatorclip:dev_password@localhost:5432/creatorclip_e2e"
+
+
+def _live_e2e_postgres(dsn: str) -> Result:
+    """Local Homebrew pg16 reachability for the Issue-540 real-backend lane.
+
+    Opt-in only (``--e2e`` / ``CC_E2E_DSN``) — this is a dev-box concern, not a
+    prod config check, so it must never affect an unflagged doctor run.
+    """
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn, connect_timeout=5) as conn:
+            conn.execute("SELECT 1")
+        return Result("e2e postgres connect", Status.OK, "SELECT 1 ok")
+    except Exception as exc:  # noqa: BLE001
+        return Result(
+            "e2e postgres connect",
+            Status.FAIL,
+            f"{_scrub(str(exc), [])} — start it: brew services start postgresql@16 "
+            "(or pg_ctl -D $(brew --prefix)/var/postgresql@16 start)",
+        )
+
+
+def _live_e2e_vector_extension(dsn: str) -> Result:
+    """``vector`` extension availability in the local e2e DB (Issue 540).
+
+    Checks ``pg_available_extensions`` rather than ``pg_extension`` — the
+    question is "can CREATE EXTENSION vector succeed", which is what a fresh
+    ``alembic upgrade head`` needs, not whether some other DB already has it.
+    """
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn, connect_timeout=5) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM pg_available_extensions WHERE name = 'vector'"
+            ).fetchone()
+        if row is None:
+            return Result(
+                "e2e vector extension",
+                Status.FAIL,
+                "not installed — compile pgvector against "
+                "$(brew --prefix postgresql@16)/bin/pg_config (see docs/DECISIONS.md)",
+            )
+        return Result("e2e vector extension", Status.OK, "available")
+    except Exception as exc:  # noqa: BLE001
+        return Result("e2e vector extension", Status.FAIL, _scrub(str(exc), []))
+
+
 def _live_r2(env: dict[str, str], secrets: list[str]) -> Result:
     if env.get("STORAGE_BACKEND", "local") != "r2":
         return Result("r2 head_bucket", Status.SKIP, "STORAGE_BACKEND != r2")
@@ -451,7 +504,9 @@ def load_env(env_file: Path = _ENV_FILE) -> dict[str, str]:
     return merged
 
 
-def audit(env: dict[str, str], *, offline: bool, full: bool) -> list[tuple[str, list[Result]]]:
+def audit(
+    env: dict[str, str], *, offline: bool, full: bool, e2e: bool = False
+) -> list[tuple[str, list[Result]]]:
     sections = [(title, builder(env)) for title, builder in _SECTIONS]
     secrets = [env[k] for k in _SECRET_KEYS if env.get(k)]
     if not offline:
@@ -469,6 +524,16 @@ def audit(env: dict[str, str], *, offline: bool, full: bool) -> list[tuple[str, 
                         _live_r2(env, secrets),
                         _live_stripe(env, secrets),
                     ],
+                )
+            )
+        # Issue 540: opt-in only — a prod/CI doctor run never passes --e2e, so
+        # this section is structurally absent from every existing gate.
+        if e2e:
+            dsn = env.get("CC_E2E_DSN", _E2E_DSN_DEFAULT)
+            sections.append(
+                (
+                    "Live — local e2e harness (opt-in)",
+                    [_live_e2e_postgres(dsn), _live_e2e_vector_extension(dsn)],
                 )
             )
     return sections
@@ -500,10 +565,20 @@ def main() -> None:
     parser.add_argument("--full", action="store_true", help="also probe external APIs")
     parser.add_argument("--offline", action="store_true", help="presence + format only; no network")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument(
+        "--e2e",
+        action="store_true",
+        help="also probe the local pg16 creatorclip_e2e DB + vector extension "
+        "(Issue 540, dev-box only; opt-in, never runs in a prod doctor invocation)",
+    )
     args = parser.parse_args()
 
     env = load_env()
-    sections = audit(env, offline=args.offline, full=args.full)
+    # Opt-in trigger: the --e2e flag, OR CC_E2E_DSN being set (someone pointed
+    # the harness at a specific e2e box without passing the flag). Neither is
+    # ever true in a prod/CI doctor invocation, so this never affects those.
+    e2e = args.e2e or bool(env.get("CC_E2E_DSN"))
+    sections = audit(env, offline=args.offline, full=args.full, e2e=e2e)
 
     if args.json:
         payload = {

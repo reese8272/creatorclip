@@ -504,6 +504,27 @@ def transcribe_video(self: Task, video_id: str) -> str:
             )
         )
         raise
+    except TimeoutError:
+        # Terminal (Issue 537) — the job-level asyncio.wait_for
+        # (TRANSCRIPTION_TIMEOUT_S) fired. A hung socket is already converted
+        # into a retryable SDK error by TRANSCRIPTION_HTTP_TIMEOUT_S, so
+        # reaching this means the provider was actively processing for the
+        # whole budget: a retry re-uploads the same ~100+ MB audio into the
+        # same deterministic timeout, three times. Fail once, refund, and let
+        # the operator raise the budget or change the integration shape.
+        logger.warning(
+            "transcribe_video job-level timeout for video %s (task %s) — terminal, not retrying",
+            video_id,
+            self.request.id,
+        )
+        run_async(
+            _set_status(
+                video_id,
+                IngestStatus.failed,
+                reason="Transcription timed out. Please try again.",
+            )
+        )
+        raise
     except Exception as exc:
         run_async(
             _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "transcribe"))

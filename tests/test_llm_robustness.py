@@ -528,6 +528,27 @@ class TestChatIntakeRunawayGuard:
         assert not (limit > limit)
 
 
+def _silence_timeline(silences: list[tuple[float, float]], duration_s: float) -> dict:
+    """A signal timeline in the shape ``build_signal_timeline`` actually emits.
+
+    Issue 534: these fixtures used to hand-write ``{"silences": [...]}``, a
+    top-level key the producer has never emitted — so they agreed with a broken
+    reader instead of with reality and stayed green while every video in
+    production got fabricated chapter boundaries. Build from the producer.
+    """
+    from ingestion.signals import build_signal_timeline
+
+    return build_signal_timeline(
+        {
+            "duration_s": duration_s,
+            "energy_spikes": [],
+            "silences": [{"start_s": s, "end_s": e} for s, e in silences],
+            "laughter": [],
+        },
+        [],
+    )
+
+
 class TestChapterBoundaries:
     """knowledge/chapters: zero silences → MIN_CHAPTERS fallback; long silence boundary."""
 
@@ -563,20 +584,16 @@ class TestChapterBoundaries:
         from knowledge.chapters import find_chapter_boundaries
 
         # Two silences very close together (e.g. 1s apart) → second must be dropped.
-        timeline = {
-            "silences": [
-                {"start_s": 60.0, "end_s": 62.0},  # first
-                {"start_s": 61.0, "end_s": 63.0},  # too close
-                {"start_s": 300.0, "end_s": 302.0},  # far enough away
-            ]
-        }
+        timeline = _silence_timeline([(60.0, 62.0), (61.0, 63.0), (300.0, 302.0)], 600.0)
         boundaries = find_chapter_boundaries(
             timeline_jsonb=timeline,
             video_duration_s=600.0,
         )
-        # Boundaries should include 0.0, 60.0, 300.0 — NOT 61.0 (too close to 60.0).
+        # 60.0 and 61.0 both sit under MAX_CHAPTER_PERIOD_S from 0.0, so the density
+        # rule drops both; 300.0 clears it and survives.
         assert 0.0 in boundaries
-        # 61.0 must be excluded (only 1s gap, < MAX_CHAPTER_PERIOD_S=180s).
+        assert 300.0 in boundaries
+        assert 60.0 not in boundaries
         assert 61.0 not in boundaries
 
     def test_one_long_silence_boundary(self) -> None:
@@ -584,11 +601,7 @@ class TestChapterBoundaries:
         from knowledge.chapters import MAX_CHAPTER_PERIOD_S, find_chapter_boundaries
 
         # First silence at exactly MAX_CHAPTER_PERIOD_S from start (0).
-        timeline = {
-            "silences": [
-                {"start_s": MAX_CHAPTER_PERIOD_S, "end_s": MAX_CHAPTER_PERIOD_S + 2.0},
-            ]
-        }
+        timeline = _silence_timeline([(MAX_CHAPTER_PERIOD_S, MAX_CHAPTER_PERIOD_S + 2.0)], 600.0)
         boundaries = find_chapter_boundaries(
             timeline_jsonb=timeline,
             video_duration_s=600.0,

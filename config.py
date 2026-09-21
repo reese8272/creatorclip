@@ -227,9 +227,14 @@ class Settings(BaseSettings):
     CHAT_HISTORY_TURNS: int = 8
     TRANSCRIPTION_BACKEND: str = "deepgram"
     # Job-level upper bound for a single transcription (Issue 68). A hung provider
-    # fails the task after this many seconds (→ Celery retry) instead of stalling
-    # the worker forever.
-    TRANSCRIPTION_TIMEOUT_S: int = 300
+    # fails the task after this many seconds instead of stalling the worker
+    # forever. Raised 300 → 1800 for 90-minute livestream sources (Issue 537):
+    # the single wait_for covers uploading a ~173 MB WAV + diarized ASR + the
+    # response download, and Deepgram's sync endpoint itself allows up to 10
+    # minutes of server-side processing before its own 504. Must stay below
+    # CELERY_SOFT_TIME_LIMIT_S - 30 (validator below). Timeout is terminal —
+    # no retry — because it would re-upload into the same deterministic wall.
+    TRANSCRIPTION_TIMEOUT_S: int = 1800
     # Per-request socket timeout for the hosted backends (Deepgram / AssemblyAI).
     # Keep < TRANSCRIPTION_TIMEOUT_S: a hung provider socket must make the blocking
     # SDK call return — unwinding the leaked worker thread — BEFORE the job-level

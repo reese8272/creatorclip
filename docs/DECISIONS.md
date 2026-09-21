@@ -5,7 +5,272 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-08-28 (latest) — Issues 531–533: serve-time crop-track projection, delivered-word grounding, explicit-False captions
+## 2026-09-21 (latest) — Issue 540: pgvector for Homebrew pg16 needed no source compile — the bottle already ships it
+
+**What changed.** Issue 540's premise (filed 2026-09-21, see `docs/issues.md`) was that pgvector
+would need to be **compiled from source** against `$(brew --prefix postgresql@16)/bin/pg_config`,
+because `share/postgresql@16/extension/` had no `vector.control` at filing time. On the box this
+issue actually builds against, `brew install pgvector` pours a **prebuilt bottle** that installs
+`vector.control` + the shared library under `share/postgresql@1{6,7,8}/extension/` simultaneously
+(`/home/linuxbrew/.linuxbrew/Cellar/pgvector/0.8.3/`, `INSTALL_RECEIPT.json` confirms
+`poured_from_bottle: true`, `used_options: []` — no custom `--with-postgresql@16` flag needed). No
+source compile step was required; a from-source fallback (`make USE_PGXS=1 PG_CONFIG=$(brew
+--prefix postgresql@16)/bin/pg_config install`) is still the documented escape hatch if a future
+bottle drops pg16 support, but was not needed here.
+
+**Why.** Issue 540 required the exact install sequence recorded so the next box can repeat it;
+verifying what was actually on disk (`find … -iname vector.control`, `INSTALL_RECEIPT.json`) showed
+the simpler path already worked, correcting the issue's own written premise before repeating it as
+a runbook.
+
+**Source/evidence.** `brew info pgvector` (bottle for postgresql@16/17/18); local inspection of
+`/home/linuxbrew/.linuxbrew/Cellar/pgvector/0.8.3/INSTALL_RECEIPT.json` and
+`share/postgresql@16/extension/vector.control` under the pg16 Cellar keg; `SELECT 1 FROM
+pg_available_extensions WHERE name = 'vector'` returns a row against `creatorclip_e2e` (also the
+new `scripts/doctor.py --e2e` check).
+
+**Date:** 2026-09-21.
+
+---
+
+## 2026-09-21 (latest) — Issue 488: entity naming pinned structurally, not templated; role addresses chosen; delivery is an operator prerequisite
+
+**What was decided.** `static/privacy.html` + `static/tos.html` now name **Ludwick Solutions
+LLC** as operator and (privacy page) data controller; every `reesepludwick@gmail.com` contact in
+the three static pages is replaced with role addresses on the product domain —
+`privacy@autoclip.studio` (GDPR/CCPA rights, COPPA reports, breach channel) and
+`support@autoclip.studio` (general ToS + accessibility questions). `docs/COMPLIANCE.md` names the
+controlling entity.
+
+**Deviation from the issue's stated approach, and why.** The issue proposed introducing the
+entity name "once, in config, referenced from the templates." The legal pages are plain static
+HTML served by a `StaticFiles` mount — there is no template layer, and adding a render step to
+the two pages Google's OAuth review fetches would add a moving part to surfaces whose whole value
+is being maximally dumb and always servable. The drift risk the config-constant idea targets is
+covered the way this repo already guards these pages: structural pins
+(`tests/test_static.py::test_legal_pages_name_the_operating_entity` +
+`test_no_personal_email_in_any_user_facing_surface`, which sweeps `static/`, `notify/templates/`
+and `frontend/src/` at the source tree so a personal-address reintroduction anywhere user-facing
+fails). The Issue-252 pin that asserted the personal Gmail WAS the breach contact is updated to
+pin the role address.
+
+**Two role addresses, not one.** Privacy/breach/COPPA traffic is legally distinct from general
+support and may need separate handling (DPO designation later); Cloudflare Email Routing forwards
+cost nothing per address.
+
+**Operator-owed remainder (deliberately not done in code):** (1) both role addresses must
+actually DELIVER before the pages ship to non-friends — Cloudflare Email Routing forwards, to be
+set up in the same sitting as the #529 Resend DNS records (both touch the same DNS zone);
+(2) Stripe `business_profile.support_email` → the role address, and `support_address` +
+`MAILING_ADDRESS` (#246) → a PO box/CMRA, never the home address — held until the mailbox exists.
+Publishing a dead contact address would be worse than the personal Gmail it replaces, so the
+sequencing is: forwards live → pages deploy → Stripe profile updated.
+
+**Date:** 2026-09-21.
+
+---
+
+## 2026-09-21 — Issue 537 CHECK + measurements: sync Deepgram kept with an 1800 s terminal timeout; the OOM was librosa's framed matrix, fixed blockwise in-issue
+
+**CHECK findings (Deepgram, current docs).** Prerecorded direct upload max **2 GB**; the **sync
+endpoint itself 504s when server-side processing exceeds 10 minutes** (Nova models) — independent
+of any client timeout; **callback (async) mode is the documented remedy** for long files (returns
+a `request_id` immediately, POSTs the transcript to your URL, 10 retries × 30 s); URL-based
+ingestion (`url` param, e.g. a presigned R2 URL) exists and would eliminate the ~173 MB upload
+entirely; no official nova-3 speed factor is published. (developers.deepgram.com: getting-started
+max processing time, /docs/callback, /docs/payload-too-large, /reference/listen-remote)
+
+**Decision — keep the sync shape for the drill; raise `TRANSCRIPTION_TIMEOUT_S` 300 → 1800.**
+Rationale: 300 s cannot cover upload+diarized ASR+download for a 90-minute WAV, but nothing
+measured yet says the sync path fails — Deepgram's 10-minute processing cap is the real ceiling,
+and nova-3 batch throughput almost certainly clears 90 minutes of audio well inside it. The
+callback/URL-ingestion integration is a different shape (public endpoint, task redesign) built on
+numbers we don't have; **#539 records the real transcription wall clock**, and if it approaches
+the 10-minute processing cap, the callback+presigned-URL shape gets filed from that evidence.
+1800 s satisfies the machine-checked invariant (`< CELERY_SOFT_TIME_LIMIT_S - 30 = 2970`).
+
+**Decision — the job-level timeout is now TERMINAL (no retry).** `asyncio.wait_for` expiry used to
+fall into the generic `self.retry` and re-upload ~173 MB three times into the same deterministic
+wall (~20 wasted minutes before the refund). Hung sockets are already converted to retryable SDK
+errors by `TRANSCRIPTION_HTTP_TIMEOUT_S=120`, so a job-level expiry means the provider was
+genuinely processing for the entire budget — a retry repeats it. Same terminal treatment as
+`SoftTimeLimitExceeded` (`worker/tasks.py::transcribe_video`).
+
+**Measurement — `extract_audio_events` peak RSS on a real 90-minute WAV** (172.8 MB pink noise,
+16 kHz mono, generated with ffmpeg `anoisesrc`; dev box, `.venv` python 3.12):
+- **Before: peak RSS 2227 MB** (load: 641 MB — the 346 MB float32 array + decode buffers;
+  `librosa.feature.rms`: **+1568 MB** — it pads a full copy then materializes the 4×-overlap
+  framed matrix; wall 21.9 s).
+- **After: peak RSS 968 MB, wall 13.1 s** — blockwise rms/zcr (`_framewise_rms`/`_framewise_zcr`,
+  `ingestion/audio.py`): frame-local features computed per 8192-frame block (`center=False` over a
+  pre-padded array), numerically identical to the full-array librosa calls (RMS within one float32 ulp — SIMD reduction order over strided windows differs per CPU; ZCR exact)
+  (`tests/test_signals.py::test_blockwise_features_match_librosa_exactly`, ragged prime-sized
+  blocks).
+
+**Verdict: the full streaming-load rewrite is NOT needed.** The issue anticipated "blockwise/
+streaming gets its own sizing" — the measurement showed the offender was a frame-local 50-line
+change, not a pipeline redesign, so it shipped inside #537 (this note is the recorded deviation).
+Residual: worst case at the 4 h `AUDIO_ANALYSIS_MAX_DURATION_S` cap is ~2×922 MB array+pad ≈
+2 GB — acceptable now, revisit only if multi-hour sources become routine. Prod worker runs
+`--concurrency=4` on the default queue → worst-case 4 × ~1 GB concurrent analyses; the VM's RAM
+is recorded during #539's pre-flight (`free -h`) alongside the per-stage RSS measurement #539
+already owes.
+
+**Date:** 2026-09-21.
+
+---
+
+## 2026-09-21 — Issue 535 CHECK: per-segment input seek confirmed; two-pass loudnorm retained, measured over the assembled recap
+
+**What was decided.** `render_summary_file` moves from a single-input whole-VOD trim graph to
+**per-segment input seeks** (`-ss <start> -t <dur> -accurate_seek -i <src>` per segment) for BOTH
+passes — the loudnorm measurement and the render — and its derived budget drops the
+source-duration term (`max(300, output_dur × 4)`). **Two-pass loudnorm is retained**, and its
+measurement pass runs over the assembled recap segments only.
+
+**Why (CHECK findings, researched not remembered):**
+1. ffmpeg's own docs confirm the seek semantics the fix depends on: input-side `-ss` seeks to the
+   nearest keyframe before the target, and when transcoding with `-accurate_seek` (**the default**)
+   the gap is decoded and discarded — frame-accurate on long-GOP H.264. We pass `-accurate_seek`
+   explicitly anyway to guard a future regression to stream copy. (ffmpeg.org/ffmpeg.html)
+2. Two-pass loudnorm (measure → apply with `measured_*` + `linear=true`) is still the EBU
+   R128-style standard; single-pass loudnorm pumps and `dynaudnorm` is a compressor, not a
+   loudness normalizer. **Measuring only the assembled recap is not just the perf fix — it is the
+   correct semantics**: loudness is a property of the final program, not the source it was cut
+   from (the Issue 181 contract, independently confirmed). (k.ylo.ph loudnorm author writeup;
+   32blog/dev.to loudnorm guides)
+3. AAC priming-sample clicks at splices are a **concat-demuxer** hazard for independently-encoded
+   segments; our path uses the **concat FILTER** with one continuous audio encode, so the hazard
+   does not apply. Documented in `build_summary_filtergraph`'s docstring so nobody "optimizes" it
+   to demuxer stream-copy. (Apple dev forums AAC encoder delay; Baeldung concat demuxer vs filter)
+4. The per-task `soft_time_limit` override stays **rejected** (per the issue): `soft < hard <
+   visibility_timeout` all derive from one global, and breaking it makes Redis redeliver a
+   running task.
+
+**Deliberately NOT done here:** CFR normalization of VFR OBS sources (`-fps_mode cfr` / `fps=`
+per segment). The pre-535 graph never normalized frame rate either, so adding it now would be an
+untested behaviour change riding a perf fix; whether OBS VFR actually produces drift in a stitched
+recap is exactly the kind of question #539's real 90-minute recording answers. If the drill shows
+A/V drift at splices, file the CFR fix from that evidence.
+
+**Flagged for #539 (billing-adjacent):** OBS-remuxed MKV can probe as VFR even when encoded CFR,
+and **ffprobe's container duration on an unfinalized MKV (crash/kill mid-recording) can be
+plainly wrong with no error** — `billing/ledger.py` debits minutes from that number. #539's
+"ffprobe duration vs. the file's own claim" measurement is now load-bearing for billing
+correctness; logged in `docs/OFF_COURSE_BUGS.md`. (OBS forums; Matroska truncated-cluster reports)
+
+**Date:** 2026-09-21.
+
+---
+
+## 2026-09-21 — Lane L33 filed: hands-off UI verification harness, built in parallel with L32; offline pipeline replay backends deferred
+
+**Decision 1 — the harness exists, and it is a ladder, not a monolith.** Lane **L33 — Hands-off UI
+verification harness** (Issues 540–546) is filed. Goal: agents verify the UI/UX and features
+**terminal-only, with zero human clicking**. Design: Rung 0 static/unit (`scripts/ci_local.sh`,
+exists) → Rung 1 Playwright mocked-network lane (exists; journey gaps filed as #544/#545) →
+**Rung 2 real-backend browser lane (the new build)**: uvicorn serving the built SPA at
+`http://localhost:8000/app/`, real pg16+pgvector+Redis, a seeded creator
+(`tests/perf/seed_staging.py --profile ui`), and a minted `cc_session` Playwright storageState —
+no dev-login route is added; the cookie is `Secure` only when `ENV=production`
+(`routers/auth.py:36`), so a minted cookie over `http://localhost` is the zero-click auth path →
+Rung 3 prod audit (exists) → Rung 4 live canary (exists). One agent-facing entry point
+(`scripts/ui_audit.sh`, #542) emits `frontend/e2e/.audit/report.json` + a flat screenshot tree; a
+`/ui-check` skill (#543) makes it invocable by any future session.
+
+**Decision 2 — sequencing (owner, 2026-09-21).** L33 #540–#543 build **in parallel with** the L32
+code batch (#535–#538), so the harness is ready to collect UI-side evidence during the #539
+90-minute drill. Nothing in L33 blocks #535–#539; if a conflict for attention arises, L32 wins.
+
+**Decision 3 — offline fixture/replay pipeline backends are DEFERRED, not filed** (owner,
+2026-09-21). No `TRANSCRIPTION_BACKEND=fixture`, no LLM replay mode in the app: they would add
+fake branches to production config surface and drift against the real Deepgram/Anthropic response
+shapes, duplicating what already exists at the right layers — the pytest goldens
+(`tests/fixtures/llm_goldens/scoring/`, schema-pinned) verify scoring against recorded responses,
+and full-pipeline truth is exactly what `scripts/live_smoke.py` and #539 exist for. Revisit only
+if agents demonstrably need repeated offline full-pipeline runs post-beta.
+
+**Also recorded — Rung-2 invariants** (each prevents a known failure mode): no Celery worker in
+the UI lane, so async states are asserted `queued`, never `done` (a spec author "fixing" a flake
+by adding a worker would silently convert the UI lane into a flaky pipeline lane); the `ui` seed
+profile stays ON CONFLICT-idempotent (re-runnable without a DB drop); `frontend/e2e/.auth/` stays
+gitignored (it holds a valid dev JWT); visual-regression baselines stay CI-only (WSL2 font AA
+false-positives).
+
+**Source.** Plan `we-need-to-get-shimmying-ladybug` (2026-09-21), owner-approved with both
+recommendations accepted; design brief from the architecture pass over the existing harness assets
+(`frontend/e2e/`, `scripts/llm_harness.py`, `scripts/live_smoke.py`, `tests/perf/seed_staging.py`).
+
+---
+
+## 2026-09-17 — Lane L32 scope: the livestream recap stays inside the `origin=upload` boundary
+
+**Decision.** Lane **L32 — Livestream / long-form recap** (Issues 534–539) is filed, and it
+**confirms rather than reverses** the recap scope boundary locked on 2026-06-22: source is
+`origin=upload` files only — **no live capture, no YouTube download**. `docs/PRD.md:107`
+("Live-stream ingestion", out of scope for v1) stands unamended. **#381** (chat-density via live
+capture) stays open and unbuilt.
+
+**Why.** The trigger for the lane is a named beta creator who livestreams 90-minute shows with large
+YouTube guests and **records locally** — real source files exist, so the product ask ("turn my stream
+into a recap, chapters and Shorts") is fully served by the upload path. The 2026-06-22 boundary is
+bound to the Issue-139 YouTube ToS ruling, i.e. it is a *legal* constraint rather than a scheduling
+one. Reopening a settled legal boundary for zero product gain is the worst available trade. The
+competitive case for the lane is unchanged and independent of live capture:
+`docs/COMPETITIVE_RESEARCH.md:51` — *"Nobody owns 'best-in-class YouTube livestream/VOD → highlights
++ shorts'"* — and `:156`, which makes it the Stage-1 wedge.
+
+**Decision — the centerpiece is deliberately NOT filed yet.** Batch A (#534–#538) is prerequisite
+work; **#539** is the 90-minute fresh-upload drill. The stream-native long-form segment pass, which is
+the lane's actual product content, is filed as Batch B **from #539's measurements**. Why: its design
+turns on numbers nobody has (whether livestream audio yields any real silences at an absolute −60 dBFS
+floor; whether `video_context.structure` is coherent at 90 minutes; where the 12 candidates land on a
+long timeline), and filing it now would be building from memory — the one thing `CLAUDE.md`'s One Rule
+forbids. Batch A exists **only** so the drill can produce interpretable evidence.
+
+**Decision — pricing is untouched by this lane.** A 90-minute stream debits 90 minutes of a minute
+pack (`billing/ledger.py:70-72`, `worker/tasks.py:2236-2242`), and `docs/COMPETITIVE_RESEARCH.md:50`
+records that per-minute economics structurally punish long content. Acknowledged and deferred: it is a
+pricing decision to make after the creator has run real streams, and any tier work lands first on
+**#527**'s dead `GET /billing/packs` and the hardcoded prices in `Pricing.tsx:21-29`. **#97**
+("Livestream recap video — subscription perk") is superseded accordingly: capability → L32,
+packaging → #527.
+
+**Evidence that prompted the lane's shape** — three defects verified by reading the running code, not
+inferred:
+1. `knowledge/chapters.py:90` reads `timeline_jsonb.get("silences", [])` while
+   `ingestion/signals.py:118-122` emits silences nested inside `events`. Every video in production has
+   shipped four evenly-spaced *fabricated* chapter boundaries, and the recap's
+   `CHAPTER_STRADDLE_PENALTY` has been demoting candidates against arbitrary quarter-points. It is the
+   only wrong reader — `clip_engine/candidates.py:122,144,168` and `clip_engine/scoring.py:204` all
+   read the same object correctly. (Issue 534.)
+2. `clip_engine/render.py:1391-1396` derives a 5400 s ffmpeg budget for a 90-minute source while
+   `worker/tasks.py:7229` inherits `CELERY_SOFT_TIME_LIMIT_S = 3000`, and the path decodes the whole
+   VOD twice. The recap cannot complete on the lane's own target input. **Rejected fix:** a per-task
+   `soft_time_limit` override — `worker/celery_app.py:103-107` derives the hard limit *and*
+   `visibility_timeout` from the same global, so breaking `soft < hard < visibility_timeout` makes
+   Redis redeliver a still-running task. **Chosen fix:** per-segment input seek, the pattern
+   `render_clip_file` already proves. (Issue 535.)
+3. `clip_engine/candidates.py:311-314` cuts to a fixed global top-N by prominence *before* the
+   `MIN_CLIP_S` filter and *before* NMS, with no temporal stratification and no refill from the tail —
+   so a 90-minute stream gets the same 12 candidates as a 10-minute one, and `routers/clips.py:2756-2759`
+   builds the recap from exactly those rows. (Instrumented by Issue 536; the fix is Batch B, sized
+   from the real histogram rather than guessed.)
+
+**Also recorded, for Batch B:** `analysis/video_context.py:101` asks Claude for `structure` — a
+chronological, non-overlapping, coverage-complete sectioning of the whole video. It is validated
+(`:246-257`), persisted to `VideoContext.context_jsonb`, and read by **nothing**; the only consumer of
+the context payload is `clip_engine/ranking.py:349`, which takes `moments` and discards the rest. It
+is the leading candidate input for the long-form segment pass, but `validate_context` checks only
+in-bounds and non-empty label — none of the three properties the prompt promises — so promoting it
+from decoration to a segmentation input requires hardening that validator first.
+
+**Source.** Plan `serene-enchanting-sky` (2026-09-17); owner decisions in-session on sequencing
+(operator track first), ambition (fix verified defects, then reassess) and pricing (leave alone).
+
+---
+
+## 2026-08-28 — Issues 531–533: serve-time crop-track projection, delivered-word grounding, explicit-False captions
 
 **Decision (Issue 531).** The trimmed-clip crop-track fix is a **serve-time projection** in
 `GET /clips/{id}/crop-track` (`remap_crop_track_to_delivered`, `clip_engine/edits.py`), not a
