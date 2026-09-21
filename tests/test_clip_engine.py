@@ -238,7 +238,9 @@ def test_candidate_pool_breadcrumb_at_info_with_attributed_discards(caplog):
         assert key in line, f"breadcrumb missing {key}: {line}"
 
     fields = dict(
-        part.split("=", 1) for part in line.removeprefix("extract_candidates: ").split() if "=" in part
+        part.split("=", 1)
+        for part in line.removeprefix("extract_candidates: ").split()
+        if "=" in part
     )
     peaks = int(fields["peaks"])
     accounted = (

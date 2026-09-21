@@ -601,9 +601,7 @@ class TestChapterBoundaries:
         from knowledge.chapters import MAX_CHAPTER_PERIOD_S, find_chapter_boundaries
 
         # First silence at exactly MAX_CHAPTER_PERIOD_S from start (0).
-        timeline = _silence_timeline(
-            [(MAX_CHAPTER_PERIOD_S, MAX_CHAPTER_PERIOD_S + 2.0)], 600.0
-        )
+        timeline = _silence_timeline([(MAX_CHAPTER_PERIOD_S, MAX_CHAPTER_PERIOD_S + 2.0)], 600.0)
         boundaries = find_chapter_boundaries(
             timeline_jsonb=timeline,
             video_duration_s=600.0,
