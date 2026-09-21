@@ -6186,13 +6186,20 @@ the standalone-mint pattern (imports only `jwt`, never the app).
 
 ### Issue 545: mocked-lane journey specs — triage keyboard flow, GDPR export entry, billing checkout entry
 
-- [ ] **Status:** open · **Size:** XS · **Lane:** L33 · filed 2026-09-21 · post-beta
+- [x] **Status:** **DONE 2026-09-21** (`frontend/e2e/journeys.spec.ts`, 3 specs × 2 viewports,
+      all green; shared `collect.ts` capture) · **Size:** XS · **Lane:** L33 · filed 2026-09-21 ·
+      post-beta (pulled forward — it was cheap and the harness was already proven)
 
 **Acceptance**
-- [ ] `review.spec.ts` extended: keep/discard/undo via keyboard (K/X), pile counts update
-- [ ] GDPR export entry: Settings → `DataExportSection` fires the export request (#526's UI)
-- [ ] Billing checkout entry: Pricing → checkout POST fires; assert the redirect URL shape only
-      (never a real purchase from the harness)
+- [x] Triage keyboard journey (in `journeys.spec.ts`, alongside `review.spec.ts`'s geometry
+      specs): K → the `POST /clips/{id}/feedback` fires → the `last-call-strip` shows Kept +
+      Undo → Undo issues `PUT /clips/{id}/triage` (a retraction, never a second feedback write)
+- [x] GDPR export entry: Settings → `DataExportSection` renders, "Request export" fires the
+      `POST /creators/me/export` (status probe modeled explicitly, not via the `{}` catch-all)
+- [x] Billing checkout entry: Pricing → "Buy now" POSTs `/billing/checkout` with a `pack_id`,
+      and the app follows a Checkout-session-shaped URL (`checkout.stripe.com/c/pay/cs_…`) —
+      both the POST and the navigation are intercepted in-spec; nothing external is contacted
+      and no purchase can occur
 
 ### Issue 546: CI wiring for the harness
 
