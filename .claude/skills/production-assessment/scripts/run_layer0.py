@@ -300,6 +300,10 @@ PIP_AUDIT_IGNORES = {
     # pytest-asyncio<0.25 caps pytest<9 — a test-stack cascade, not a runtime
     # exposure (dev/CI only). Lift when the test stack is bumped together.
     "GHSA-6w46-j5rx-g56g",
+    # Same advisory class surfaced under a new id 2026-09 (fix: pytest 9.0.3
+    # only) — identical rationale and identical lift condition as the line
+    # above: dev/CI-only tool, blocked on the pytest-9 test-stack bump.
+    "PYSEC-2026-1845",
     # NOTE (Issue 143, 2026-06-17): starlette PYSEC-2026-161 was lifted from this
     # list — the starlette 1.x migration (FastAPI 0.137.1 + starlette 1.3.1) shipped,
     # so it now has a real fix in our compatible range. See docs/DECISIONS.md.
