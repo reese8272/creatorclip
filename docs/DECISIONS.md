@@ -5,7 +5,47 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-09-17 (latest) — Lane L32 scope: the livestream recap stays inside the `origin=upload` boundary
+## 2026-09-21 (latest) — Lane L33 filed: hands-off UI verification harness, built in parallel with L32; offline pipeline replay backends deferred
+
+**Decision 1 — the harness exists, and it is a ladder, not a monolith.** Lane **L33 — Hands-off UI
+verification harness** (Issues 540–546) is filed. Goal: agents verify the UI/UX and features
+**terminal-only, with zero human clicking**. Design: Rung 0 static/unit (`scripts/ci_local.sh`,
+exists) → Rung 1 Playwright mocked-network lane (exists; journey gaps filed as #544/#545) →
+**Rung 2 real-backend browser lane (the new build)**: uvicorn serving the built SPA at
+`http://localhost:8000/app/`, real pg16+pgvector+Redis, a seeded creator
+(`tests/perf/seed_staging.py --profile ui`), and a minted `cc_session` Playwright storageState —
+no dev-login route is added; the cookie is `Secure` only when `ENV=production`
+(`routers/auth.py:36`), so a minted cookie over `http://localhost` is the zero-click auth path →
+Rung 3 prod audit (exists) → Rung 4 live canary (exists). One agent-facing entry point
+(`scripts/ui_audit.sh`, #542) emits `frontend/e2e/.audit/report.json` + a flat screenshot tree; a
+`/ui-check` skill (#543) makes it invocable by any future session.
+
+**Decision 2 — sequencing (owner, 2026-09-21).** L33 #540–#543 build **in parallel with** the L32
+code batch (#535–#538), so the harness is ready to collect UI-side evidence during the #539
+90-minute drill. Nothing in L33 blocks #535–#539; if a conflict for attention arises, L32 wins.
+
+**Decision 3 — offline fixture/replay pipeline backends are DEFERRED, not filed** (owner,
+2026-09-21). No `TRANSCRIPTION_BACKEND=fixture`, no LLM replay mode in the app: they would add
+fake branches to production config surface and drift against the real Deepgram/Anthropic response
+shapes, duplicating what already exists at the right layers — the pytest goldens
+(`tests/fixtures/llm_goldens/scoring/`, schema-pinned) verify scoring against recorded responses,
+and full-pipeline truth is exactly what `scripts/live_smoke.py` and #539 exist for. Revisit only
+if agents demonstrably need repeated offline full-pipeline runs post-beta.
+
+**Also recorded — Rung-2 invariants** (each prevents a known failure mode): no Celery worker in
+the UI lane, so async states are asserted `queued`, never `done` (a spec author "fixing" a flake
+by adding a worker would silently convert the UI lane into a flaky pipeline lane); the `ui` seed
+profile stays ON CONFLICT-idempotent (re-runnable without a DB drop); `frontend/e2e/.auth/` stays
+gitignored (it holds a valid dev JWT); visual-regression baselines stay CI-only (WSL2 font AA
+false-positives).
+
+**Source.** Plan `we-need-to-get-shimmying-ladybug` (2026-09-21), owner-approved with both
+recommendations accepted; design brief from the architecture pass over the existing harness assets
+(`frontend/e2e/`, `scripts/llm_harness.py`, `scripts/live_smoke.py`, `tests/perf/seed_staging.py`).
+
+---
+
+## 2026-09-17 — Lane L32 scope: the livestream recap stays inside the `origin=upload` boundary
 
 **Decision.** Lane **L32 — Livestream / long-form recap** (Issues 534–539) is filed, and it
 **confirms rather than reverses** the recap scope boundary locked on 2026-06-22: source is

@@ -4,6 +4,36 @@ Updated after every issue closes.
 
 ---
 
+## 2026-09-21 — Beta-close plan locked: ledgers reconciled, #530 closed, Lane L33 filed; L32 #534 heading to main
+
+Full beta-close + hands-off-verification plan approved (plan `we-need-to-get-shimmying-ladybug`).
+State changes this session:
+
+- **Ledger reconciliation (A0):** `docs/GO_LIVE.md` was 5+ weeks stale vs. the issue ledger —
+  Track 4 is now formally **superseded by Issue 539** (the 90-minute livestream fresh-upload E2E,
+  Lane L32, which absorbs the three #395 drills and the collapsed live ACs of
+  484/427/448/520/524/525, with the two detection flags kept OFF and cleared in a follow-up flag
+  run); Tracks 5 (#484/#441/#450) and 6 (#445) closed — complete in `docs/issues.md`, stale in
+  GO_LIVE; #486 box ticked (resolved 2026-08-14 by rebrand). GO_LIVE now cites issues by
+  `### Issue N` heading — its line-number citations had all drifted.
+- **#530 CLOSED** — the last AC (migration round-trip) was bookkeeping: PR #136's
+  `Migration lint (Squawk)` check confirmed SUCCESS.
+- **Lane L33 filed (#540–546): the hands-off UI verification harness** — a terminal-only,
+  agent-runnable ladder (mocked Playwright lane → NEW seeded real-backend lane on
+  `localhost:8000/app/` with a minted `cc_session` storageState → prod audit lane), one
+  `scripts/ui_audit.sh` entry point emitting `frontend/e2e/.audit/report.json` + a flat screenshot
+  tree, and a `/ui-check` skill. Owner decisions (DECISIONS 2026-09-21): build #540–543 in
+  parallel with the L32 code batch so the harness collects UI evidence during #539; offline
+  fixture/replay pipeline backends **deferred** — full-pipeline truth stays with
+  `scripts/live_smoke.py` + Issue 539.
+- **Beta-close sequence (the whole remaining path):** merge #534's branch → L32 code batch
+  #538/#536 (XS) → #537 (S, measure-then-decide) → #535 (M, per-segment seek) alongside L33
+  #540→543 → **operator: #529 Resend DNS first (48 h long pole; then merge draft PR #140/#528)**,
+  Track 1 OAuth confirmations, Track 3 DR floor → **Issue 539** → flag run → **#28** 48 h friend
+  smoke. Stage-B clock: #488 then submit #29.
+
+---
+
 ## 2026-08-28 (latest, second entry) — Pre-beta closeout wave: Lane L31 code track COMPLETE (#530–533, 526, 528 drafted)
 
 Five PRs in one wave (plan `wondrous-petting-shell`), all merged + deployed except the

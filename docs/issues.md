@@ -4,11 +4,14 @@
 queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `docs/DECISIONS.md`
 (2026-08-03). This file is the live queue.
 
-> **Active lane: L32 — Livestream / long-form recap (Issues 534–539).** Filed 2026-09-17 (plan
-> `serene-enchanting-sky`). Batch A (#534–#538) is prerequisite work for **#539**, the 90-minute
-> fresh-upload drill that is simultaneously the beta's last gate and this lane's evidence base. The
-> stream-native segment pass is deliberately **not filed yet** — it gets filed as Batch B from #539's
-> measurements rather than from memory.
+> **Active lanes: L32 — Livestream / long-form recap (Issues 534–539)** and **L33 — Hands-off UI
+> verification harness (Issues 540–546, filed 2026-09-21)**, built in parallel by owner decision
+> (DECISIONS 2026-09-21); nothing in L33 blocks L32. L32: Batch A (#534–#538) is prerequisite work
+> for **#539**, the 90-minute fresh-upload drill that is simultaneously the beta's last gate and
+> this lane's evidence base; the stream-native segment pass is deliberately **not filed yet** — it
+> gets filed as Batch B from #539's measurements rather than from memory. L33: the terminal-only
+> agent verification ladder (`scripts/ui_audit.sh`, seeded real-backend Playwright lane,
+> `/ui-check`).
 >
 > **Lanes L26–L31 are complete.** L30 (deep standards & process audit, #498–527) closed except for
 > #495, #496, #498 items 4–5, #508–519 and #527, which remain open and unscheduled; its corpus is at
@@ -5468,7 +5471,9 @@ purge-dropped (deferred to #446), and #508–519.
 
 ### Issue 530: a notification row must not say `sent` before the send happens
 
-- [ ] **Status:** open · **Size:** M · **Lane:** L31 · filed 2026-08-28
+- [x] **Status:** **DONE 2026-09-21** (code merged+deployed via PR #136 on 2026-08-28; final AC
+      closed 2026-09-21 when PR #136's `Migration lint (Squawk)` check was confirmed SUCCESS) ·
+      **Size:** M · **Lane:** L31 · filed 2026-08-28
 
 `_send_notification_async` constructs the delivery row already-terminal
 (`status=NotificationDeliveryStatus.sent`, `worker/tasks.py:6766-6776`) and commits it **before**
@@ -5504,9 +5509,9 @@ under `ENV: production` (change to `sync: false`).
 - [x] A stale `pending` row is adopted and retried; a `sent` row still short-circuits; a FRESH
       `pending` row (concurrent in-flight send) also short-circuits
       (`test_stale_pending_row_is_adopted_and_retried`, `test_fresh_pending_row_short_circuits`)
-- [ ] Migration round-trips (CI `migration-lint`); enum change follows `docs/MIGRATIONS.md`
-      (local offline render of upgrade + real downgrade verified; box checks when the PR's
-      migration-lint job is green)
+- [x] Migration round-trips (CI `migration-lint`); enum change follows `docs/MIGRATIONS.md`
+      (local offline render of upgrade + real downgrade verified; PR #136 `Migration lint (Squawk)`
+      = SUCCESS, confirmed 2026-09-21)
 - [x] The `NOTIFY_FROM_EMAIL` warning text and `render.yaml` drift are fixed
 
 ---
@@ -5979,6 +5984,170 @@ is a **billing-correctness** defect that lands on the creator's first upload.
 
 ---
 
+## Lane L33 — HANDS-OFF UI VERIFICATION HARNESS (Issues 540–546, filed 2026-09-21)
+
+Scope locked by owner 2026-09-21 (plan `we-need-to-get-shimmying-ladybug`). Goal: agents (Claude
+Code sessions, CI) can check the UI/UX and features **terminal-only, zero human clicking**. The
+design is a rung ladder — Rung 0 static/unit (`scripts/ci_local.sh`, exists), Rung 1 Playwright
+mocked-network lane (`frontend/playwright.config.ts` + `e2e/fixtures/mock-api.ts`, exists), **Rung 2
+real-backend browser lane (the gap this lane builds)**, Rung 3 prod audit
+(`playwright.config.prod.ts`, exists), Rung 4 live pipeline canary (`scripts/live_smoke.py` +
+`scripts/llm_harness.py`, exists, owned by #539). Agents run rungs 0–2 from one command; 3–4 stay
+explicit because they touch prod.
+
+**Two owner decisions (recorded in `docs/DECISIONS.md` 2026-09-21):** (1) #540–#543 build **in
+parallel with** the L32 code batch so the harness collects the UI-side evidence during the #539
+drill — but nothing in L33 blocks #535–#539; (2) offline fixture/replay pipeline backends
+(`TRANSCRIPTION_BACKEND=fixture`, LLM replay) are **deferred, not filed** — full-pipeline truth
+stays with `scripts/live_smoke.py` and #539's real APIs; file it only if agents demonstrably need
+repeated offline full-pipeline runs post-beta.
+
+**Standing constraints for every L33 issue:** Rung 2 runs **no Celery worker** — async states are
+asserted as `queued`, never `done` (job progression belongs to Rung 4; do not "fix" a flake by
+adding a worker ad hoc). `frontend/e2e/.auth/` stays gitignored (it holds a valid dev JWT). The
+`ui` seed profile must stay ON CONFLICT-idempotent so the harness is re-runnable without a DB drop.
+Visual-regression baselines stay CI-only (WSL2 font AA false-positives — comment in
+`playwright.config.ts`).
+
+---
+
+### Issue 540: local real-backend enablement — pg16 pgvector, `creatorclip_e2e`, `--profile ui` seed, doctor checks
+
+- [ ] **Status:** open · **Size:** S · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful
+
+The dev box runs **Homebrew** postgresql@16 (16.14, installed but not running) and pgvector is
+built only for pg17/18 (`share/postgresql@16/extension/` has no `vector.control`); Debian
+`pg_ctlcluster` tooling is absent, so `scripts/dev_session_setup.sh:ensure_postgres` no-ops.
+Prod is `pgvector/pgvector:pg16` — dev must **not** fork the major version, so compile pgvector
+from source against `$(brew --prefix postgresql@16)/bin/pg_config` rather than moving to pg17/18.
+
+**Acceptance**
+- [ ] pgvector compiled + installed for Homebrew pg16 (`vector.control` present under
+      `share/postgresql@16/extension/`); the install command sequence recorded in
+      `docs/DECISIONS.md` or the runbook so the next box can repeat it
+- [ ] pg16 running locally; `creatorclip_e2e` database exists; `.venv/bin/alembic upgrade head`
+      clean (migrations 0001/0006 `CREATE EXTENSION vector` succeed)
+- [ ] `scripts/doctor.py` gains named checks: pg16 reachable at the harness DSN + `vector`
+      extension installable — each failing with a one-line remediation, not a stack trace
+- [ ] `tests/perf/seed_staging.py --profile ui` (default profile unchanged): on top of the existing
+      creator + videos/metrics, seeds clips in all three triage piles, transcripts +
+      `reframe_track_jsonb` on at least one clip, an edit document (Editor route), channel-DNA
+      rows, **a recap bundle on one long video** (the L32 surface), notifications, and render jobs
+      in `queued`/`done`/`failed` — idempotent via ON CONFLICT, fixed creator UUID
+      `00000000-1111-2222-3333-444444444444` preserved
+- [ ] Every route in `frontend/src/App.tsx` renders **non-empty** against the seed (verified by
+      #541's audit spec once it lands; until then, by hand-listing the routes the seed feeds)
+- [ ] Side benefit verified: the local `-m integration` pytest lane runs green against the local
+      pg16 (`DATABASE_URL` pointed at it)
+
+### Issue 541: minted-session Playwright lane — `mint_storage_state.py`, `playwright.config.local.ts`, local audit spec
+
+- [ ] **Status:** open · **Size:** S · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful ·
+      blocked by #540
+
+There is no dev-login route (correct — don't add one). The browser path into an authed SPA session
+with zero clicks is a **minted `cc_session` cookie**: `auth.create_session_token` is HS256 over
+`JWT_SECRET_KEY`, and the cookie is `Secure` only when `ENV=production` (`routers/auth.py:36`), so
+a minted cookie works over `http://localhost`. `scripts/llm_harness.py:_mint_token` already proves
+the standalone-mint pattern (imports only `jwt`, never the app).
+
+**Acceptance**
+- [ ] `scripts/mint_storage_state.py`: mints the JWT (pattern duplicated from
+      `llm_harness._mint_token`; no app imports), writes Playwright storageState JSON to
+      `frontend/e2e/.auth/local.json` (shape mirrored from `e2e/prod/build-auth-from-cookie.mjs`,
+      `domain: "localhost"`, `secure: false`); inputs `JWT_SECRET_KEY` + creator id, defaulting to
+      the seed UUID; runs under `.venv/bin/python`
+- [ ] `frontend/playwright.config.local.ts` (template: `playwright.config.prod.ts`): `testDir
+      e2e/local`, `baseURL http://localhost:8000/app/`, `storageState e2e/.auth/local.json`,
+      desktop + mobile projects, **no webServer** (the orchestrator owns boot)
+- [ ] `frontend/e2e/local/audit.spec.ts` mirrors `e2e/prod/audit.spec.ts`: per-route screenshot +
+      console/pageerror/failed-request capture over every authed route, against the #540 seed —
+      real serializer shapes, not mocks (the class of bug the prod audit lane catches, but
+      pre-push)
+- [ ] The lane proves the cookie actually authenticates: a real `GET /creators/me` succeeds from
+      the browser context (no dependency overrides anywhere)
+- [ ] No Celery worker: any async state asserted as `queued`, never `done`
+
+### Issue 542: `scripts/ui_audit.sh` — the one-command agent entry point + machine-readable report
+
+- [ ] **Status:** open · **Size:** M · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful —
+      **this is #539's UI-side evidence collector** · blocked by #541
+
+**Acceptance**
+- [ ] `scripts/ui_audit.sh [--rungs mocked,local] [--prod]` (default `mocked,local`): env checks
+      (nvm node-22 PATH pin + Redis probe patterns reused from `scripts/ci_local.sh`; the #540
+      doctor pg checks; Playwright chromium present; `frontend/dist` exists else
+      `npm --prefix frontend run build`), then for the local rung: `alembic upgrade head` on
+      `creatorclip_e2e` → `seed_staging.py --profile ui` → `mint_storage_state.py` → boot uvicorn
+      (`ENV=development STORAGE_BACKEND=local NOTIFY_BACKEND=console`, health-poll, trap-kill on
+      exit), then run the lanes (mocked lane with `--grep-invert @visual`)
+- [ ] Shared capture fixture `frontend/e2e/fixtures/collect.ts` (extracted from `smoke.spec.ts`'s
+      console/pageerror collection, reused by mocked/local/prod specs) appends one NDJSON line per
+      route×viewport to `frontend/e2e/.audit/events.ndjson`: `{rung, route, viewport, screenshot,
+      consoleErrors, pageErrors, failedRequests, axeViolations}`
+- [ ] Screenshots at flat predictable paths `frontend/e2e/.audit/screens/<rung>/<route>-<viewport>.png`
+      (a vision agent can enumerate them without parsing anything)
+- [ ] `frontend/e2e/merge-report.mjs` folds NDJSON + Playwright's JSON reporter into
+      `frontend/e2e/.audit/report.json` with a top-level `{ok, rungs, counts}` verdict; the script
+      exits non-zero iff any required rung failed
+- [ ] `--prod` first sanity-checks `e2e/.auth/prod.json` freshness with one authed GET and fails
+      with "re-run `npm run test:prod:auth`" instead of 12 cryptic redirect failures
+- [ ] `.audit/` gitignored
+
+### Issue 543: `/ui-check` skill — make the harness invocable by any future session
+
+- [ ] **Status:** open · **Size:** XS · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful ·
+      blocked by #542
+
+**Acceptance**
+- [ ] `.claude/skills/ui-check/SKILL.md`: run `scripts/ui_audit.sh`, Read
+      `frontend/e2e/.audit/report.json`, **view the screenshots** (Read tool renders PNGs) for UX
+      judgment — layout breakage, empty states, contrast, overflow — and report findings per
+      route; name the `--rungs`/`--prod` options and when each is appropriate
+- [ ] The skill states the Rung-2 invariants (no worker → `queued` assertions; seed idempotent;
+      never flip prod detection flags from here)
+- [ ] A fresh session can run `/ui-check` end to end with zero human interaction (verified once,
+      recorded in the issue)
+
+### Issue 544: mocked-lane journey specs — recap surface + Uppy upload
+
+- [ ] **Status:** open · **Size:** S · **Lane:** L33 · filed 2026-09-21 · pre-beta-useful (the
+      recap half is L32 UI debt: the recap surface has only vitest coverage while the recap bundle
+      is the beta's second deliverable)
+
+**Acceptance**
+- [ ] `frontend/e2e/fixtures/mock-api.ts` `GET_TABLE` gains a recap payload typed against
+      `frontend/src/types.ts`; a recap journey spec drives long video → recap surface → sections
+      render → zero console/pageerrors, desktop + mobile
+- [ ] An Uppy upload journey spec: `setInputFiles` a real small file through the mocked endpoint,
+      progress UI advances, completion state renders (mock-api already forces proxy mode)
+- [ ] Both specs use the shared `collect.ts` fixture once #542 lands (soft dependency — specs may
+      land first with local capture)
+
+### Issue 545: mocked-lane journey specs — triage keyboard flow, GDPR export entry, billing checkout entry
+
+- [ ] **Status:** open · **Size:** XS · **Lane:** L33 · filed 2026-09-21 · post-beta
+
+**Acceptance**
+- [ ] `review.spec.ts` extended: keep/discard/undo via keyboard (K/X), pile counts update
+- [ ] GDPR export entry: Settings → `DataExportSection` fires the export request (#526's UI)
+- [ ] Billing checkout entry: Pricing → checkout POST fires; assert the redirect URL shape only
+      (never a real purchase from the harness)
+
+### Issue 546: CI wiring for the harness
+
+- [ ] **Status:** open · **Size:** XS · **Lane:** L33 · filed 2026-09-21 · post-beta ·
+      blocked by #542
+
+**Acceptance**
+- [ ] The ci.yml playwright job invokes `scripts/ui_audit.sh --rungs mocked` (one entry point,
+      identical locally and in CI); `report.json` uploaded as an artifact
+- [ ] A nightly (or on-demand) job runs `--rungs local` against the CI postgres service — same
+      pgvector:pg16 image the integration lane already uses
+- [ ] No change to the 8 required branch-protection checks without a DECISIONS entry
+
+---
+
 ## Tracker hygiene
 
 This file is the **sole authority** for the next free issue number (Issue 498 item 6). The number is
@@ -5991,7 +6160,7 @@ made the next filed issue collide with #520. Deleting the competing copies made 
 authoritative without making it correct — the mechanism is the fix. `docs/OFF_COURSE_BUGS.md`,
 2026-08-18.)*
 
-- Next free issue number: **540**.
+- Next free issue number: **547**.
 
 ---
 

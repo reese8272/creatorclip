@@ -196,9 +196,11 @@ blank as you go; a row is done only when its blank is filled. Statuses above sta
       needed no update.
 - [x] **A purchase credits minutes through the webhook itself** — done 2026-08-14, 200 minutes
       granted under `request_id=48801afa…`. **This row is GREEN.**
-- [ ] **#486 — separate Stripe account for AutoClip** (owner decision 2026-08-13). Required before
-      non-friends pay: Checkout currently shows another product's branding *and* a personal name
-      (`branding_settings.display_name = "Reese Ludwick"`) on the card-entry page. Done: ________
+- [x] **#486 — checkout branding** — DONE 2026-08-14, **resolved differently than filed**: the
+      shared account was rebranded (Ludwick Solutions LLC as merchant of record) instead of split;
+      the separate-account plan is descoped (`docs/DECISIONS.md` 2026-08-14; `docs/issues.md`
+      § Issue 486). This box was stale here while the issue ledger already showed it done —
+      reconciled 2026-09-21.
       > ⚠️ Stripe transport stays `RequestsClient`. **Never** revert to `HTTPXClient` — two stacked
       > defects, 10-week total checkout outage (`billing/stripe_client.py`, DECISIONS 2026-08-12).
 
@@ -235,25 +237,21 @@ Strictly ordered by consequence (`docs/runbooks/255-258-dr-durability.md:6`).
 
 ### Track 4 — The fresh-upload verification session (the linchpin)
 
-*One session, designed so a single upload clears the maximum number of pending acceptance criteria.
-Nearly everything still unchecked across L26–L29 is of the form "upload one real video and check N
-things at once."*
+**SUPERSEDED by Issue 539 (2026-09-21).** This track's session is now specified — expanded and
+made concrete — as **`docs/issues.md` § Issue 539**: the 90-minute livestream fresh-upload E2E on
+prod, which folds in the three #395 drills, the `clip_audit.py` pass, the collapsed live ACs
+(#484/#427/#448/#520/#524/#525/#529), the eight Batch-B measurements, and the
+"would you post these?" verdict (the creator's answer is the one that matters). Two deltas from
+the original track text: (a) the two detection flags (`CAMERA_REGION_DETECT_ENABLED`,
+`OVERLAY_BAND_DETECT_ENABLED`) must stay **OFF** during the #539 run — they contaminate the
+measurement and get their own follow-up run, which is where #430, #448's live AC and #466's
+backfill drill clear; (b) the old `docs/issues.md:NNNN` line citations in this file had all
+drifted — cite by `### Issue N` heading from now on. Status and evidence live in Issue 539's
+AC block, not here.
 
-- [ ] **Pre-flight — do not skip:** `python3.12 scripts/r2_set_cors.py https://autoclip.studio`.
-      The `ExposeHeaders ETag` is load-bearing: **without it multipart completes stall at 100%**
-      (DECISIONS 2026-08-05). Run it before any drill or you will spend the session debugging a
-      phantom. Then flip `OVERLAY_BAND_DETECT_ENABLED=true` and `CAMERA_REGION_DETECT_ENABLED=true`.
-- [ ] **The three #395 upload drills** — see the #395 row above for why all three are listed
-      here rather than just the one that has a checkbox in `issues.md`.
-- [ ] **Clip audit on the output.** `scripts/clip_audit.py` (loudness + true peak — note `peak=true`
-      was only added 2026-08-10, so every audit before that silently reported no peak data at all),
-      plus frame-extraction spot-checks. Clears in one pass: **427** caption-on-face
-      (`docs/issues.md:1944`), **430** camera region (`:1993`), **448** overlay band (`:2825`),
-      **444** triage idempotency (`:2644`), **437** (`:2201`), **466** backfill drill (`:3510`),
-      **467** worker-path render (`:3540`), **478** full-resolution re-freeze (`:3817`).
-- [ ] **Then look at the clips as a creator, not an auditor.** Would you post these? *No gate on
-      this page covers that judgment, and it is the actual product question.* The eval harness
-      proves window **geometry** — it has never proven a clip is good. Verdict: ________
+- [ ] **Issue 539 executed and its evidence block filled** (blocked by #535–#538). Done: ________
+- [ ] **Follow-up flag run** with both detection flags ON, clearing #430 / #448-live / #466.
+      Done: ________
 
 ### Track 5 — One consolidated fix wave
 
@@ -262,23 +260,22 @@ known-open defects, then fix once. Rationale — every previous live upload surf
 backlog had not predicted (first → Issues 427–430; second → 448, 449, 450), so fixing blind ahead of
 the upload risks fixing the wrong things.*
 
-- [ ] **Issue 484 — the meaning-inverting cold open.** The highest-impact known clip defect, and
-      until 2026-08-13 it was open, unfiled and unowned. See `docs/issues.md` § 484.
-- [ ] **Issue 441 residual** — hedge opens (`"Like,"`, `"maybe"`) and the fragment class survived
-      Issue 449's fix (`docs/issues.md:2487`). Folded into 484.
-- [ ] **Issue 450** — reframe landing on the wrong person. Issue 440's motion criteria passed on a
-      shot of the wrong speaker, and *"this audit graded 440 green on the numbers alone and missed
-      it"* (`docs/issues.md:2414`) — a standing warning about trusting numeric criteria over pixels.
-- [ ] Every fix ships an eval fixture, ratcheting `SCENARIO_FLOOR` above 31.
+- [x] **Issue 484 — the meaning-inverting cold open.** DONE 2026-08-25 (PR #134); the remaining
+      real-output live-verification AC is deliberately open and folded into Issue 539. See
+      `docs/issues.md` § Issue 484.
+- [x] **Issue 441 residual** — folded into and closed with Issue 484 (DONE 2026-08-25); Issue 441
+      itself was DONE 2026-08-07.
+- [x] **Issue 450** — DONE 2026-08-12 (reframe seat selection fixed; `tests/fixtures/reframe_seats/`
+      carries the 12 real frames). The standing warning about trusting numeric criteria over pixels
+      stays in force.
+- [x] Eval fixtures shipped with the wave's fixes; `SCENARIO_FLOOR` ratchet history lives in
+      `tests/test_clip_engine.py`. (Track closed 2026-09-21 reconciliation.)
 
 ### Track 6 — Issue 445, the three-pile triage UI
 
-- [ ] **Build it** (owner call 2026-08-13). It is **genuinely unbuilt** — 6 unchecked ACs at
-      `docs/issues.md:2672-2683` — despite an earlier handoff claiming the L27 triage UI had
-      shipped. Strangers hit the review queue on their first upload, and today reviewed state does
-      not survive a reload and the Dashboard badge counts the wrong thing
-      (`pages/Dashboard.tsx:108`). Run a real CHECK phase first: four design questions are still
-      open in the issue body (`docs/issues.md:2663-2670`).
+- [x] **DONE 2026-08-28** (PR #137, L31 wave): the three-pile triage UI shipped — reviewed state
+      persists, Dashboard badge counts the right thing. See `docs/issues.md` § Issue 445. This
+      track's box was stale while the issue ledger showed it done — reconciled 2026-09-21.
 
 ### Track 7 — Gates the friend beta deferred that a stranger audience re-opens
 
@@ -352,8 +349,12 @@ implicitly by executing the #24→#25→#26→#28 chain.
 | Stage A — private beta | _pending_ | Reese | _____ |
 | Stage B — public launch (#30) | _pending_ | Reese | _____ |
 
-*Last reconciled: 2026-08-13 — added the missing #395 row, corrected the stale #296 OPEN to GREEN,
-re-opened #282 for a non-friend audience, and added the "Stage A→B execution plan" section. Rows
-were also updated 2026-08-11, -12 and -13 (the previous "2026-07-02" line predated all of those and
-understated how current the ledger was). Update a row's status only with evidence, and date the
-change.*
+*Last reconciled: 2026-09-21 — Track 4 superseded by Issue 539 (the 90-minute livestream
+fresh-upload E2E, Lane L32, which absorbs the #395 drills and the collapsed live ACs); Tracks 5
+(#484/#441/#450) and 6 (#445) closed — they were complete in `docs/issues.md` but stale here;
+Track 2's #486 box ticked (resolved 2026-08-14 by rebrand, not account split); #530 closed
+(migration-lint SUCCESS on merged PR #136). The `docs/issues.md:NNNN` line citations in this file
+had drifted — cite by `### Issue N` heading. Remaining Stage-A OPEN work: the operator track
+(#529 Resend — 48 h DNS long pole, blocks #28 — plus Track 1 OAuth confirmations and the Track 3
+DR floor), the L32 code batch #535–#538, then Issue 539 → the flag run → #28. Prior
+reconciliation: 2026-08-13. Update a row's status only with evidence, and date the change.*
