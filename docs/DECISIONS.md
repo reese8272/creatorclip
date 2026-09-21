@@ -5,7 +5,50 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-09-21 (latest) — Lane L33 filed: hands-off UI verification harness, built in parallel with L32; offline pipeline replay backends deferred
+## 2026-09-21 (latest) — Issue 535 CHECK: per-segment input seek confirmed; two-pass loudnorm retained, measured over the assembled recap
+
+**What was decided.** `render_summary_file` moves from a single-input whole-VOD trim graph to
+**per-segment input seeks** (`-ss <start> -t <dur> -accurate_seek -i <src>` per segment) for BOTH
+passes — the loudnorm measurement and the render — and its derived budget drops the
+source-duration term (`max(300, output_dur × 4)`). **Two-pass loudnorm is retained**, and its
+measurement pass runs over the assembled recap segments only.
+
+**Why (CHECK findings, researched not remembered):**
+1. ffmpeg's own docs confirm the seek semantics the fix depends on: input-side `-ss` seeks to the
+   nearest keyframe before the target, and when transcoding with `-accurate_seek` (**the default**)
+   the gap is decoded and discarded — frame-accurate on long-GOP H.264. We pass `-accurate_seek`
+   explicitly anyway to guard a future regression to stream copy. (ffmpeg.org/ffmpeg.html)
+2. Two-pass loudnorm (measure → apply with `measured_*` + `linear=true`) is still the EBU
+   R128-style standard; single-pass loudnorm pumps and `dynaudnorm` is a compressor, not a
+   loudness normalizer. **Measuring only the assembled recap is not just the perf fix — it is the
+   correct semantics**: loudness is a property of the final program, not the source it was cut
+   from (the Issue 181 contract, independently confirmed). (k.ylo.ph loudnorm author writeup;
+   32blog/dev.to loudnorm guides)
+3. AAC priming-sample clicks at splices are a **concat-demuxer** hazard for independently-encoded
+   segments; our path uses the **concat FILTER** with one continuous audio encode, so the hazard
+   does not apply. Documented in `build_summary_filtergraph`'s docstring so nobody "optimizes" it
+   to demuxer stream-copy. (Apple dev forums AAC encoder delay; Baeldung concat demuxer vs filter)
+4. The per-task `soft_time_limit` override stays **rejected** (per the issue): `soft < hard <
+   visibility_timeout` all derive from one global, and breaking it makes Redis redeliver a
+   running task.
+
+**Deliberately NOT done here:** CFR normalization of VFR OBS sources (`-fps_mode cfr` / `fps=`
+per segment). The pre-535 graph never normalized frame rate either, so adding it now would be an
+untested behaviour change riding a perf fix; whether OBS VFR actually produces drift in a stitched
+recap is exactly the kind of question #539's real 90-minute recording answers. If the drill shows
+A/V drift at splices, file the CFR fix from that evidence.
+
+**Flagged for #539 (billing-adjacent):** OBS-remuxed MKV can probe as VFR even when encoded CFR,
+and **ffprobe's container duration on an unfinalized MKV (crash/kill mid-recording) can be
+plainly wrong with no error** — `billing/ledger.py` debits minutes from that number. #539's
+"ffprobe duration vs. the file's own claim" measurement is now load-bearing for billing
+correctness; logged in `docs/OFF_COURSE_BUGS.md`. (OBS forums; Matroska truncated-cluster reports)
+
+**Date:** 2026-09-21.
+
+---
+
+## 2026-09-21 — Lane L33 filed: hands-off UI verification harness, built in parallel with L32; offline pipeline replay backends deferred
 
 **Decision 1 — the harness exists, and it is a ladder, not a monolith.** Lane **L33 — Hands-off UI
 verification harness** (Issues 540–546) is filed. Goal: agents verify the UI/UX and features

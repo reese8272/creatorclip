@@ -5724,7 +5724,9 @@ corrected. Suite 3339 passed / 0 failed; Layer 0 all green (coverage 85.02).
 
 ### Issue 535: the recap render decodes the whole VOD twice, inside a budget that kills it first
 
-- [ ] **Status:** open · **Size:** M · **Lane:** L32 Batch A · filed 2026-09-17
+- [ ] **Status:** **CODE-COMPLETE 2026-09-21** — only the 90-minute live render AC remains, owed
+      by #539 · **Size:** M · **Lane:** L32 Batch A · filed 2026-09-17 · CHECK findings in
+      `docs/DECISIONS.md` 2026-09-21 (per-segment seek + two-pass loudnorm retained)
 
 **Severity: SEV2 — the recap, which is this lane's primary deliverable, cannot complete on a
 90-minute source. Zero renders have run on prod since deploy, so this has never surfaced.**
@@ -5777,16 +5779,26 @@ both documented pure and unit-testable without ffmpeg.
   available fix if the standard has moved.
 
 **Acceptance**
-- [ ] The recap render's ffmpeg cost is proportional to output duration, not source duration; the
-      derived timeout for a 90-minute source sits inside `CELERY_SOFT_TIME_LIMIT_S` with margin
-- [ ] `CELERY_SOFT_TIME_LIMIT_S`, `task_time_limit` and `visibility_timeout` are **unchanged**; no
-      per-task `soft_time_limit` override is introduced
-- [ ] `render_cleaned_clip_file` output is unchanged — pinned by a test over the shared
-      `_measure_concat_loudnorm` / `_audio_segment_filter` path
-- [ ] Filtergraph and argv builders stay pure and unit-tested without ffmpeg; a real-ffmpeg smoke
-      confirms 1920×1080 output and the expected segment count
-- [ ] Two-pass loudnorm either retained or replaced with a CHECK-cited justification in
-      `docs/DECISIONS.md`
+- [x] The recap render's ffmpeg cost is proportional to output duration, not source duration; the
+      derived timeout for a 90-minute source sits inside `CELERY_SOFT_TIME_LIMIT_S` with margin —
+      both passes use per-segment `-ss/-t -accurate_seek` inputs; budget is `max(300, output×4)`
+      (a 10-min recap → 2400 s < 3000 s), and
+      `tests/test_render.py::test_summary_budget_is_output_proportional` asserts the source
+      duration is never even probed
+- [x] `CELERY_SOFT_TIME_LIMIT_S`, `task_time_limit` and `visibility_timeout` are **unchanged**; no
+      per-task `soft_time_limit` override is introduced (git diff touches `clip_engine/render.py`
+      and tests only)
+- [x] `render_cleaned_clip_file` output is unchanged — `_audio_segment_filter`'s default
+      single-input form is byte-pinned by `test_cleaned_clip_audio_filter_unchanged_by_535`
+- [x] Filtergraph and argv builders stay pure and unit-tested without ffmpeg
+      (`build_summary_input_args` is new and pure; shape/argv tests updated); the real-ffmpeg
+      smoke (`test_render_summary_file_real_ffmpeg_smoke`) renders through the seeked path and
+      confirms 1920×1080 + segment count
+- [x] Two-pass loudnorm **retained** with CHECK-cited justification in `docs/DECISIONS.md`
+      2026-09-21 (still the R128 standard; single-pass pumps; measuring the assembled recap is
+      the correct semantics, not just the perf fix); the measure pass now also decodes only the
+      segments (`test_measure_pass_uses_seeked_inputs_for_summary` pins measure/apply
+      byte-identity)
 - [ ] A 90-minute source renders end to end in #539 (this is the AC that actually closes it)
 
 ---
